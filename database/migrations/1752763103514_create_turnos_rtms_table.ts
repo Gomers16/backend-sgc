@@ -5,6 +5,7 @@ export default class extends BaseSchema {
 
   async up() {
     this.schema.createTable(this.tableName, (table) => {
+      // 'table' sin anotación explícita de tipo. TypeScript debería inferirlo correctamente.
       table.increments('id')
 
       table
@@ -23,17 +24,35 @@ export default class extends BaseSchema {
       table.string('turno_codigo').notNullable().unique()
 
       table.string('placa').notNullable()
-      table.enum('tipo_vehiculo', ['vehiculo', 'moto']).notNullable()
+      // ACTUALIZADO: 'tipo_vehiculo' con los nuevos valores ['carro', 'moto', 'taxi', 'enseñanza']
+      table.enum('tipo_vehiculo', ['carro', 'moto', 'taxi', 'enseñanza']).notNullable()
       table.boolean('tiene_cita').defaultTo(false).notNullable()
 
       table.string('convenio').nullable()
       table.string('referido_interno').nullable()
       table.string('referido_externo').nullable()
-      table.enum('medio_entero', ['fachada', 'redes', 'telemercadeo', 'otros']).notNullable()
+
+      // ACTUALIZADO: 'medio_entero' con los valores de las imágenes
+      table
+        .enum('medio_entero', [
+          'Redes Sociales',
+          'Convenio o Referido Externo',
+          'Call Center',
+          'Fachada',
+          'Referido Interno',
+          'Asesor Comercial',
+        ])
+        .notNullable()
       table.text('observaciones').nullable()
 
-      // Campo nuevo: estado del turno
-      table.enum('estado', ['activo', 'inactivo', 'cancelado']).notNullable().defaultTo('activo')
+      // Campo nuevo: asesor_comercial
+      table.string('asesor_comercial').nullable() // Puede ser nulo
+
+      // ACTUALIZADO: 'estado' del turno con 'finalizado'
+      table
+        .enum('estado', ['activo', 'inactivo', 'cancelado', 'finalizado'])
+        .notNullable()
+        .defaultTo('activo')
 
       table.timestamp('created_at').notNullable().defaultTo(this.now())
       table.timestamp('updated_at').notNullable().defaultTo(this.now())

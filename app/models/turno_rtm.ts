@@ -7,8 +7,6 @@ import Usuario from './usuario.js'
 export default class TurnoRtm extends BaseModel {
   public static table = 'turnos_rtm'
 
-  // Eliminamos: public static boot = [SoftDeletes]
-
   @column({ isPrimary: true })
   declare id: number
 
@@ -36,8 +34,9 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare placa: string
 
+  // MODIFICACIÓN ANTERIOR: Reemplazado 'vehiculo' por 'carro' y añadido 'taxi', 'enseñanza'
   @column()
-  declare tipoVehiculo: 'vehiculo' | 'moto'
+  declare tipoVehiculo: 'carro' | 'moto' | 'taxi' | 'enseñanza'
 
   @column()
   declare tieneCita: boolean
@@ -52,15 +51,26 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare referidoExterno?: string | null
 
+  // NUEVA MODIFICACIÓN: Valores de 'medioEntero' basados en las imágenes
   @column()
-  declare medioEntero: 'fachada' | 'redes' | 'telemercadeo' | 'otros'
+  declare medioEntero:
+    | 'Redes Sociales'
+    | 'Convenio o Referido Externo'
+    | 'Call Center'
+    | 'Fachada'
+    | 'Referido Interno'
+    | 'Asesor Comercial'
 
   @column()
   declare observaciones?: string | null
 
+  // CAMPO AGREGADO ANTERIORMENTE: asesorComercial
+  @column()
+  declare asesorComercial?: string | null // Asumiendo que puede ser opcional
+
   // Estado del turno: activo, inactivo, cancelado, etc.
   @column()
-  declare estado: 'activo' | 'inactivo' | 'cancelado' // ¡Este es el campo clave para tu soft delete manual!
+  declare estado: 'activo' | 'inactivo' | 'cancelado' | 'finalizado' // Añadido 'finalizado' si lo tienes en el frontend
 
   // Relación con funcionario
   @column()
@@ -77,6 +87,4 @@ export default class TurnoRtm extends BaseModel {
 
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
-
-  // Eliminamos: @column.dateTime() declare deletedAt: DateTime | null
 }

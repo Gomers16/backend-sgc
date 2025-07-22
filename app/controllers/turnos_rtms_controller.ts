@@ -6,77 +6,114 @@ import { DateTime } from 'luxon'
 export default class TurnosRtmController {
   /**
    * Obtiene una lista de turnos RTM.
-   * Permite filtrar por fecha (opcional), placa, tipo de vehículo, estado y número de turno.
+   * Permite filtrar por fecha (opcional), placa, tipo de vehículo, estado, número de turno,
+   * y ahora también por rango de fechas (fechaInicio y fechaFin).
    *
    * @param {HttpContext} ctx
    * @returns {Promise<TurnoRtm[]>}
    */
   public async index({ request, response }: HttpContext) {
-    const {
-      fecha, // Opcional: la fecha en formato 'YYYY-MM-DD'.
-      placa, // Opcional: parte de la placa para filtrar.
-      tipoVehiculo, // Opcional: 'vehiculo' o 'moto'.
-      estado, // Opcional: 'activo', 'inactivo', 'cancelado'.
-      turnoNumero, // Opcional: el número de turno para filtrar.
-    } = request.qs()
+    const { fecha, placa, tipoVehiculo, estado, turnoNumero, fechaInicio, fechaFin } = request.qs()
+
+    // --- DEBUGGING: Log del parámetro 'placa' recibido en el backend ---
+    console.log('Backend received placa parameter:', placa);
+    // --- FIN DEBUGGING ---
 
     try {
       let query = TurnoRtm.query().preload('funcionario')
 
-      // 1. **Filtro por Fecha (Opcional):**
-      // Si se proporciona una fecha, la usamos para filtrar.
-      // Si NO se proporciona, NO aplicamos filtro de fecha, mostrando todos los turnos.
-      // Si quieres que por defecto siempre muestre los del día actual si no se especifica,
-      // puedes usar la lógica comentada en el código del frontend.
-      if (fecha) {
-        const fechaAFiltrar = DateTime.fromISO(fecha as string);
-        if (!fechaAFiltrar.isValid) {
-          return response.badRequest({ message: 'Formato de fecha inválido. Use YYYY-MM-DD.' });
+      // 1. **Lógica de Filtro por Rango de Fechas (Prioritario si están presentes):**
+      if (fechaInicio && fechaFin) {
+        const parsedFechaInicio = DateTime.fromISO(fechaInicio as string).startOf('day')
+        const parsedFechaFin = DateTime.fromISO(fechaFin as string).endOf('day')
+
+        if (!parsedFechaInicio.isValid || !parsedFechaFin.isValid) {
+          return response.badRequest({
+            message: 'Formato de fecha de inicio o fin inválido. Use YYYY-MM-DD.',
+          })
         }
-        query = query.where('fecha', fechaAFiltrar.toISODate());
+        // CORRECCIÓN: Asignar a variables explícitamente tipadas como string
+        const sqlFechaInicio: string = parsedFechaInicio.toSQL() as string
+        const sqlFechaFin: string = parsedFechaFin.toSQL() as string
+        query = query.whereBetween('fecha', [sqlFechaInicio, sqlFechaFin])
+      } else if (fechaInicio) {
+        const parsedFechaInicio = DateTime.fromISO(fechaInicio as string).startOf('day')
+        if (!parsedFechaInicio.isValid) {
+          return response.badRequest({
+            message: 'Formato de fecha de inicio inválido. Use YYYY-MM-DD.',
+          })
+        }
+        // CORRECCIÓN: Asignar a variable explícitamente tipada como string
+        const sqlFechaInicio: string = parsedFechaInicio.toSQL() as string
+        query = query.where('fecha', '>=', sqlFechaInicio)
+      } else if (fechaFin) {
+        const parsedFechaFin = DateTime.fromISO(fechaFin as string).endOf('day')
+        if (!parsedFechaFin.isValid) {
+          return response.badRequest({
+            message: 'Formato de fecha de fin inválido. Use YYYY-MM-DD.',
+          })
+        }
+        // CORRECCIÓN: Asignar a variable explícitamente tipada como string
+        const sqlFechaFin: string = parsedFechaFin.toSQL() as string
+        query = query.where('fecha', '<=', sqlFechaFin)
+      } else if (fecha) {
+        const fechaAFiltrar = DateTime.fromISO(fecha as string)
+        if (!fechaAFiltrar.isValid) {
+          return response.badRequest({ message: 'Formato de fecha inválido. Use YYYY-MM-DD.' })
+        }
+        // CORRECCIÓN: Asignar a variables explícitamente tipadas como string
+        const sqlFechaStart: string = fechaAFiltrar.startOf('day').toSQL() as string
+        const sqlFechaEnd: string = fechaAFiltrar.endOf('day').toSQL() as string
+        query = query.whereBetween('fecha', [sqlFechaStart, sqlFechaEnd])
       }
 
       // 2. **Filtro por Placa (Opcional):**
       if (placa) {
-        query = query.where('placa', 'LIKE', `%${placa}%`)
+        // CAMBIO: Usar LOWER(placa) LIKE ? para compatibilidad con MySQL y búsqueda insensible a mayúsculas/minúsculas
+        query = query.whereRaw('LOWER(placa) LIKE ?', [`%${(placa as string).toLowerCase()}%`])
       }
 
       // 3. **Filtro por Número de Turno (Opcional):**
       if (turnoNumero) {
-        const numTurno = parseInt(turnoNumero as string, 10);
-        if (!isNaN(numTurno) && numTurno > 0) {
-          query = query.where('turnoNumero', numTurno);
+        const numTurno = Number.parseInt(turnoNumero as string, 10)
+        if (!Number.isNaN(numTurno) && numTurno > 0) {
+          query = query.where('turno_numero', numTurno)
         } else {
-          return response.badRequest({ message: 'Número de turno inválido.' });
+          return response.badRequest({ message: 'Número de turno inválido.' })
         }
       }
 
       // 4. **Filtro por Tipo de Vehículo (Opcional):**
       if (tipoVehiculo) {
-        if (['vehiculo', 'moto'].includes(tipoVehiculo as string)) {
-          query = query.where('tipoVehiculo', tipoVehiculo as 'vehiculo' | 'moto')
+        if (['carro', 'moto', 'taxi', 'enseñanza'].includes(tipoVehiculo as string)) {
+          query = query.where(
+            'tipo_vehiculo',
+            tipoVehiculo as 'carro' | 'moto' | 'taxi' | 'enseñanza'
+          )
         } else {
           return response.badRequest({
-            message: 'Tipo de vehículo inválido. Debe ser "vehiculo" o "moto".',
+            message: 'Tipo de vehículo inválido. Debe ser "carro", "moto", "taxi" o "enseñanza".',
           })
         }
       }
 
       // 5. **Filtro por Estado (Opcional):**
       if (estado) {
-        if (['activo', 'inactivo', 'cancelado'].includes(estado as string)) {
-          query = query.where('estado', estado as 'activo' | 'inactivo' | 'cancelado')
+        if (['activo', 'inactivo', 'cancelado', 'finalizado'].includes(estado as string)) {
+          query = query.where(
+            'estado',
+            estado as 'activo' | 'inactivo' | 'cancelado' | 'finalizado'
+          )
         } else {
           return response.badRequest({
-            message: 'Estado de turno inválido. Debe ser "activo", "inactivo" o "cancelado".',
+            message:
+              'Estado de turno inválido. Debe ser "activo", "inactivo", "cancelado" o "finalizado".',
           })
         }
       }
 
-      // Ordenar los resultados para una presentación consistente: por fecha descendente, luego hora de ingreso ascendente
       query = query.orderBy('fecha', 'desc').orderBy('horaIngreso', 'asc')
 
-      // Ejecutar la consulta y cargar la relación con el funcionario
       const turnos = await query.exec()
 
       return response.ok(turnos)
@@ -91,16 +128,10 @@ export default class TurnosRtmController {
 
   /**
    * Muestra un turno específico por ID.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<TurnoRtm>}
    */
   public async show({ params, response }: HttpContext) {
     try {
-      const turno = await TurnoRtm.query()
-        .where('id', params.id)
-        .preload('funcionario') // Carga la información del funcionario asociado
-        .first() // Usa first() ya que findOrFail() lanzaría un error 404 por defecto
+      const turno = await TurnoRtm.query().where('id', params.id).preload('funcionario').first()
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado' })
@@ -118,17 +149,13 @@ export default class TurnosRtmController {
 
   /**
    * Crea un nuevo turno RTM.
-   * Asigna un número de turno consecutivo para la fecha actual.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<TurnoRtm>}
    */
   public async store({ request, response }: HttpContext) {
     try {
-      const now = DateTime.local() // Hora actual en la zona de Ibagué, Tolima, Colombia
-      const hoy = now.toISODate() // Formato 'YYYY-MM-DD'
+      // Obtener la hora actual en la zona horaria de Bogotá para el código del turno
+      const nowInBogota = DateTime.local().setZone('America/Bogota')
+      const hoy = nowInBogota.toISODate()
 
-      // Obtener el último número de turno para hoy para calcular el siguiente
       const ultimoTurno = await TurnoRtm.query()
         .where('fecha', hoy)
         .orderBy('turnoNumero', 'desc')
@@ -136,7 +163,6 @@ export default class TurnosRtmController {
 
       const siguienteTurno = (ultimoTurno?.turnoNumero || 0) + 1
 
-      // Cargar solo los campos permitidos del request
       const rawPayload = request.only([
         'placa',
         'tipoVehiculo',
@@ -147,44 +173,124 @@ export default class TurnosRtmController {
         'medioEntero',
         'observaciones',
         'funcionarioId',
+        'asesorComercial',
+        'fecha', // Incluir la fecha del frontend
+        'horaIngreso', // Incluir la hora de ingreso del frontend
       ])
 
-      // Validar campos obligatorios
+      console.log('Raw Payload recibido en store:', rawPayload)
+
       if (
         !rawPayload.placa ||
         !rawPayload.tipoVehiculo ||
         !rawPayload.medioEntero ||
-        !rawPayload.funcionarioId
+        !rawPayload.funcionarioId ||
+        !rawPayload.fecha ||
+        !rawPayload.horaIngreso
       ) {
         return response.badRequest({
-          message: 'Faltan campos obligatorios: placa, tipoVehiculo, medioEntero, funcionarioId.',
+          message:
+            'Faltan campos obligatorios: placa, tipoVehiculo, medioEntero, funcionarioId, fecha, horaIngreso.',
         })
       }
 
-      // Preparar el payload para la creación, asegurando valores nulos para opcionales
-      const payload = {
+      // --- Mapeo de tipoVehiculo ---
+      let tipoVehiculoMapeado: 'carro' | 'moto' | 'taxi' | 'enseñanza'
+      switch (rawPayload.tipoVehiculo) {
+        case 'carro': // Ahora el frontend envía 'carro' directamente
+          tipoVehiculoMapeado = 'carro'
+          break
+        case 'moto':
+          tipoVehiculoMapeado = 'moto'
+          break
+        case 'taxi':
+          tipoVehiculoMapeado = 'taxi'
+          break
+        case 'enseñanza':
+          tipoVehiculoMapeado = 'enseñanza'
+          break
+        default:
+          return response.badRequest({
+            message: `Valor inválido para 'tipoVehiculo': ${rawPayload.tipoVehiculo}. Debe ser "carro", "moto", "taxi" o "enseñanza".`,
+          })
+      }
+
+      // --- Mapeo de medioEntero ---
+      let medioEnteroMapeado:
+        | 'Redes Sociales'
+        | 'Convenio o Referido Externo'
+        | 'Call Center'
+        | 'Fachada'
+        | 'Referido Interno'
+        | 'Asesor Comercial'
+
+      switch (rawPayload.medioEntero) {
+        case 'redes_sociales':
+          medioEnteroMapeado = 'Redes Sociales'
+          break
+        case 'convenio_referido_externo':
+          medioEnteroMapeado = 'Convenio o Referido Externo'
+          break
+        case 'call_center':
+          medioEnteroMapeado = 'Call Center'
+          break
+        case 'fachada':
+          medioEnteroMapeado = 'Fachada'
+          break
+        case 'referido_interno':
+          medioEnteroMapeado = 'Referido Interno'
+          break
+        case 'asesor_comercial':
+          medioEnteroMapeado = 'Asesor Comercial'
+          break
+        default:
+          return response.badRequest({
+            message: `Valor inválido para 'medioEntero': '${rawPayload.medioEntero}'. Asegúrese de que el valor enviado desde el frontend coincida con los valores esperados (ej. 'redes_sociales', 'convenio_referido_externo', 'fachada', etc.).`,
+          })
+      }
+
+      // --- Corrección de la hora y fecha ---
+      // Parsear la fecha del frontend con la zona horaria correcta
+      const fechaParaGuardar = DateTime.fromISO(rawPayload.fecha, { zone: 'America/Bogota' })
+      if (!fechaParaGuardar.isValid) {
+        return response.badRequest({ message: 'Formato de fecha inválido recibido del frontend.' })
+      }
+
+      // Asegurar que horaIngreso sea un string HH:mm (como lo envía el frontend)
+      // Esto evita que Adonis/DB le añadan segundos o hagan conversiones de zona horaria inesperadas
+      const horaIngresoParaGuardar = DateTime.fromFormat(rawPayload.horaIngreso, 'HH:mm', {
+        zone: 'America/Bogota',
+      }).toFormat('HH:mm')
+      if (
+        !DateTime.fromFormat(rawPayload.horaIngreso, 'HH:mm', { zone: 'America/Bogota' }).isValid
+      ) {
+        return response.badRequest({
+          message: 'Formato de hora de ingreso inválido recibido del frontend.',
+        })
+      }
+
+      const finalPayload = {
         placa: rawPayload.placa,
-        tipoVehiculo: rawPayload.tipoVehiculo as 'vehiculo' | 'moto', // Casting para el tipo enum
+        tipoVehiculo: tipoVehiculoMapeado,
         tieneCita: Boolean(rawPayload.tieneCita),
-        medioEntero: rawPayload.medioEntero as 'fachada' | 'redes' | 'telemercadeo' | 'otros', // Casting
+        medioEntero: medioEnteroMapeado,
         funcionarioId: rawPayload.funcionarioId,
         convenio: rawPayload.convenio || null,
         referidoInterno: rawPayload.referidoInterno || null,
         referidoExterno: rawPayload.referidoExterno || null,
         observaciones: rawPayload.observaciones || null,
+        asesorComercial: rawPayload.asesorComercial || null,
+        fecha: fechaParaGuardar, // Pasa el objeto DateTime de Luxon
+        horaIngreso: horaIngresoParaGuardar, // Pasa el string HH:mm formateado
+        turnoNumero: siguienteTurno,
+        turnoCodigo: `RTM-${nowInBogota.toFormat('yyyyMMddHHmmss')}`, // Usar la hora de Bogotá para el código
+        estado: 'activo' as 'activo', // CORRECCIÓN: Aserción de tipo para 'estado'
       }
 
-      // Crear el nuevo turno
-      const turno = await TurnoRtm.create({
-        ...payload,
-        fecha: now, // La fecha del turno será la actual
-        horaIngreso: now.toFormat('HH:mm:ss'), // Hora de ingreso actual
-        turnoNumero: siguienteTurno, // Asignar el siguiente número de turno
-        turnoCodigo: `RTM-${now.toFormat('yyyyMMddHHmmss')}`, // Código único para el turno
-        estado: 'activo', // Por defecto, un turno nuevo está activo
-      })
+      console.log('Final Payload para crear turno:', finalPayload) // NUEVO LOG AQUI
 
-      // Cargar la relación del funcionario para la respuesta
+      const turno = await TurnoRtm.create(finalPayload)
+
       await turno.load('funcionario')
 
       return response.created(turno)
@@ -199,20 +305,15 @@ export default class TurnosRtmController {
 
   /**
    * Actualiza un turno RTM por ID.
-   * Permite modificar varios campos del turno.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<TurnoRtm>}
    */
   public async update({ params, request, response }: HttpContext) {
     try {
-      const turno = await TurnoRtm.find(params.id) // Busca el turno por ID
+      const turno = await TurnoRtm.find(params.id)
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado para actualizar' })
       }
 
-      // Cargar solo los campos permitidos del request para la actualización
       const payload = request.only([
         'placa',
         'tipoVehiculo',
@@ -226,28 +327,89 @@ export default class TurnosRtmController {
         'horaSalida',
         'tiempoServicio',
         'estado',
-        // No permitir actualizar 'fecha', 'horaIngreso', 'turnoNumero', 'turnoCodigo'
-        // directamente desde aquí si son campos auto-generados o fijos
+        'asesorComercial',
       ])
 
-      // Actualizar el turno con los datos del payload
+      // --- Mapeo de tipoVehiculo para UPDATE ---
+      let tipoVehiculoMapeadoUpdate: 'carro' | 'moto' | 'taxi' | 'enseñanza' | undefined
+      if (payload.tipoVehiculo) {
+        switch (payload.tipoVehiculo) {
+          case 'carro': // Ahora el frontend envía 'carro' directamente
+            tipoVehiculoMapeadoUpdate = 'carro'
+            break
+          case 'moto':
+            tipoVehiculoMapeadoUpdate = 'moto'
+            break
+          case 'taxi':
+            tipoVehiculoMapeadoUpdate = 'taxi'
+            break
+          case 'enseñanza':
+            tipoVehiculoMapeadoUpdate = 'enseñanza'
+            break
+          default:
+            console.warn(`Valor inválido para 'tipoVehiculo' en update: ${payload.tipoVehiculo}`)
+            return response.badRequest({
+              message: `Valor inválido para 'tipoVehiculo': ${payload.tipoVehiculo}.`,
+            })
+        }
+      }
+
+      // --- Mapeo de medioEntero para UPDATE ---
+      let medioEnteroMapeadoUpdate:
+        | 'Redes Sociales'
+        | 'Convenio o Referido Externo'
+        | 'Call Center'
+        | 'Fachada'
+        | 'Referido Interno'
+        | 'Asesor Comercial'
+        | undefined // Permitir undefined si no se envía en la actualización
+
+      if (payload.medioEntero) {
+        switch (payload.medioEntero) {
+          case 'redes_sociales':
+            medioEnteroMapeadoUpdate = 'Redes Sociales'
+            break
+          case 'convenio_referido_externo':
+            medioEnteroMapeadoUpdate = 'Convenio o Referido Externo'
+            break
+          case 'call_center':
+            medioEnteroMapeadoUpdate = 'Call Center'
+            break
+          case 'fachada':
+            medioEnteroMapeadoUpdate = 'Fachada'
+            break
+          case 'referido_interno':
+            medioEnteroMapeadoUpdate = 'Referido Interno'
+            break
+          case 'asesor_comercial':
+            medioEnteroMapeadoUpdate = 'Asesor Comercial'
+            break
+          default:
+            console.warn(`Valor inválido para 'medioEntero' en update: ${payload.medioEntero}`)
+            return response.badRequest({
+              message: `Valor inválido para 'medioEntero': ${payload.medioEntero}.`,
+            })
+        }
+      }
+
       turno.merge({
         placa: payload.placa,
-        tipoVehiculo: payload.tipoVehiculo as 'vehiculo' | 'moto',
+        tipoVehiculo: tipoVehiculoMapeadoUpdate,
         tieneCita: Boolean(payload.tieneCita),
-        medioEntero: payload.medioEntero as 'fachada' | 'redes' | 'telemercadeo' | 'otros',
+        medioEntero: medioEnteroMapeadoUpdate,
         funcionarioId: payload.funcionarioId,
         horaSalida: payload.horaSalida || null,
         tiempoServicio: payload.tiempoServicio || null,
-        estado: payload.estado as 'activo' | 'inactivo' | 'cancelado',
+        estado: payload.estado as 'activo' | 'inactivo' | 'cancelado' | 'finalizado', // CORRECCIÓN: Aserción de tipo para 'estado'
         convenio: payload.convenio || null,
         referidoInterno: payload.referidoInterno || null,
         referidoExterno: payload.referidoExterno || null,
         observaciones: payload.observaciones || null,
+        asesorComercial: payload.asesorComercial || null,
       })
 
-      await turno.save() // Guarda los cambios en la base de datos
-      await turno.load('funcionario') // Recarga la relación del funcionario
+      await turno.save()
+      await turno.load('funcionario')
 
       return response.ok(turno)
     } catch (error: unknown) {
@@ -261,9 +423,6 @@ export default class TurnosRtmController {
 
   /**
    * Activa un turno cambiando su estado a 'activo'.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<{ message: string, turnoId: number }>}
    */
   public async activar({ params, response }: HttpContext) {
     try {
@@ -288,9 +447,6 @@ export default class TurnosRtmController {
 
   /**
    * Cancela un turno cambiando su estado a 'cancelado'.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<{ message: string, turnoId: number }>}
    */
   public async cancelar({ params, response }: HttpContext) {
     try {
@@ -315,9 +471,6 @@ export default class TurnosRtmController {
 
   /**
    * Realiza un "soft delete" de un turno cambiando su estado a 'inactivo'.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<{ message: string }>}
    */
   public async destroy({ params, response }: HttpContext) {
     try {
@@ -327,7 +480,7 @@ export default class TurnosRtmController {
         return response.status(404).json({ message: 'Turno no encontrado' })
       }
 
-      turno.estado = 'inactivo' // Cambia el estado a 'inactivo' en lugar de eliminarlo
+      turno.estado = 'inactivo'
       await turno.save()
 
       return response.ok({ message: 'Turno inhabilitado correctamente (soft delete)' })
@@ -342,9 +495,6 @@ export default class TurnosRtmController {
 
   /**
    * Registra la hora de salida de un turno y calcula el tiempo de servicio.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<{ message: string, horaSalida: string | null, tiempoServicio: string | null }>}
    */
   public async registrarSalida({ params, response }: HttpContext) {
     try {
@@ -354,15 +504,13 @@ export default class TurnosRtmController {
         return response.status(404).json({ message: 'Turno no encontrado' })
       }
 
-      const salida = DateTime.local() // Hora actual para la salida
-      // Asegúrate de que 'horaIngreso' tenga el formato correcto para Luxon
+      const salida = DateTime.local()
       const entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss')
 
-      // Calcula la duración en minutos
       const duracion = salida.diff(entrada, ['minutes']).toObject()
 
-      turno.horaSalida = salida.toFormat('HH:mm:ss') // Formatea la hora de salida
-      turno.tiempoServicio = `${Math.round(duracion.minutes ?? 0)} min` // Formatea el tiempo de servicio
+      turno.horaSalida = salida.toFormat('HH:mm:ss')
+      turno.tiempoServicio = `${Math.round(duracion.minutes ?? 0)} min`
 
       await turno.save()
 
@@ -382,20 +530,17 @@ export default class TurnosRtmController {
 
   /**
    * Devuelve el siguiente número de turno para el día actual.
-   *
-   * @param {HttpContext} ctx
-   * @returns {Promise<{ siguiente: number }>}
    */
   public async siguienteTurno({ response }: HttpContext) {
     try {
-      const hoy = DateTime.local().toISODate() // Obtiene la fecha actual en formato 'YYYY-MM-DD'
+      const hoy = DateTime.local().toISODate()
 
       const ultimoTurno = await TurnoRtm.query()
         .where('fecha', hoy)
         .orderBy('turnoNumero', 'desc')
         .first()
 
-      const siguiente = (ultimoTurno?.turnoNumero || 0) + 1 // Calcula el siguiente número de turno
+      const siguiente = (ultimoTurno?.turnoNumero || 0) + 1
 
       return response.ok({ siguiente })
     } catch (error: unknown) {
