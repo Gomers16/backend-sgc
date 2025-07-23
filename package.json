@@ -59,6 +59,7 @@
     "@faker-js/faker": "^9.8.0",
     "@vinejs/vine": "^3.0.1",
     "argon2": "^0.43.0",
+    "exceljs": "^4.4.0",
     "firebase-admin": "^13.4.0",
     "luxon": "^3.6.1",
     "mail": "^0.2.3",
