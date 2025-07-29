@@ -2,7 +2,8 @@ import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 
-import Usuario from './usuario.js'
+import Usuario from '#models/usuario'
+import Sede from '#models/sede'
 
 export default class TurnoRtm extends BaseModel {
   public static table = 'turnos_rtm'
@@ -10,7 +11,12 @@ export default class TurnoRtm extends BaseModel {
   @column({ isPrimary: true })
   declare id: number
 
-  // Datos de tiempo
+  @column()
+  declare sedeId: number
+
+  @belongsTo(() => Sede)
+  declare sede: BelongsTo<typeof Sede>
+
   @column.dateTime({ serializeAs: 'fecha' })
   declare fecha: DateTime
 
@@ -23,25 +29,21 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare tiempoServicio?: string | null
 
-  // Turno
   @column()
   declare turnoNumero: number
 
   @column()
   declare turnoCodigo: string
 
-  // Vehículo
   @column()
   declare placa: string
 
-  // MODIFICACIÓN ANTERIOR: Reemplazado 'vehiculo' por 'carro' y añadido 'taxi', 'enseñanza'
   @column()
-  declare tipoVehiculo: 'carro' | 'moto' | 'taxi' | 'enseñanza'
+  declare tipoVehiculo: 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 
   @column()
   declare tieneCita: boolean
 
-  // Info adicional
   @column()
   declare convenio?: string | null
 
@@ -51,7 +53,6 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare referidoExterno?: string | null
 
-  // NUEVA MODIFICACIÓN: Valores de 'medioEntero' basados en las imágenes
   @column()
   declare medioEntero:
     | 'Redes Sociales'
@@ -64,24 +65,21 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare observaciones?: string | null
 
-  // CAMPO AGREGADO ANTERIORMENTE: asesorComercial
   @column()
-  declare asesorComercial?: string | null // Asumiendo que puede ser opcional
+  declare asesorComercial?: string | null
 
-  // Estado del turno: activo, inactivo, cancelado, etc.
   @column()
-  declare estado: 'activo' | 'inactivo' | 'cancelado' | 'finalizado' // Añadido 'finalizado' si lo tienes en el frontend
+  declare estado: 'activo' | 'inactivo' | 'cancelado' | 'finalizado'
 
-  // Relación con funcionario
-  @column()
+  @column({ columnName: 'funcionario_id' })
   declare funcionarioId: number
 
   @belongsTo(() => Usuario, {
     foreignKey: 'funcionarioId',
+    localKey: 'id',
   })
-  declare funcionario: BelongsTo<typeof Usuario>
+  declare usuario: BelongsTo<typeof Usuario>
 
-  // Timestamps
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 

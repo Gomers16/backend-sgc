@@ -7,7 +7,10 @@ export default class extends BaseSchema {
     this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
 
-      // Relaciones
+      // ❌ ELIMINA ESTA LÍNEA:
+      // table.string('auth_id', 255).unique().nullable() // o .notNullable() si es siempre requerido
+
+      // Relaciones existentes
       table
         .integer('razon_social_id')
         .unsigned()
@@ -16,6 +19,24 @@ export default class extends BaseSchema {
         .onDelete('CASCADE')
 
       table.integer('rol_id').unsigned().references('id').inTable('roles').onDelete('SET NULL')
+
+      // Clave foránea para la tabla 'sedes'
+      table
+        .integer('sede_id')
+        .unsigned()
+        .references('id')
+        .inTable('sedes')
+        .onDelete('RESTRICT')
+        .notNullable()
+
+      // *** NUEVA RELACIÓN: La clave foránea para la tabla 'cargos' ***
+      table
+        .integer('cargo_id')
+        .unsigned()
+        .references('id')
+        .inTable('cargos')
+        .onDelete('RESTRICT')
+        .notNullable()
 
       table
         .integer('eps_id')
@@ -56,22 +77,22 @@ export default class extends BaseSchema {
       table.string('nombres', 100).notNullable()
       table.string('apellidos', 100).notNullable()
       table.string('correo', 150).notNullable().unique()
-      table.string('password').notNullable() // 👈 NUEVA COLUMNA
-      table.string('foto_perfil')
+      table.string('password').notNullable()
+      table.string('foto_perfil').nullable()
 
-      table.enum('sede', ['Bogotá', 'Ibagué']).notNullable()
-      table.string('direccion', 150)
-      table.string('celular_personal', 50)
-      table.string('celular_corporativo', 50)
+      table.string('direccion', 150).nullable()
+      table.string('celular_personal', 50).nullable()
+      table.string('celular_corporativo', 50).nullable()
 
-      table.string('area', 100)
-      table.string('centro_costo', 100)
+      table.string('centro_costo', 100).nullable()
 
       table.enum('estado', ['activo', 'inactivo']).defaultTo('activo').notNullable()
-      table.boolean('recomendaciones').defaultTo(false)
+      table.boolean('recomendaciones').defaultTo(false).notNullable()
 
-      table.timestamp('created_at')
-      table.timestamp('updated_at')
+      table.timestamp('created_at', { useTz: true }).notNullable()
+      table.timestamp('updated_at', { useTz: true }).notNullable()
+      // ✅ AÑADIDA: Columna para Soft Deletes (esta sí la dejas)
+      table.timestamp('deleted_at', { useTz: true }).nullable()
     })
   }
 

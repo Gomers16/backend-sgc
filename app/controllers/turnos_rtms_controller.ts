@@ -2,14 +2,24 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import TurnoRtm from '#models/turno_rtm'
 import { DateTime } from 'luxon'
-
 import ExcelJS from 'exceljs'
+import Usuario from '#models/usuario' // Importa el modelo de Usuario
+
+// Definimos los tipos de vehículo válidos una sola vez para reutilizar.
+type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
+const VALID_TIPOS_VEHICULO: TipoVehiculoDB[] = [
+  'Liviano Particular',
+  'Liviano Taxi',
+  'Liviano Público',
+  'Motocicleta',
+]
 
 export default class TurnosRtmController {
   /**
    * Obtiene una lista de turnos RTM.
    * Permite filtrar por fecha (opcional), placa, tipo de vehículo, estado, número de turno,
    * y ahora también por rango de fechas (fechaInicio y fechaFin).
+   * Siempre precarga las relaciones 'usuario' y 'sede'.
    *
    * @param {HttpContext} ctx
    * @returns {Promise<TurnoRtm[]>}
@@ -17,12 +27,10 @@ export default class TurnosRtmController {
   public async index({ request, response }: HttpContext) {
     const { fecha, placa, tipoVehiculo, estado, turnoNumero, fechaInicio, fechaFin } = request.qs()
 
-    // console.log('Backend received placa parameter:', placa) // Eliminado
-
     try {
-      let query = TurnoRtm.query().preload('funcionario')
+      // Precargamos 'usuario' y 'sede'
+      let query = TurnoRtm.query().preload('usuario').preload('sede')
 
-      // 1. **Lógica de Filtro por Rango de Fechas (Prioritario si están presentes):**
       if (fechaInicio && fechaFin) {
         const parsedFechaInicio = DateTime.fromISO(fechaInicio as string).startOf('day')
         const parsedFechaFin = DateTime.fromISO(fechaFin as string).endOf('day')
@@ -63,12 +71,10 @@ export default class TurnosRtmController {
         query = query.whereBetween('fecha', [sqlFechaStart, sqlFechaEnd])
       }
 
-      // 2. **Filtro por Placa (Opcional):**
       if (placa) {
         query = query.whereRaw('LOWER(placa) LIKE ?', [`%${(placa as string).toLowerCase()}%`])
       }
 
-      // 3. **Filtro por Número de Turno (Opcional):**
       if (turnoNumero) {
         const numTurno = Number.parseInt(turnoNumero as string, 10)
         if (!Number.isNaN(numTurno) && numTurno > 0) {
@@ -78,21 +84,17 @@ export default class TurnosRtmController {
         }
       }
 
-      // 4. **Filtro por Tipo de Vehículo (Opcional):**
+      // --- VALIDACIÓN Y FILTRO DE TIPO DE VEHÍCULO (directo, sin mapeo) ---
       if (tipoVehiculo) {
-        if (['carro', 'moto', 'taxi', 'enseñanza'].includes(tipoVehiculo as string)) {
-          query = query.where(
-            'tipo_vehiculo',
-            tipoVehiculo as 'carro' | 'moto' | 'taxi' | 'enseñanza'
-          )
+        if (VALID_TIPOS_VEHICULO.includes(tipoVehiculo as TipoVehiculoDB)) {
+          query = query.where('tipo_vehiculo', tipoVehiculo as TipoVehiculoDB)
         } else {
           return response.badRequest({
-            message: 'Tipo de vehículo inválido. Debe ser "carro", "moto", "taxi" o "enseñanza".',
+            message: `Tipo de vehículo inválido para filtrar. Debe ser uno de: ${VALID_TIPOS_VEHICULO.join(', ')}.`,
           })
         }
       }
 
-      // 5. **Filtro por Estado (Opcional):**
       if (estado) {
         if (['activo', 'inactivo', 'cancelado', 'finalizado'].includes(estado as string)) {
           query = query.where(
@@ -123,10 +125,17 @@ export default class TurnosRtmController {
 
   /**
    * Muestra un turno específico por ID.
+   * Siempre precarga las relaciones 'usuario' y 'sede'.
+   *
+   * @param {HttpContext} ctx
    */
   public async show({ params, response }: HttpContext) {
     try {
-      const turno = await TurnoRtm.query().where('id', params.id).preload('funcionario').first()
+      const turno = await TurnoRtm.query()
+        .where('id', params.id)
+        .preload('usuario')
+        .preload('sede')
+        .first()
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado' })
@@ -144,28 +153,13 @@ export default class TurnosRtmController {
 
   /**
    * Crea un nuevo turno RTM.
+   * **NOTA:** Recibe el `usuarioId` (que es el ID primario) en el payload y busca su sede.
+   *
+   * @param {HttpContext} ctx
    */
   public async store({ request, response }: HttpContext) {
+    // 'auth' ya no se usa aquí
     try {
-      // Obtener la hora actual en la zona horaria de Bogotá para el código del turno
-      const nowInBogota = DateTime.local().setZone('America/Bogota')
-
-      // Verificar si la fecha es válida antes de obtener el ISODate
-      if (!nowInBogota.isValid) {
-        return response.internalServerError({
-          message: 'Error al obtener la fecha actual en la zona horaria de Bogotá.',
-        })
-      }
-      // Se usa el operador de aserción no nula (!) para indicar que 'hoy' es definitivamente un string.
-      const hoy = nowInBogota.toISODate()!
-
-      const ultimoTurno = await TurnoRtm.query()
-        .where('fecha', hoy)
-        .orderBy('turnoNumero', 'desc')
-        .first()
-
-      const siguienteTurno = (ultimoTurno?.turnoNumero || 0) + 1
-
       const rawPayload = request.only([
         'placa',
         'tipoVehiculo',
@@ -175,50 +169,70 @@ export default class TurnosRtmController {
         'referidoExterno',
         'medioEntero',
         'observaciones',
-        'funcionarioId',
         'asesorComercial',
-        'fecha', // Incluir la fecha del frontend
-        'horaIngreso', // Incluir la hora de ingreso del frontend
+        'fecha',
+        'horaIngreso',
+        'usuarioId', // Se espera usuarioId (el ID primario) desde el frontend
       ])
 
-      // console.log('Raw Payload recibido en store:', rawPayload) // Eliminado
-
+      // Validación inicial de campos obligatorios
       if (
         !rawPayload.placa ||
         !rawPayload.tipoVehiculo ||
         !rawPayload.medioEntero ||
-        !rawPayload.funcionarioId ||
+        !rawPayload.usuarioId || // `usuarioId` (el ID primario) es obligatorio
         !rawPayload.fecha ||
         !rawPayload.horaIngreso
       ) {
         return response.badRequest({
           message:
-            'Faltan campos obligatorios: placa, tipoVehiculo, medioEntero, funcionarioId, fecha, horaIngreso.',
+            'Faltan campos obligatorios: placa, tipoVehiculo, medioEntero, usuarioId, fecha, horaIngreso.',
         })
       }
 
-      // --- Mapeo de tipoVehiculo ---
-      let tipoVehiculoMapeado: 'carro' | 'moto' | 'taxi' | 'enseñanza'
-      switch (rawPayload.tipoVehiculo) {
-        case 'carro':
-          tipoVehiculoMapeado = 'carro'
-          break
-        case 'moto':
-          tipoVehiculoMapeado = 'moto'
-          break
-        case 'taxi':
-          tipoVehiculoMapeado = 'taxi'
-          break
-        case 'enseñanza':
-          tipoVehiculoMapeado = 'enseñanza'
-          break
-        default:
-          return response.badRequest({
-            message: `Valor inválido para 'tipoVehiculo': ${rawPayload.tipoVehiculo}. Debe ser "carro", "moto", "taxi" o "enseñanza".`,
-          })
+      // --- Obtener la sede del usuario que crea el turno (buscando por el ID primario) ---
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario (numérico)
+      const usuarioCreador = await Usuario.find(rawPayload.usuarioId) // Se espera que rawPayload.usuarioId sea un número
+      if (!usuarioCreador) {
+        // Mensaje de error si el usuario no se encuentra por su ID primario
+        return response.badRequest({
+          message: `Usuario con ID '${rawPayload.usuarioId}' no encontrado como creador del turno.`,
+        })
+      }
+      const sedeIdDelUsuario = usuarioCreador.sedeId // Asumiendo que el modelo Usuario tiene una propiedad sedeId
+
+      if (!sedeIdDelUsuario) {
+        // Mensaje de error si la sede no está asignada al usuario
+        return response.badRequest({
+          message: `El usuario con ID '${rawPayload.usuarioId}' no tiene una sede asignada.`,
+        })
       }
 
-      // --- Mapeo de medioEntero ---
+      const nowInBogota = DateTime.local().setZone('America/Bogota')
+
+      if (!nowInBogota.isValid) {
+        return response.internalServerError({
+          message: 'Error al obtener la fecha actual en la zona horaria de Bogotá.',
+        })
+      }
+      const hoy = nowInBogota.toISODate()!
+
+      const ultimoTurno = await TurnoRtm.query()
+        .where('fecha', hoy)
+        .andWhere('sedeId', sedeIdDelUsuario) // Filtramos por sede del usuario
+        .orderBy('turnoNumero', 'desc')
+        .first()
+
+      const siguienteTurno = (ultimoTurno?.turnoNumero || 0) + 1
+
+      // --- VALIDACIÓN DE TIPO DE VEHÍCULO (directa, sin mapeo) ---
+      if (!VALID_TIPOS_VEHICULO.includes(rawPayload.tipoVehiculo as TipoVehiculoDB)) {
+        return response.badRequest({
+          message: `Valor inválido para 'tipoVehiculo': ${rawPayload.tipoVehiculo}. Debe ser uno de: ${VALID_TIPOS_VEHICULO.join(', ')}.`,
+        })
+      }
+      const tipoVehiculoParaGuardar = rawPayload.tipoVehiculo as TipoVehiculoDB
+
       let medioEnteroMapeado:
         | 'Redes Sociales'
         | 'Convenio o Referido Externo'
@@ -252,14 +266,11 @@ export default class TurnosRtmController {
           })
       }
 
-      // --- Corrección de la hora y fecha ---
-      // Parsear la fecha del frontend con la zona horaria correcta
       const fechaParaGuardar = DateTime.fromISO(rawPayload.fecha, { zone: 'America/Bogota' })
       if (!fechaParaGuardar.isValid) {
         return response.badRequest({ message: 'Formato de fecha inválido recibido del frontend.' })
       }
 
-      // Asegurar que horaIngreso sea un string HH:mm (como lo envía el frontend)
       const horaIngresoParaGuardar = DateTime.fromFormat(rawPayload.horaIngreso, 'HH:mm', {
         zone: 'America/Bogota',
       }).toFormat('HH:mm')
@@ -272,28 +283,28 @@ export default class TurnosRtmController {
       }
 
       const finalPayload = {
+        sedeId: sedeIdDelUsuario, // Asignamos la sede del usuario que viene en el payload y se buscó
         placa: rawPayload.placa,
-        tipoVehiculo: tipoVehiculoMapeado,
+        tipoVehiculo: tipoVehiculoParaGuardar, // Usamos el valor directamente validado
         tieneCita: Boolean(rawPayload.tieneCita),
         medioEntero: medioEnteroMapeado,
-        funcionarioId: rawPayload.funcionarioId,
+        funcionarioId: usuarioCreador.id, // ✅ Usamos el ID NUMÉRICO del usuario encontrado
         convenio: rawPayload.convenio || null,
         referidoInterno: rawPayload.referidoInterno || null,
         referidoExterno: rawPayload.referidoExterno || null,
         observaciones: rawPayload.observaciones || null,
         asesorComercial: rawPayload.asesorComercial || null,
-        fecha: fechaParaGuardar, // Pasa el objeto DateTime de Luxon
-        horaIngreso: horaIngresoParaGuardar, // Pasa el string HH:mm formateado
+        fecha: fechaParaGuardar,
+        horaIngreso: horaIngresoParaGuardar,
         turnoNumero: siguienteTurno,
-        turnoCodigo: `RTM-${nowInBogota.toFormat('yyyyMMddHHmmss')}`, // Usar la hora de Bogotá para el código
-        estado: 'activo' as 'activo', // Aserción de tipo para 'estado'
+        turnoCodigo: `RTM-${nowInBogota.toFormat('yyyyMMddHHmmss')}`,
+        estado: 'activo' as 'activo',
       }
-
-      // console.log('Final Payload para crear turno:', finalPayload) // Eliminado
 
       const turno = await TurnoRtm.create(finalPayload)
 
-      await turno.load('funcionario')
+      await turno.load('usuario')
+      await turno.load('sede') // Precargamos también la sede para la respuesta
 
       return response.created(turno)
     } catch (error: unknown) {
@@ -307,16 +318,13 @@ export default class TurnosRtmController {
 
   /**
    * Actualiza un turno RTM por ID.
+   * **NOTA:** Recibe el `usuarioId` (ID primario) en el payload y busca su sede.
+   *
+   * @param {HttpContext} ctx
    */
   public async update({ params, request, response }: HttpContext) {
     try {
-      const turno = await TurnoRtm.find(params.id)
-
-      if (!turno) {
-        return response.status(404).json({ message: 'Turno no encontrado para actualizar' })
-      }
-
-      const payload = request.only([
+      const rawPayload = request.only([
         'placa',
         'tipoVehiculo',
         'tieneCita',
@@ -325,38 +333,56 @@ export default class TurnosRtmController {
         'referidoExterno',
         'medioEntero',
         'observaciones',
-        'funcionarioId',
+        'usuarioId', // Se espera usuarioId (el ID primario) desde el frontend
         'horaSalida',
         'tiempoServicio',
         'estado',
         'asesorComercial',
       ])
 
-      // --- Mapeo de tipoVehiculo para UPDATE ---
-      let tipoVehiculoMapeadoUpdate: 'carro' | 'moto' | 'taxi' | 'enseñanza' | undefined
-      if (payload.tipoVehiculo) {
-        switch (payload.tipoVehiculo) {
-          case 'carro':
-            tipoVehiculoMapeadoUpdate = 'carro'
-            break
-          case 'moto':
-            tipoVehiculoMapeadoUpdate = 'moto'
-            break
-          case 'taxi':
-            tipoVehiculoMapeadoUpdate = 'taxi'
-            break
-          case 'enseñanza':
-            tipoVehiculoMapeadoUpdate = 'enseñanza'
-            break
-          default:
-            console.warn(`Valor inválido para 'tipoVehiculo' en update: ${payload.tipoVehiculo}`)
-            return response.badRequest({
-              message: `Valor inválido para 'tipoVehiculo': ${payload.tipoVehiculo}.`,
-            })
-        }
+      // Validar que usuarioId esté presente y sea numérico
+      const idNumericoUsuario = Number(rawPayload.usuarioId)
+      if (Number.isNaN(idNumericoUsuario)) {
+        return response.badRequest({
+          message: 'El usuarioId proporcionado no es un número válido para la actualización.',
+        })
       }
 
-      // --- Mapeo de medioEntero para UPDATE ---
+      // --- Obtener la sede del usuario que actualiza el turno (buscando por el ID primario) ---
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
+      const usuarioActualizador = await Usuario.find(idNumericoUsuario)
+      if (!usuarioActualizador) {
+        return response.unauthorized({
+          message: `Usuario con ID '${idNumericoUsuario}' no encontrado para actualizar el turno.`,
+        })
+      }
+      const sedeIdDelUsuarioActualizador = usuarioActualizador.sedeId
+
+      const turno = await TurnoRtm.query().where('id', params.id).preload('sede').first()
+
+      if (!turno) {
+        return response.status(404).json({ message: 'Turno no encontrado para actualizar' })
+      }
+
+      // Validar que el turno pertenezca a la sede del usuario que lo actualiza
+      if (turno.sedeId !== sedeIdDelUsuarioActualizador) {
+        return response.forbidden({
+          message: `No tienes permiso para actualizar turnos de la sede ${turno.sede?.nombre || 'desconocida'}.`,
+        })
+      }
+
+      // --- VALIDACIÓN DE TIPO DE VEHÍCULO PARA UPDATE (directa, sin mapeo) ---
+      let tipoVehiculoParaActualizar: TipoVehiculoDB | undefined
+      if (rawPayload.tipoVehiculo) {
+        if (!VALID_TIPOS_VEHICULO.includes(rawPayload.tipoVehiculo as TipoVehiculoDB)) {
+          console.warn(`Valor inválido para 'tipoVehiculo' en update: ${rawPayload.tipoVehiculo}`)
+          return response.badRequest({
+            message: `Valor inválido para 'tipoVehiculo': ${rawPayload.tipoVehiculo}. Debe ser uno de: ${VALID_TIPOS_VEHICULO.join(', ')}.`,
+          })
+        }
+        tipoVehiculoParaActualizar = rawPayload.tipoVehiculo as TipoVehiculoDB
+      }
+
       let medioEnteroMapeadoUpdate:
         | 'Redes Sociales'
         | 'Convenio o Referido Externo'
@@ -364,10 +390,10 @@ export default class TurnosRtmController {
         | 'Fachada'
         | 'Referido Interno'
         | 'Asesor Comercial'
-        | undefined // Permitir undefined si no se envía en la actualización
+        | undefined
 
-      if (payload.medioEntero) {
-        switch (payload.medioEntero) {
+      if (rawPayload.medioEntero) {
+        switch (rawPayload.medioEntero) {
           case 'redes_sociales':
             medioEnteroMapeadoUpdate = 'Redes Sociales'
             break
@@ -387,31 +413,33 @@ export default class TurnosRtmController {
             medioEnteroMapeadoUpdate = 'Asesor Comercial'
             break
           default:
-            console.warn(`Valor inválido para 'medioEntero' en update: ${payload.medioEntero}`)
+            console.warn(`Valor inválido para 'medioEntero' en update: ${rawPayload.medioEntero}`)
             return response.badRequest({
-              message: `Valor inválido para 'medioEntero': ${payload.medioEntero}.`,
+              message: `Valor inválido para 'medioEntero': ${rawPayload.medioEntero}.`,
             })
         }
       }
 
       turno.merge({
-        placa: payload.placa,
-        tipoVehiculo: tipoVehiculoMapeadoUpdate,
-        tieneCita: Boolean(payload.tieneCita),
+        placa: rawPayload.placa,
+        tipoVehiculo: tipoVehiculoParaActualizar,
+        tieneCita:
+          typeof rawPayload.tieneCita === 'boolean' ? rawPayload.tieneCita : turno.tieneCita,
         medioEntero: medioEnteroMapeadoUpdate,
-        funcionarioId: payload.funcionarioId,
-        horaSalida: payload.horaSalida || null,
-        tiempoServicio: payload.tiempoServicio || null,
-        estado: payload.estado as 'activo' | 'inactivo' | 'cancelado' | 'finalizado',
-        convenio: payload.convenio || null,
-        referidoInterno: payload.referidoInterno || null,
-        referidoExterno: payload.referidoExterno || null,
-        observaciones: payload.observaciones || null,
-        asesorComercial: payload.asesorComercial || null,
+        funcionarioId: usuarioActualizador.id, // ✅ Usamos el ID NUMÉRICO del usuario encontrado
+        horaSalida: rawPayload.horaSalida || null,
+        tiempoServicio: rawPayload.tiempoServicio || null,
+        estado: rawPayload.estado as 'activo' | 'inactivo' | 'cancelado' | 'finalizado',
+        convenio: rawPayload.convenio || null,
+        referidoInterno: rawPayload.referidoInterno || null,
+        referidoExterno: rawPayload.referidoExterno || null,
+        observaciones: rawPayload.observaciones || null,
+        asesorComercial: rawPayload.asesorComercial || null,
       })
 
       await turno.save()
-      await turno.load('funcionario')
+      await turno.load('usuario')
+      await turno.load('sede')
 
       return response.ok(turno)
     } catch (error: unknown) {
@@ -425,13 +453,41 @@ export default class TurnosRtmController {
 
   /**
    * Activa un turno cambiando su estado a 'activo'.
+   * **NOTA:** Recibe el `usuarioId` (ID primario) en el payload y busca su sede para validar.
+   *
+   * @param {HttpContext} ctx
    */
-  public async activar({ params, response }: HttpContext) {
+  public async activar({ params, response, request }: HttpContext) {
     try {
-      const turno = await TurnoRtm.find(params.id)
+      const { usuarioId } = request.only(['usuarioId'])
+      if (!usuarioId) {
+        return response.unauthorized({ message: 'Se requiere usuarioId para activar turnos.' })
+      }
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
+      const idNumericoUsuario = Number(usuarioId)
+      if (Number.isNaN(idNumericoUsuario)) {
+        return response.badRequest({
+          message: 'El usuarioId proporcionado no es un número válido para activar turnos.',
+        })
+      }
+      const usuarioOperador = await Usuario.find(idNumericoUsuario)
+      if (!usuarioOperador) {
+        return response.unauthorized({
+          message: `Usuario con ID '${idNumericoUsuario}' no encontrado para activar turnos.`,
+        })
+      }
+      const sedeIdDelUsuarioOperador = usuarioOperador.sedeId
+
+      const turno = await TurnoRtm.query().where('id', params.id).preload('sede').first()
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado' })
+      }
+
+      if (turno.sedeId !== sedeIdDelUsuarioOperador) {
+        return response.forbidden({
+          message: `No tienes permiso para activar turnos de la sede ${turno.sede?.nombre || 'desconocida'}.`,
+        })
       }
 
       turno.estado = 'activo'
@@ -449,13 +505,41 @@ export default class TurnosRtmController {
 
   /**
    * Cancela un turno cambiando su estado a 'cancelado'.
+   * **NOTA:** Recibe el `usuarioId` (ID primario) en el payload y busca su sede para validar.
+   *
+   * @param {HttpContext} ctx
    */
-  public async cancelar({ params, response }: HttpContext) {
+  public async cancelar({ params, response, request }: HttpContext) {
     try {
-      const turno = await TurnoRtm.find(params.id)
+      const { usuarioId } = request.only(['usuarioId'])
+      if (!usuarioId) {
+        return response.unauthorized({ message: 'Se requiere usuarioId para cancelar turnos.' })
+      }
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
+      const idNumericoUsuario = Number(usuarioId);
+      if (Number.isNaN(idNumericoUsuario)) {
+        return response.badRequest({
+          message: 'El usuarioId proporcionado no es un número válido para cancelar turnos.',
+        })
+      }
+      const usuarioOperador = await Usuario.find(idNumericoUsuario)
+      if (!usuarioOperador) {
+        return response.unauthorized({
+          message: `Usuario con ID '${idNumericoUsuario}' no encontrado para cancelar turnos.`,
+        })
+      }
+      const sedeIdDelUsuarioOperador = usuarioOperador.sedeId
+
+      const turno = await TurnoRtm.query().where('id', params.id).preload('sede').first()
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado' })
+      }
+
+      if (turno.sedeId !== sedeIdDelUsuarioOperador) {
+        return response.forbidden({
+          message: `No tienes permiso para cancelar turnos de la sede ${turno.sede?.nombre || 'desconocida'}.`,
+        })
       }
 
       turno.estado = 'cancelado'
@@ -473,13 +557,41 @@ export default class TurnosRtmController {
 
   /**
    * Realiza un "soft delete" de un turno cambiando su estado a 'inactivo'.
+   * **NOTA:** Recibe el `usuarioId` (ID primario) en el payload y busca su sede para validar.
+   *
+   * @param {HttpContext} ctx
    */
-  public async destroy({ params, response }: HttpContext) {
+  public async destroy({ params, response, request }: HttpContext) {
     try {
-      const turno = await TurnoRtm.find(params.id)
+      const { usuarioId } = request.only(['usuarioId'])
+      if (!usuarioId) {
+        return response.unauthorized({ message: 'Se requiere usuarioId para inhabilitar turnos.' })
+      }
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
+      const idNumericoUsuario = Number(usuarioId);
+      if (Number.isNaN(idNumericoUsuario)) {
+        return response.badRequest({
+          message: 'El usuarioId proporcionado no es un número válido para inhabilitar turnos.',
+        })
+      }
+      const usuarioOperador = await Usuario.find(idNumericoUsuario)
+      if (!usuarioOperador) {
+        return response.unauthorized({
+          message: `Usuario con ID '${idNumericoUsuario}' no encontrado para inhabilitar turnos.`,
+        })
+      }
+      const sedeIdDelUsuarioOperador = usuarioOperador.sedeId
+
+      const turno = await TurnoRtm.query().where('id', params.id).preload('sede').first()
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado' })
+      }
+
+      if (turno.sedeId !== sedeIdDelUsuarioOperador) {
+        return response.forbidden({
+          message: `No tienes permiso para inhabilitar turnos de la sede ${turno.sede?.nombre || 'desconocida'}.`,
+        })
       }
 
       turno.estado = 'inactivo'
@@ -497,30 +609,59 @@ export default class TurnosRtmController {
 
   /**
    * Registra la hora de salida de un turno y calcula el tiempo de servicio.
+   * **NOTA:** Recibe el `usuarioId` (ID primario) en el payload y busca su sede para validar.
+   *
+   * @param {HttpContext} ctx
    */
-  public async registrarSalida({ params, response }: HttpContext) {
+  public async registrarSalida({ params, response, request }: HttpContext) {
     try {
-      const turno = await TurnoRtm.find(params.id)
+      const { usuarioId } = request.only(['usuarioId'])
+      if (!usuarioId) {
+        return response.unauthorized({ message: 'Se requiere usuarioId para registrar la salida.' })
+      }
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
+      const idNumericoUsuario = Number(usuarioId)
+      if (Number.isNaN(idNumericoUsuario)) {
+        return response.badRequest({
+          message: 'El usuarioId proporcionado no es un número válido para registrar la salida.',
+        })
+      }
+      const usuarioOperador = await Usuario.find(idNumericoUsuario)
+      if (!usuarioOperador) {
+        return response.unauthorized({
+          message: `Usuario con ID '${idNumericoUsuario}' no encontrado para registrar la salida.`,
+        })
+      }
+      const sedeIdDelUsuarioOperador = usuarioOperador.sedeId
+
+      const turno = await TurnoRtm.query().where('id', params.id).preload('sede').first()
 
       if (!turno) {
         return response.status(404).json({ message: 'Turno no encontrado' })
       }
 
-      const salida = DateTime.local().setZone('America/Bogota') // Obtener hora actual en Bogotá
-      const entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', { zone: 'America/Bogota' }) // Asegurar que entrada también se interpreta en Bogotá
+      if (turno.sedeId !== sedeIdDelUsuarioOperador) {
+        return response.forbidden({
+          message: `No tienes permiso para registrar la salida de turnos de la sede ${turno.sede?.nombre || 'desconocida'}.`,
+        })
+      }
 
-      // Calcular la diferencia en horas y minutos
+      const salida = DateTime.local().setZone('America/Bogota')
+      const entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', {
+        zone: 'America/Bogota',
+      })
+
       const diff = salida.diff(entrada, ['hours', 'minutes']).toObject()
       let tiempoServicioStr = ''
 
       if (diff.hours && diff.hours >= 1) {
-        // Si hay 1 hora o más
         tiempoServicioStr += `${Math.floor(diff.hours)} h `
       }
-      tiempoServicioStr += `${Math.round(diff.minutes ?? 0) % 60} min` // Solo los minutos restantes
+      tiempoServicioStr += `${Math.round(diff.minutes ?? 0) % 60} min`
 
       turno.horaSalida = salida.toFormat('HH:mm:ss')
       turno.tiempoServicio = tiempoServicioStr
+      turno.estado = 'finalizado'
 
       await turno.save()
 
@@ -528,6 +669,7 @@ export default class TurnosRtmController {
         message: 'Hora de salida registrada',
         horaSalida: turno.horaSalida,
         tiempoServicio: turno.tiempoServicio,
+        estado: turno.estado,
       })
     } catch (error: unknown) {
       console.error('Error al registrar hora de salida:', error)
@@ -539,21 +681,54 @@ export default class TurnosRtmController {
   }
 
   /**
-   * Devuelve el siguiente número de turno para el día actual.
+   * Devuelve el siguiente número de turno para el día actual, basado en la sede del usuario.
+   * **NOTA:** Recibe el `usuarioId` (ID primario) en la query string para obtener la sede.
+   *
+   * @param {HttpContext} ctx
    */
-  public async siguienteTurno({ response }: HttpContext) {
+  public async siguienteTurno({ request, response }: HttpContext) {
     try {
-      // Se usa el operador de aserción no nula (!) para indicar que 'hoy' es definitivamente un string.
+      const { usuarioId } = request.qs() // Espera usuarioId (el ID primario) en la query string
+      if (!usuarioId) {
+        return response.badRequest({
+          message: 'Se requiere usuarioId en la URL para obtener el siguiente turno.',
+        })
+      }
+
+      // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
+      const idNumericoUsuario = Number(usuarioId); // Convertimos usuarioId a número
+      if (Number.isNaN(idNumericoUsuario)) {
+        return response.badRequest({
+          message: 'El usuarioId proporcionado no es un número válido.',
+        })
+      }
+
+      const usuarioSolicitante = await Usuario.find(idNumericoUsuario)
+      if (!usuarioSolicitante) {
+        return response.badRequest({
+          message: `Usuario con ID '${idNumericoUsuario}' no encontrado.`,
+        })
+      }
+
+      const sedeIdDelUsuario = usuarioSolicitante.sedeId
+
+      if (!sedeIdDelUsuario) {
+        return response.badRequest({
+          message: `El usuario con ID '${idNumericoUsuario}' no tiene una sede asignada.`,
+        })
+      }
+
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
       const ultimoTurno = await TurnoRtm.query()
         .where('fecha', hoy)
+        .andWhere('sedeId', sedeIdDelUsuario) // Filtramos por sede del usuario
         .orderBy('turnoNumero', 'desc')
         .first()
 
       const siguiente = (ultimoTurno?.turnoNumero || 0) + 1
 
-      return response.ok({ siguiente })
+      return response.ok({ siguiente, sedeId: sedeIdDelUsuario })
     } catch (error: unknown) {
       console.error('Error al obtener el siguiente número de turno:', error)
       return response.internalServerError({
@@ -571,9 +746,8 @@ export default class TurnosRtmController {
     const { fechaInicio, fechaFin } = request.qs()
 
     try {
-      let query = TurnoRtm.query().preload('funcionario')
+      let query = TurnoRtm.query().preload('usuario').preload('sede')
 
-      // Lógica de filtrado de fechas para el reporte de Excel (específica para este método)
       if (fechaInicio && fechaFin) {
         const parsedFechaInicio = DateTime.fromISO(fechaInicio as string, {
           zone: 'America/Bogota',
@@ -602,10 +776,8 @@ export default class TurnosRtmController {
       const workbook = new ExcelJS.Workbook()
       const worksheet = workbook.addWorksheet('Reporte de Captación')
 
-      // Definir columnas del Excel
       worksheet.columns = [
         { header: 'Turno #', key: 'turnoNumero', width: 12 },
-        // Mantener el estilo numFmt para que Excel muestre el formato corto
         { header: 'Fecha', key: 'fecha', width: 15, style: { numFmt: 'yyyy-mm-dd' } },
         { header: 'Hora Ingreso', key: 'horaIngreso', width: 15 },
         { header: 'Hora Salida', key: 'horaSalida', width: 15 },
@@ -619,27 +791,22 @@ export default class TurnosRtmController {
         { header: 'Observaciones', key: 'observaciones', width: 40 },
         { header: 'Asesor Comercial', key: 'asesorComercial', width: 25 },
         { header: 'Estado', key: 'estado', width: 15 },
-        { header: 'Funcionario', key: 'funcionario', width: 30 },
+        { header: 'Usuario', key: 'usuario', width: 30 }, // Cambiado de 'Funcionario' a 'Usuario'
+        { header: 'Sede', key: 'sede', width: 20 }, // Nueva columna para la sede
       ]
 
-      // Añadir filas con los datos de los turnos
       turnos.forEach((turno) => {
-        let fechaParaExcel: Date | string = '-' // Valor por defecto
+        let fechaParaExcel: Date | string = '-'
 
-        // Como el log de depuración mostró que turno.fecha es un objeto DateTime de Luxon,
-        // lo convertimos directamente a un Date nativo de JavaScript para ExcelJS.
         if (turno.fecha instanceof DateTime && turno.fecha.isValid) {
           fechaParaExcel = turno.fecha.toJSDate()
         } else {
-          // Este else solo se ejecutará si turno.fecha no es un DateTime válido,
-          // lo cual indicaría un problema en el modelo o la base de datos.
-          // O si es un string que no se pudo parsear (lo cual no ocurre aquí según el log).
           fechaParaExcel = 'Fecha no disponible / Inválida'
         }
 
         worksheet.addRow({
           turnoNumero: turno.turnoNumero,
-          fecha: fechaParaExcel, // Usamos el valor preparado
+          fecha: fechaParaExcel,
           horaIngreso: turno.horaIngreso,
           horaSalida: turno.horaSalida || '-',
           tiempoServicio: turno.tiempoServicio || '-',
@@ -660,16 +827,13 @@ export default class TurnosRtmController {
           observaciones: turno.observaciones || '-',
           asesorComercial: turno.asesorComercial || '-',
           estado: turno.estado,
-          funcionario: turno.funcionario
-            ? `${turno.funcionario.nombres} ${turno.funcionario.apellidos}`
-            : '-',
+          usuario: turno.usuario ? `${turno.usuario.nombres} ${turno.usuario.apellidos}` : '-',
+          sede: turno.sede ? turno.sede.nombre : '-', // Usa la relación 'sede' para obtener el nombre
         })
       })
 
-      // Generar el buffer del archivo Excel
       const buffer = await workbook.xlsx.writeBuffer()
 
-      // Configurar cabeceras para la descarga
       response.header(
         'Content-Type',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'

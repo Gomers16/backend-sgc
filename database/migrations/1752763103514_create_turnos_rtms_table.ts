@@ -1,19 +1,30 @@
+// database/migrations/xxxx_turnos_rtm.ts
+
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
-export default class extends BaseSchema {
+export default class TurnosRtm extends BaseSchema {
   protected tableName = 'turnos_rtm'
 
   async up() {
     this.schema.createTable(this.tableName, (table) => {
-      // 'table' sin anotación explícita de tipo. TypeScript debería inferirlo correctamente.
       table.increments('id')
 
+      // 🔄 CAMBIO: ahora usamos funcionario_id
       table
         .integer('funcionario_id')
         .unsigned()
         .references('id')
         .inTable('usuarios')
         .onDelete('CASCADE')
+        .notNullable()
+
+      table
+        .integer('sede_id')
+        .unsigned()
+        .references('id')
+        .inTable('sedes')
+        .onDelete('RESTRICT')
+        .notNullable()
 
       table.date('fecha').notNullable()
       table.string('hora_ingreso').notNullable()
@@ -24,15 +35,22 @@ export default class extends BaseSchema {
       table.string('turno_codigo').notNullable().unique()
 
       table.string('placa').notNullable()
-      // ACTUALIZADO: 'tipo_vehiculo' con los nuevos valores ['carro', 'moto', 'taxi', 'enseñanza']
-      table.enum('tipo_vehiculo', ['carro', 'moto', 'taxi', 'enseñanza']).notNullable()
+
+      table
+        .enum('tipo_vehiculo', [
+          'Liviano Particular',
+          'Liviano Taxi',
+          'Liviano Público',
+          'Motocicleta',
+        ])
+        .notNullable()
+
       table.boolean('tiene_cita').defaultTo(false).notNullable()
 
       table.string('convenio').nullable()
       table.string('referido_interno').nullable()
       table.string('referido_externo').nullable()
 
-      // ACTUALIZADO: 'medio_entero' con los valores de las imágenes
       table
         .enum('medio_entero', [
           'Redes Sociales',
@@ -43,12 +61,10 @@ export default class extends BaseSchema {
           'Asesor Comercial',
         ])
         .notNullable()
+
       table.text('observaciones').nullable()
+      table.string('asesor_comercial').nullable()
 
-      // Campo nuevo: asesor_comercial
-      table.string('asesor_comercial').nullable() // Puede ser nulo
-
-      // ACTUALIZADO: 'estado' del turno con 'finalizado'
       table
         .enum('estado', ['activo', 'inactivo', 'cancelado', 'finalizado'])
         .notNullable()
