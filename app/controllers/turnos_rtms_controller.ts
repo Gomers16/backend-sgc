@@ -516,7 +516,7 @@ export default class TurnosRtmController {
         return response.unauthorized({ message: 'Se requiere usuarioId para cancelar turnos.' })
       }
       // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
-      const idNumericoUsuario = Number(usuarioId);
+      const idNumericoUsuario = Number(usuarioId)
       if (Number.isNaN(idNumericoUsuario)) {
         return response.badRequest({
           message: 'El usuarioId proporcionado no es un número válido para cancelar turnos.',
@@ -568,7 +568,7 @@ export default class TurnosRtmController {
         return response.unauthorized({ message: 'Se requiere usuarioId para inhabilitar turnos.' })
       }
       // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
-      const idNumericoUsuario = Number(usuarioId);
+      const idNumericoUsuario = Number(usuarioId)
       if (Number.isNaN(idNumericoUsuario)) {
         return response.badRequest({
           message: 'El usuarioId proporcionado no es un número válido para inhabilitar turnos.',
@@ -696,7 +696,7 @@ export default class TurnosRtmController {
       }
 
       // ✅ CAMBIO CLAVE AQUÍ: Usamos find() con el ID primario
-      const idNumericoUsuario = Number(usuarioId); // Convertimos usuarioId a número
+      const idNumericoUsuario = Number(usuarioId) // Convertimos usuarioId a número
       if (Number.isNaN(idNumericoUsuario)) {
         return response.badRequest({
           message: 'El usuarioId proporcionado no es un número válido.',

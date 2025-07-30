@@ -26,7 +26,8 @@ export default class EntidadesSaludController {
         message: 'Lista de entidades de salud obtenida exitosamente.',
         data: entidades,
       })
-    } catch (error: any) { // Añadido 'any' para el tipo de error
+    } catch (error: any) {
+      // Añadido 'any' para el tipo de error
       console.error('Error al obtener entidades de salud:', error)
       return response.internalServerError({
         message: 'Error al obtener entidades de salud',
@@ -47,7 +48,8 @@ export default class EntidadesSaludController {
         .select('id', 'nombre', 'tipo')
         .firstOrFail()
       return response.ok({ message: 'Entidad de salud obtenida exitosamente.', data: entidad })
-    } catch (error: any) { // Añadido 'any' para el tipo de error
+    } catch (error: any) {
+      // Añadido 'any' para el tipo de error
       console.error('Error al obtener entidad de salud por ID:', error)
       if (error.code === 'E_ROW_NOT_FOUND') {
         return response.notFound({ message: 'Entidad de salud no encontrada.' })

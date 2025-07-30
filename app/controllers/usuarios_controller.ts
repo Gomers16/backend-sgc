@@ -2,10 +2,9 @@
 
 import type { HttpContext } from '@adonisjs/core/http'
 import Usuario from '#models/usuario'
-import Drive from '@adonisjs/drive/services/main' // Importamos el servicio Drive
-import app from '@adonisjs/core/services/app' // Necesario para rutas absolutas como publicPath
+import Drive from '@adonisjs/drive/services/main'
+import app from '@adonisjs/core/services/app'
 
-// Importaciones de relaciones (asumo que estas son correctas para tu proyecto)
 import Rol from '#models/rol'
 import RazonSocial from '#models/razon_social'
 import Sede from '#models/sede'
@@ -14,11 +13,13 @@ import EntidadSalud from '#models/entidad_salud'
 
 export default class UsuariosController {
   /**
-   * Obtener todos los usuarios.
+   * Obtener todos los usuarios o filtrados por razón social.
    */
-  public async index({ response }: HttpContext) {
+  public async index({ request, response }: HttpContext) {
     try {
-      const users = await Usuario.query()
+      const razonSocialId = request.input('razon_social_id')
+
+      let query = Usuario.query()
         .preload('rol')
         .preload('razonSocial')
         .preload('sede')
@@ -28,7 +29,13 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .orderBy('id', 'asc')
+        .preload('contratos') // 👈 Importante para la vista
+
+      if (razonSocialId) {
+        query.where('razon_social_id', razonSocialId)
+      }
+
+      const users = await query.orderBy('id', 'asc')
 
       return response.ok(users)
     } catch (error) {
@@ -56,6 +63,7 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
+        .preload('contratos')
         .firstOrFail()
 
       return response.ok(usuario)
@@ -73,20 +81,18 @@ export default class UsuariosController {
 
   /**
    * Crear un nuevo usuario.
-   * La contraseña NO se hashea explícitamente aquí. Se espera que se hashee automáticamente
-   * en un hook del modelo.
    */
   public async store({ request, response }: HttpContext) {
     const payload = request.only([
       'nombres',
       'apellidos',
       'correo',
-      'password', // Importante incluir la contraseña aquí
+      'password',
       'rolId',
       'razonSocialId',
       'sedeId',
       'cargoId',
-      'fotoPerfil', // Podría ser una URL o una ruta predeterminada al crear
+      'fotoPerfil',
       'direccion',
       'celularPersonal',
       'celularCorporativo',
@@ -131,16 +137,17 @@ export default class UsuariosController {
   }
 
   /**
-   * Actualizar un usuario existente. La contraseña se espera que se hashee si se provee.
+   * Actualizar un usuario existente.
    */
   public async update({ params, request, response }: HttpContext) {
     try {
       const user = await Usuario.findOrFail(params.id)
+
       const payload = request.only([
         'nombres',
         'apellidos',
         'correo',
-        'password', // Importante incluir la contraseña aquí si puede ser actualizada
+        'password',
         'rolId',
         'razonSocialId',
         'sedeId',
@@ -191,11 +198,11 @@ export default class UsuariosController {
   public async destroy({ params, response }: HttpContext) {
     try {
       const user = await Usuario.findOrFail(params.id)
-      // Opcional: Si quieres eliminar la foto de perfil del disco al borrar el usuario
+
       if (user.fotoPerfil && user.fotoPerfil.startsWith('/uploads/')) {
-        // Asegurarse de que es una URL de subida local y usar el disco 'fs' para eliminar
-      await Drive.use('fs').delete(user.fotoPerfil.replace('/uploads/', 'uploads/')) // <-- CORREGIDO AQUÍ
+        await Drive.use('fs').delete(user.fotoPerfil.replace('/uploads/', 'uploads/'))
       }
+
       await user.delete()
       return response.ok({ message: 'Usuario eliminado correctamente' })
     } catch (error) {
@@ -210,33 +217,24 @@ export default class UsuariosController {
     }
   }
 
-  // Métodos para obtener listas (roles, razones sociales, sedes, cargos, entidades de salud)
-
+  /**
+   * Listas auxiliares
+   */
   public async getRoles({ response }: HttpContext) {
     try {
       const roles = await Rol.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(roles)
     } catch (error) {
-      console.error('Error al obtener roles:', error)
-      return response.internalServerError({
-        message: 'Error al obtener roles',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener roles' })
     }
   }
 
   public async getRazonesSociales({ response }: HttpContext) {
     try {
-      const razonesSociales = await RazonSocial.query()
-        .select('id', 'nombre')
-        .orderBy('nombre', 'asc')
-      return response.ok(razonesSociales)
+      const razones = await RazonSocial.query().select('id', 'nombre').orderBy('nombre', 'asc')
+      return response.ok(razones)
     } catch (error) {
-      console.error('Error al obtener razones sociales:', error)
-      return response.internalServerError({
-        message: 'Error al obtener razones sociales',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener razones sociales' })
     }
   }
 
@@ -245,11 +243,7 @@ export default class UsuariosController {
       const sedes = await Sede.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(sedes)
     } catch (error) {
-      console.error('Error al obtener sedes:', error)
-      return response.internalServerError({
-        message: 'Error al obtener sedes',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener sedes' })
     }
   }
 
@@ -258,11 +252,7 @@ export default class UsuariosController {
       const cargos = await Cargo.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(cargos)
     } catch (error) {
-      console.error('Error al obtener cargos:', error)
-      return response.internalServerError({
-        message: 'Error al obtener cargos',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener cargos' })
     }
   }
 
@@ -271,17 +261,12 @@ export default class UsuariosController {
       const entidades = await EntidadSalud.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(entidades)
     } catch (error) {
-      console.error('Error al obtener entidades de salud:', error)
-      return response.internalServerError({
-        message: 'Error al obtener entidades de salud',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener entidades de salud' })
     }
   }
 
   /**
-   * Actualizar la foto de perfil de un usuario subiendo un archivo.
-   * Espera un archivo llamado 'foto' en la petición multipart/form-data.
+   * Subir foto de perfil
    */
   public async updateProfilePictureUrlNoAuth({ request, response, params }: HttpContext) {
     const userId = params.id
@@ -299,7 +284,6 @@ export default class UsuariosController {
     }
 
     const user = await Usuario.find(userId)
-
     if (!user) {
       return response.notFound({ message: 'Usuario no encontrado.' })
     }
@@ -310,9 +294,7 @@ export default class UsuariosController {
 
     try {
       await foto.move(app.publicPath(filePathInPublic))
-
       const publicUrl = `/${filePathInPublic}`
-
       user.fotoPerfil = publicUrl
       await user.save()
 
@@ -321,7 +303,6 @@ export default class UsuariosController {
         fotoPerfilUrl: user.fotoPerfil,
       })
     } catch (error) {
-      console.error('Error al subir la foto de perfil:', error)
       return response.internalServerError({
         message: 'Error al subir la foto de perfil',
         error: error.message,

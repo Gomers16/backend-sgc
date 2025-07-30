@@ -1,8 +1,4 @@
-// start/routes.ts
-
 import router from '@adonisjs/core/services/router'
-// Ya no necesitamos importar 'middleware' si no lo vamos a usar en este archivo para el grupo principal
-// import { middleware } from '#start/kernel'
 
 // Ruta raíz
 router.get('/', async () => {
@@ -10,7 +6,6 @@ router.get('/', async () => {
 })
 
 // --- RUTAS DE AUTENTICACIÓN ---
-// Estas rutas NO deben llevar el middleware de autenticación, ¡son para autenticarse!
 router.post('/api/login', async (ctx) => {
   const { default: AuthController } = await import('#controllers/auth_controller')
   return new AuthController().login(ctx)
@@ -26,8 +21,7 @@ router.post('/api/reset-password', async (ctx) => {
   return new AuthController().resetPassword(ctx)
 })
 
-// --- RUTAS API (AHORA SIN PROTECCIÓN POR AUTENTICACIÓN A NIVEL DE GRUPO) ---
-// Hemos removido el .middleware(middleware.auth()) de este grupo.
+// --- RUTAS API ---
 router
   .group(() => {
     // === TURNOS RTM ===
@@ -107,7 +101,6 @@ router
       return new UsuariosController().destroy(ctx)
     })
 
-    // LA RUTA CORREGIDA PARA LA FOTO DE PERFIL
     router.put('/usuarios/:id/profile-picture', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().updateProfilePictureUrlNoAuth(ctx)
@@ -128,6 +121,66 @@ router
         return new Ctrl().index(ctx)
       })
     }
+
+    // ✅ NUEVA RUTA: Usuarios por razón social
+    router.get('/razones-sociales/:id/usuarios', async (ctx) => {
+      const { default: Ctrl } = await import('#controllers/razones_sociales_controller')
+      return new Ctrl().usuarios(ctx)
+    })
+
+    // === CONTRATOS ===
+    router.get('/contratos', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().index(ctx)
+    })
+
+    router.post('/contratos', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().store(ctx)
+    })
+
+    router.get('/contratos/:id', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().show(ctx)
+    })
+
+    router.put('/contratos/:id', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().update(ctx)
+    })
+
+    router.delete('/contratos/:id', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().destroy(ctx)
+    })
+
+    // === CONTRATO PASOS ===
+    router.get('/contratos/:contratoId/pasos', async (ctx) => {
+      const { default: ContratoPasosController } = await import(
+        '#controllers/contrato_pasos_controller'
+      )
+      return new ContratoPasosController().index(ctx)
+    })
+
+    router.post('/contratos/:contratoId/pasos', async (ctx) => {
+      const { default: ContratoPasosController } = await import(
+        '#controllers/contrato_pasos_controller'
+      )
+      return new ContratoPasosController().store(ctx)
+    })
+
+    router.put('/pasos/:id', async (ctx) => {
+      const { default: ContratoPasosController } = await import(
+        '#controllers/contrato_pasos_controller'
+      )
+      return new ContratoPasosController().update(ctx)
+    })
+
+    router.delete('/pasos/:id', async (ctx) => {
+      const { default: ContratoPasosController } = await import(
+        '#controllers/contrato_pasos_controller'
+      )
+      return new ContratoPasosController().destroy(ctx)
+    })
   })
   .prefix('/api')
-// .middleware(middleware.auth()) // <-- ¡ESTA LÍNEA SE HA REMOVIDO!
