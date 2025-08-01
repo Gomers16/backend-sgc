@@ -14,14 +14,13 @@ export default class extends BaseSchema {
         .inTable('usuarios')
         .onDelete('CASCADE')
 
-      // Nueva columna para el ID de la sede
       table
         .integer('sede_id')
         .unsigned()
         .references('id')
         .inTable('sedes')
-        .onDelete('RESTRICT') // Restringe la eliminación de una sede si tiene contratos asociados
-        .notNullable() // Cada contrato debe estar asociado a una sede
+        .onDelete('RESTRICT')
+        .notNullable()
 
       table.enum('tipo_contrato', ['prestacion', 'temporal', 'laboral']).notNullable()
       table.enum('estado', ['activo', 'inactivo']).defaultTo('activo').notNullable()
@@ -29,8 +28,12 @@ export default class extends BaseSchema {
       table.date('fecha_inicio').notNullable()
       table.date('fecha_fin').nullable()
 
-      table.timestamp('created_at').notNullable().defaultTo(this.now()) // Added notNullable and defaultTo
-      table.timestamp('updated_at').notNullable().defaultTo(this.now()) // Added notNullable and defaultTo
+      // ✅ Nuevas columnas para el archivo físico del contrato
+      table.string('nombre_archivo_contrato_fisico').nullable()
+      table.string('ruta_archivo_contrato_fisico').nullable()
+
+      table.timestamp('created_at').notNullable().defaultTo(this.now())
+      table.timestamp('updated_at').notNullable().defaultTo(this.now())
     })
   }
 

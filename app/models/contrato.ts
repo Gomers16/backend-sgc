@@ -2,12 +2,12 @@ import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 
-import Usuario from '#models/usuario' // Updated import using alias
-import ContratoPaso from '#models/contrato_paso' // Updated import using alias
-import Sede from '#models/sede' // Importación del modelo Sede
+import Usuario from '#models/usuario'
+import ContratoPaso from '#models/contrato_paso'
+import Sede from '#models/sede'
 
 export default class Contrato extends BaseModel {
-  public static table = 'contratos' // ✅ Corrección importante
+  public static table = 'contratos'
 
   @column({ isPrimary: true })
   declare id: number
@@ -18,11 +18,9 @@ export default class Contrato extends BaseModel {
   @belongsTo(() => Usuario)
   declare usuario: BelongsTo<typeof Usuario>
 
-  // Columna para el ID de la sede a la que pertenece el contrato
   @column()
   declare sedeId: number
 
-  // Relación con el modelo Sede
   @belongsTo(() => Sede)
   declare sede: BelongsTo<typeof Sede>
 
@@ -37,6 +35,13 @@ export default class Contrato extends BaseModel {
 
   @column.date()
   declare fechaFin?: DateTime
+
+  // ✅ Nuevas columnas para el archivo físico del contrato
+  @column()
+  declare nombreArchivoContratoFisico?: string
+
+  @column()
+  declare rutaArchivoContratoFisico?: string
 
   @hasMany(() => ContratoPaso)
   declare pasos: HasMany<typeof ContratoPaso>

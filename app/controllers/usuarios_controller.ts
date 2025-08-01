@@ -2,8 +2,11 @@
 
 import type { HttpContext } from '@adonisjs/core/http'
 import Usuario from '#models/usuario'
-import Drive from '@adonisjs/drive/services/main'
 import app from '@adonisjs/core/services/app'
+import { cuid } from '@adonisjs/core/helpers'
+// ✅ Importamos el módulo nativo de Node.js para el sistema de archivos
+import fs from 'node:fs/promises'
+import path from 'node:path'
 
 import Rol from '#models/rol'
 import RazonSocial from '#models/razon_social'
@@ -12,6 +15,9 @@ import Cargo from '#models/cargo'
 import EntidadSalud from '#models/entidad_salud'
 
 export default class UsuariosController {
+  updateProfilePictureUrlNoAuth(): any {
+    throw new Error('Method not implemented.')
+  }
   /**
    * Obtener todos los usuarios o filtrados por razón social.
    */
@@ -29,7 +35,7 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos') // 👈 Importante para la vista
+        .preload('contratos')
 
       if (razonSocialId) {
         query.where('razon_social_id', razonSocialId)
@@ -199,8 +205,17 @@ export default class UsuariosController {
     try {
       const user = await Usuario.findOrFail(params.id)
 
-      if (user.fotoPerfil && user.fotoPerfil.startsWith('/uploads/')) {
-        await Drive.use('fs').delete(user.fotoPerfil.replace('/uploads/', 'uploads/'))
+      if (user.fotoPerfil) {
+        const oldPhotoRelativePath = user.fotoPerfil.replace(/^\//, '')
+        const oldPhotoFullPath = path.join(app.publicPath(), oldPhotoRelativePath)
+
+        try {
+          await fs.unlink(oldPhotoFullPath)
+        } catch (unlinkError) {
+          if (unlinkError.code !== 'ENOENT') {
+            console.error('Error al eliminar archivo de perfil:', unlinkError)
+          }
+        }
       }
 
       await user.delete()
@@ -266,43 +281,81 @@ export default class UsuariosController {
   }
 
   /**
-   * Subir foto de perfil
+   * Subir foto de perfil.
    */
-  public async updateProfilePictureUrlNoAuth({ request, response, params }: HttpContext) {
+  public async uploadProfilePicture({ request, response, params }: HttpContext) {
     const userId = params.id
-    const foto = request.file('foto', {
-      size: '2mb',
-      extnames: ['jpg', 'png', 'jpeg'],
-    })
 
     if (!userId) {
       return response.badRequest({ message: 'Se requiere el ID del usuario.' })
     }
 
-    if (!foto) {
-      return response.badRequest({ message: 'No se ha adjuntado ninguna foto.' })
-    }
+    const user = await Usuario.findOrFail(userId)
+    const foto = request.file('foto', {
+      size: '2mb',
+      extnames: ['jpg', 'png', 'jpeg'],
+    })
 
-    const user = await Usuario.find(userId)
-    if (!user) {
-      return response.notFound({ message: 'Usuario no encontrado.' })
+    if (!foto || !foto.isValid) {
+      const error = foto?.errors[0]
+      return response.badRequest({
+        message: error?.message || 'No se ha adjuntado ninguna foto o el archivo es inválido.',
+      })
     }
 
     const uploadDir = 'uploads/profile_pictures'
-    const fileName = `${user.id}_${Date.now()}.${foto.extname}`
-    const filePathInPublic = `${uploadDir}/${fileName}`
+    const fileName = `${user.id}_${cuid()}.${foto.extname}`
 
     try {
-      await foto.move(app.publicPath(filePathInPublic))
-      const publicUrl = `/${filePathInPublic}`
+      // ✅ SOLUCIÓN FINAL: Usamos fs/promises para manejar las rutas absolutas
+      // Elimina la foto de perfil anterior si existe
+      if (user.fotoPerfil) {
+        const oldPhotoRelativePath = user.fotoPerfil.replace(/^\//, '')
+        const oldPhotoFullPath = path.join(app.publicPath(), oldPhotoRelativePath)
+
+        try {
+          // Intentamos borrar el archivo. Si no existe (ENOENT), no hacemos nada.
+          await fs.unlink(oldPhotoFullPath)
+        } catch (unlinkError) {
+          if (unlinkError.code !== 'ENOENT') {
+            console.error('Error al eliminar archivo de perfil anterior:', unlinkError)
+          }
+        }
+      }
+
+      // Crea la carpeta de destino si no existe
+      const destinationDir = path.join(app.publicPath(), uploadDir)
+      await fs.mkdir(destinationDir, { recursive: true })
+
+      // Mueve el archivo del directorio temporal al destino final
+      const newPhotoFullPath = path.join(destinationDir, fileName)
+      await fs.copyFile(foto.tmpPath, newPhotoFullPath)
+
+      // Construye la URL pública para el frontend
+      const publicUrl = `/${uploadDir}/${fileName}`
+
+      // Actualiza la propiedad `fotoPerfil` del usuario con la nueva URL
       user.fotoPerfil = publicUrl
       await user.save()
 
-      return response.ok({
-        message: 'Foto de perfil actualizada con éxito',
-        fotoPerfilUrl: user.fotoPerfil,
+      // Precarga todas las relaciones antes de devolver el usuario
+      await user.load((loader) => {
+        loader
+          .preload('rol')
+          .preload('razonSocial')
+          .preload('sede')
+          .preload('cargo')
+          .preload('eps')
+          .preload('arl')
+          .preload('afp')
+          .preload('afc')
+          .preload('ccf')
       })
+
+      // Devuelve el objeto de usuario completo para que el frontend lo use
+      return response.ok(user)
     } catch (error) {
+      console.error('Error al subir la foto de perfil:', error)
       return response.internalServerError({
         message: 'Error al subir la foto de perfil',
         error: error.message,

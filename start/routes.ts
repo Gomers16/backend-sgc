@@ -101,9 +101,10 @@ router
       return new UsuariosController().destroy(ctx)
     })
 
-    router.put('/usuarios/:id/profile-picture', async (ctx) => {
+    // ✅ CORRECCIÓN CLAVE: Método POST y nombre de función correcto
+    router.post('/usuarios/:id/upload-photo', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().updateProfilePictureUrlNoAuth(ctx)
+      return new UsuariosController().uploadProfilePicture(ctx)
     })
 
     // === SELECTORES ===
@@ -137,6 +138,12 @@ router
     router.post('/contratos', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().store(ctx)
+    })
+
+    // ✅ NUEVA RUTA para anexar contrato físico
+    router.post('/contratos/anexar-fisico', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().anexarFisico(ctx)
     })
 
     router.get('/contratos/:id', async (ctx) => {
