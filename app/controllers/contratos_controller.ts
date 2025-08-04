@@ -34,6 +34,8 @@ export default class ContratosController {
         .preload('usuario')
         .preload('sede')
         .preload('pasos')
+        // ✅ IMPORTANTE: Si el frontend espera los eventos aquí, también precárgalos
+        // .preload('eventos') // Descomenta esta línea si necesitas los eventos aquí
         .firstOrFail()
 
       return response.ok(contrato)
@@ -86,59 +88,43 @@ export default class ContratosController {
    * Método para anexar un contrato físico y crear el registro en la DB
    */
   public async anexarFisico({ request, response }: HttpContext) {
-    // ✅ Eliminado 'auth' del desestructurado
     try {
-      // ✅ Eliminado: const user = await auth.authenticate()
-
-      // Valida y obtiene los datos del payload
       const usuarioId = request.input('usuarioId')
       const tipoContrato = request.input('tipoContrato')
       const fechaInicio = request.input('fechaInicio')
-      const fechaFin = request.input('fechaFin') // Puede ser nulo o indefinido
+      const fechaFin = request.input('fechaFin')
 
-      // Obtiene el archivo adjunto
       const archivoContrato = request.file('archivo')
 
       if (!archivoContrato) {
         return response.badRequest({ message: 'No se adjuntó ningún archivo de contrato.' })
       }
 
-      // Define el subdirectorio dentro de 'public' para los uploads de contratos
       const uploadDir = 'uploads/contratos'
-      // Define el nombre del archivo
       const fileName = `${Date.now()}_${archivoContrato.clientName}`
-      // Define la ruta completa dentro de la carpeta pública
       const filePathInPublic = `${uploadDir}/${fileName}`
 
-      // Mueve el archivo a la carpeta 'public/uploads/contratos'
-      // Asegúrate de que el directorio 'public/uploads/contratos' exista y sea accesible
       await archivoContrato.move(app.publicPath(uploadDir), {
         name: fileName,
       })
 
-      // La URL pública para acceder al archivo
       const publicUrl = `/${filePathInPublic}`
 
-      // Crea el registro del contrato en la base de datos
       const contrato = await Contrato.create({
         usuarioId: usuarioId,
-        // ✅ TEMPORAL: Asignación fija de sedeId.
-        // Si esta ruta no requiere autenticación, sedeId debe venir del frontend
-        // o ser determinado de otra manera (ej. un valor por defecto si aplica).
         sedeId: 1, // <<-- ✅ IMPORTANTE: Reemplaza '1' con un ID de sede válido de tu DB
         tipoContrato: tipoContrato,
-        estado: 'activo', // Estado inicial del contrato
-        fechaInicio: DateTime.fromISO(fechaInicio), // Convierte a DateTime
-        fechaFin: fechaFin ? DateTime.fromISO(fechaFin) : undefined, // Convierte si existe
-        nombreArchivoContratoFisico: fileName, // Guarda el nombre del archivo
-        rutaArchivoContratoFisico: publicUrl, // Guarda la URL pública
+        estado: 'activo',
+        fechaInicio: DateTime.fromISO(fechaInicio),
+        fechaFin: fechaFin ? DateTime.fromISO(fechaFin) : undefined,
+        nombreArchivoContratoFisico: fileName,
+        rutaArchivoContratoFisico: publicUrl,
       })
 
-      // Carga las relaciones para la respuesta
       await contrato.load('usuario')
       await contrato.load('sede')
 
-      return response.created(contrato) // Retorna el contrato creado
+      return response.created(contrato)
     } catch (error) {
       console.error('Error al anexar contrato físico:', error)
       return response.internalServerError({
@@ -149,19 +135,40 @@ export default class ContratosController {
   }
 
   /**
-   * Actualizar un contrato
+   * Actualizar un contrato (para actualizaciones parciales como el estado)
+   * Este método ahora maneja las peticiones PATCH de forma más robusta.
    */
   public async update({ params, request, response }: HttpContext) {
     try {
       const contrato = await Contrato.findOrFail(params.id)
 
-      const payload = request.only(['tipoContrato', 'estado', 'fechaInicio', 'fechaFin'])
+      // Obtenemos todos los campos que podrían ser actualizados.
+      // `request.only` devolverá `undefined` para los campos no presentes en la petición.
+      const payload = request.only(['tipoContrato', 'estado', 'fechaInicio', 'fechaFin', 'nombreArchivoContratoFisico', 'rutaArchivoContratoFisico'])
 
-      contrato.merge(payload)
+      // Iteramos sobre el payload y solo asignamos los valores que no son `undefined`.
+      // Esto es crucial para las actualizaciones PATCH, donde no todos los campos están presentes.
+      Object.keys(payload).forEach(key => {
+        // Manejo especial para fechas que pueden ser nulas
+        if (key === 'fechaInicio' && payload.fechaInicio !== undefined) {
+          contrato.fechaInicio = DateTime.fromISO(payload.fechaInicio)
+        } else if (key === 'fechaFin' && payload.fechaFin !== undefined) {
+          // Permite que fechaFin sea null si se envía explícitamente null
+          contrato.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : null
+        } else if (payload[key] !== undefined) {
+          // Asigna otros campos si no son undefined
+          (contrato as any)[key] = payload[key]
+        }
+      })
+
       await contrato.save()
 
+      // Recargar relaciones para la respuesta, asegurando que los datos estén completos
       await contrato.load('usuario')
       await contrato.load('sede')
+      await contrato.load('pasos')
+      // ✅ IMPORTANTE: Si el frontend espera los eventos aquí, también precárgalos
+      // await contrato.load('eventos') // Descomenta esta línea si necesitas los eventos aquí
 
       return response.ok(contrato)
     } catch (error) {

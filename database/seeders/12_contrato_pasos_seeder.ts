@@ -7,34 +7,31 @@ export default class ContratoPasoSeeder extends BaseSeeder {
     await ContratoPaso.createMany([
       // Contrato 1 (laboral) - Carlos Rodríguez
       {
-        id: 1, // Se puede omitir si es auto-incremental y no se necesita un ID específico
         contratoId: 1,
         fase: 'inicio',
         nombrePaso: 'Reclutamiento/selección',
         fecha: DateTime.fromISO('2024-01-05'),
-        archivo: '',
+        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
         observacion: 'Proceso completado sin observaciones',
         orden: 1,
         completado: true,
       },
       {
-        id: 2, // Se puede omitir si es auto-incremental y no se necesita un ID específico
         contratoId: 1,
         fase: 'inicio',
         nombrePaso: 'Referenciación',
         fecha: DateTime.fromISO('2024-01-06'),
-        archivo: '',
+        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
         observacion: '',
         orden: 2,
         completado: true,
       },
       {
-        id: 3, // Se puede omitir si es auto-incremental y no se necesita un ID específico
         contratoId: 1,
         fase: 'inicio',
         nombrePaso: 'Pruebas',
         fecha: DateTime.fromISO('2024-01-07'),
-        archivo: '',
+        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
         observacion: 'Pruebas satisfactorias',
         orden: 3,
         completado: true,
@@ -42,23 +39,21 @@ export default class ContratoPasoSeeder extends BaseSeeder {
 
       // Contrato 2 (prestación) - Laura González
       {
-        id: 4, // Se puede omitir si es auto-incremental y no se necesita un ID específico
         contratoId: 2,
         fase: 'inicio',
         nombrePaso: 'Solicitud',
         fecha: DateTime.fromISO('2024-02-25'),
-        archivo: '',
+        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
         observacion: '',
         orden: 1,
         completado: true,
       },
       {
-        id: 5, // Se puede omitir si es auto-incremental y no se necesita un ID específico
         contratoId: 2,
         fase: 'inicio',
         nombrePaso: 'Pruebas',
         fecha: DateTime.fromISO('2024-02-26'),
-        archivo: '',
+        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
         observacion: 'Pruebas técnicas entregadas',
         orden: 2,
         completado: true,

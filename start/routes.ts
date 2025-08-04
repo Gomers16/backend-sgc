@@ -101,7 +101,6 @@ router
       return new UsuariosController().destroy(ctx)
     })
 
-    // ✅ CORRECCIÓN CLAVE: Método POST y nombre de función correcto
     router.post('/usuarios/:id/upload-photo', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().uploadProfilePicture(ctx)
@@ -123,7 +122,6 @@ router
       })
     }
 
-    // ✅ NUEVA RUTA: Usuarios por razón social
     router.get('/razones-sociales/:id/usuarios', async (ctx) => {
       const { default: Ctrl } = await import('#controllers/razones_sociales_controller')
       return new Ctrl().usuarios(ctx)
@@ -140,7 +138,6 @@ router
       return new ContratosController().store(ctx)
     })
 
-    // ✅ NUEVA RUTA para anexar contrato físico
     router.post('/contratos/anexar-fisico', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().anexarFisico(ctx)
@@ -151,7 +148,8 @@ router
       return new ContratosController().show(ctx)
     })
 
-    router.put('/contratos/:id', async (ctx) => {
+    // --- LÍNEA CORREGIDA ---
+    router.patch('/contratos/:id', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().update(ctx)
     })
@@ -161,33 +159,50 @@ router
       return new ContratosController().destroy(ctx)
     })
 
-    // === CONTRATO PASOS ===
-    router.get('/contratos/:contratoId/pasos', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().index(ctx)
-    })
+    // === CONTRATO PASOS (tus rutas existentes) ===
+    router.group(() => {
+      router.get('/', async (ctx) => {
+        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
+        return new ContratoPasosController().index(ctx)
+      })
+      
+      router.post('/', async (ctx) => {
+        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
+        return new ContratoPasosController().store(ctx)
+      })
+      
+      router.put('/:id', async (ctx) => {
+        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
+        return new ContratoPasosController().update(ctx)
+      })
+      
+      router.delete('/:id', async (ctx) => {
+        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
+        return new ContratoPasosController().destroy(ctx)
+      })
+    }).prefix('/contratos/:contratoId/pasos')
 
-    router.post('/contratos/:contratoId/pasos', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().store(ctx)
-    })
-
-    router.put('/pasos/:id', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().update(ctx)
-    })
-
-    router.delete('/pasos/:id', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().destroy(ctx)
-    })
+    // === CONTRATO EVENTOS (NUEVAS RUTAS) ===
+    router.group(() => {
+      router.get('/', async (ctx) => {
+        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
+        return new ContratoEventoController().index(ctx)
+      })
+      
+      router.post('/', async (ctx) => {
+        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
+        return new ContratoEventoController().store(ctx)
+      })
+      
+      router.put('/:id', async (ctx) => {
+        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
+        return new ContratoEventoController().update(ctx)
+      })
+      
+      router.delete('/:id', async (ctx) => {
+        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
+        return new ContratoEventoController().destroy(ctx)
+      })
+    }).prefix('/contratos/:contratoId/eventos')
   })
   .prefix('/api')

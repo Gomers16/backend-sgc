@@ -1,9 +1,10 @@
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
-import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
+import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations' // Asegúrate de que 'HasMany' esté importado
 
 import Usuario from '#models/usuario'
 import ContratoPaso from '#models/contrato_paso'
+import ContratoEvento from '#models/contrato_evento' // ✅ Importa tu modelo ContratoEvento
 import Sede from '#models/sede'
 
 export default class Contrato extends BaseModel {
@@ -45,6 +46,10 @@ export default class Contrato extends BaseModel {
 
   @hasMany(() => ContratoPaso)
   declare pasos: HasMany<typeof ContratoPaso>
+
+  // ✅ ¡ESTA ES LA RELACIÓN CLAVE QUE FALTABA!
+  @hasMany(() => ContratoEvento)
+  declare eventos: HasMany<typeof ContratoEvento>
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime

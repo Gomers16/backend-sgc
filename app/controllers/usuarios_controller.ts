@@ -4,7 +4,6 @@ import type { HttpContext } from '@adonisjs/core/http'
 import Usuario from '#models/usuario'
 import app from '@adonisjs/core/services/app'
 import { cuid } from '@adonisjs/core/helpers'
-// ✅ Importamos el módulo nativo de Node.js para el sistema de archivos
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -35,7 +34,10 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos')
+        .preload('contratos', (query) => { // ✅ Asegura que precargas los contratos
+          query.preload('eventos') // ✅ Y aquí precargas los eventos dentro de cada contrato
+          query.preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+        })
 
       if (razonSocialId) {
         query.where('razon_social_id', razonSocialId)
@@ -69,7 +71,10 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos')
+        .preload('contratos', (query) => { // ✅ Precarga los contratos
+          query.preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
+          query.preload('pasos') // También precarga los pasos si los necesitas
+        })
         .firstOrFail()
 
       return response.ok(usuario)
@@ -175,15 +180,23 @@ export default class UsuariosController {
       user.merge(payload)
       await user.save()
 
-      await user.load('rol')
-      await user.load('razonSocial')
-      await user.load('sede')
-      await user.load('cargo')
-      await user.load('eps')
-      await user.load('arl')
-      await user.load('afp')
-      await user.load('afc')
-      await user.load('ccf')
+      // ✅ Asegúrate de precargar todas las relaciones relevantes después de guardar
+      await user.load((loader) => {
+        loader
+          .preload('rol')
+          .preload('razonSocial')
+          .preload('sede')
+          .preload('cargo')
+          .preload('eps')
+          .preload('arl')
+          .preload('afp')
+          .preload('afc')
+          .preload('ccf')
+          .preload('contratos', (query) => { // ✅ Precarga los contratos
+            query.preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
+            query.preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+          })
+      })
 
       return response.ok(user)
     } catch (error) {
@@ -350,6 +363,10 @@ export default class UsuariosController {
           .preload('afp')
           .preload('afc')
           .preload('ccf')
+          .preload('contratos', (query) => { // ✅ Precarga los contratos
+            query.preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
+            query.preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+          })
       })
 
       // Devuelve el objeto de usuario completo para que el frontend lo use

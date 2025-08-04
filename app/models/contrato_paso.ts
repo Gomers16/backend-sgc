@@ -2,7 +2,7 @@ import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 
-import Contrato from './contrato.js'
+import Contrato from './contrato.js' // Asegúrate de que la ruta de importación sea correcta
 
 export default class ContratoPaso extends BaseModel {
   @column({ isPrimary: true })
@@ -24,7 +24,7 @@ export default class ContratoPaso extends BaseModel {
   declare fecha?: DateTime
 
   @column()
-  declare archivo?: string
+  declare archivoUrl?: string // ✅ ¡Esta es la propiedad clave! Debe ser 'archivoUrl'
 
   @column()
   declare observacion?: string
