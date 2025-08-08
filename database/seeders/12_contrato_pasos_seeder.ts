@@ -4,14 +4,17 @@ import { DateTime } from 'luxon'
 
 export default class ContratoPasoSeeder extends BaseSeeder {
   public async run() {
+    // Es buena práctica limpiar la tabla antes de sembrar para evitar duplicados
+    await ContratoPaso.query().delete()
+
     await ContratoPaso.createMany([
       // Contrato 1 (laboral) - Carlos Rodríguez
       {
-        contratoId: 1,
+        contratoId: 1, // Este ID debe existir en la tabla 'contratos'
         fase: 'inicio',
         nombrePaso: 'Reclutamiento/selección',
         fecha: DateTime.fromISO('2024-01-05'),
-        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
+        archivoUrl: '', // ✅ Correcto: coincide con el modelo y migración
         observacion: 'Proceso completado sin observaciones',
         orden: 1,
         completado: true,
@@ -21,7 +24,7 @@ export default class ContratoPasoSeeder extends BaseSeeder {
         fase: 'inicio',
         nombrePaso: 'Referenciación',
         fecha: DateTime.fromISO('2024-01-06'),
-        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
+        archivoUrl: '',
         observacion: '',
         orden: 2,
         completado: true,
@@ -31,7 +34,7 @@ export default class ContratoPasoSeeder extends BaseSeeder {
         fase: 'inicio',
         nombrePaso: 'Pruebas',
         fecha: DateTime.fromISO('2024-01-07'),
-        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
+        archivoUrl: '',
         observacion: 'Pruebas satisfactorias',
         orden: 3,
         completado: true,
@@ -39,11 +42,11 @@ export default class ContratoPasoSeeder extends BaseSeeder {
 
       // Contrato 2 (prestación) - Laura González
       {
-        contratoId: 2,
+        contratoId: 2, // Este ID también debe existir en la tabla 'contratos'
         fase: 'inicio',
         nombrePaso: 'Solicitud',
         fecha: DateTime.fromISO('2024-02-25'),
-        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
+        archivoUrl: '',
         observacion: '',
         orden: 1,
         completado: true,
@@ -53,7 +56,7 @@ export default class ContratoPasoSeeder extends BaseSeeder {
         fase: 'inicio',
         nombrePaso: 'Pruebas',
         fecha: DateTime.fromISO('2024-02-26'),
-        archivoUrl: '', // ✅ Cambiado de 'archivo' a 'archivoUrl'
+        archivoUrl: '',
         observacion: 'Pruebas técnicas entregadas',
         orden: 2,
         completado: true,

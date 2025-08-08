@@ -129,7 +129,9 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   declare ccf: BelongsTo<typeof EntidadSalud>
 
   // Relación (HasMany)
-  @hasMany(() => Contrato)
+  @hasMany(() => Contrato, {
+    foreignKey: 'usuarioId', // ✅ ¡Esta es la clave! Define explícitamente la clave foránea
+  })
   declare contratos: HasMany<typeof Contrato>
 
   // Configuración de Tokens de Acceso (usa el ID primario por defecto para relacionar)

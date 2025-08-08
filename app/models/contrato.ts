@@ -1,11 +1,16 @@
 import { DateTime } from 'luxon'
-import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
-import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations' // Asegúrate de que 'HasMany' esté importado
+import { BaseModel, column, hasMany, belongsTo } from '@adonisjs/lucid/orm'
+import type { HasMany, BelongsTo } from '@adonisjs/lucid/types/relations'
 
-import Usuario from '#models/usuario'
-import ContratoPaso from '#models/contrato_paso'
-import ContratoEvento from '#models/contrato_evento' // ✅ Importa tu modelo ContratoEvento
-import Sede from '#models/sede'
+import ContratoPaso from './contrato_paso.js'
+import ContratoEvento from './contrato_evento.js'
+import ContratoHistorialEstado from './contrato_historial_estado.js'
+import ContratoSalario from './contrato_salario.js'
+import Usuario from './usuario.js'
+import Sede from './sede.js'
+import Cargo from './cargo.js'
+import EntidadSalud from './entidad_salud.js'
+import RazonSocial from './razon_social.js'
 
 export default class Contrato extends BaseModel {
   public static table = 'contratos'
@@ -20,40 +25,109 @@ export default class Contrato extends BaseModel {
   declare usuario: BelongsTo<typeof Usuario>
 
   @column()
+  declare razonSocialId: number
+
+  @belongsTo(() => RazonSocial)
+  declare razonSocial: BelongsTo<typeof RazonSocial>
+
+  @column()
+  declare identificacion: string
+
+  @column()
   declare sedeId: number
 
   @belongsTo(() => Sede)
   declare sede: BelongsTo<typeof Sede>
 
   @column()
-  declare tipoContrato: 'prestacion' | 'temporal' | 'laboral'
+  declare cargoId: number
+
+  @belongsTo(() => Cargo)
+  declare cargo: BelongsTo<typeof Cargo>
 
   @column()
-  declare estado: 'activo' | 'inactivo'
+  declare funcionesCargo?: string | null
 
   @column.date()
   declare fechaInicio: DateTime
 
   @column.date()
-  declare fechaFin?: DateTime
-
-  // ✅ Nuevas columnas para el archivo físico del contrato
-  @column()
-  declare nombreArchivoContratoFisico?: string
+  declare fechaTerminacion?: DateTime | null
 
   @column()
-  declare rutaArchivoContratoFisico?: string
+  declare tipoContrato: 'laboral' | 'temporal' | 'prestacion'
 
-  @hasMany(() => ContratoPaso)
-  declare pasos: HasMany<typeof ContratoPaso>
+  @column()
+  declare terminoContrato?: 'fijo' | 'obra_o_labor' | 'indefinido' | null
 
-  // ✅ ¡ESTA ES LA RELACIÓN CLAVE QUE FALTABA!
-  @hasMany(() => ContratoEvento)
-  declare eventos: HasMany<typeof ContratoEvento>
+  @column()
+  declare estado: 'activo' | 'inactivo'
+
+  @column()
+  declare periodoPrueba?: number | null
+
+  @column()
+  declare horarioTrabajo?: string | null
+
+  @column()
+  declare centroCosto?: string | null
+
+  @column()
+  declare epsId?: number | null
+  @belongsTo(() => EntidadSalud, { foreignKey: 'epsId' }) // ✅ foreignKey explícita
+  declare eps: BelongsTo<typeof EntidadSalud>
+
+  @column()
+  declare arlId?: number | null
+  @belongsTo(() => EntidadSalud, { foreignKey: 'arlId' }) // ✅ foreignKey explícita
+  declare arl: BelongsTo<typeof EntidadSalud>
+
+  @column()
+  declare afpId?: number | null
+  @belongsTo(() => EntidadSalud, { foreignKey: 'afpId' }) // ✅ foreignKey explícita
+  declare afp: BelongsTo<typeof EntidadSalud>
+
+  @column()
+  declare afcId?: number | null
+  @belongsTo(() => EntidadSalud, { foreignKey: 'afcId' }) // ✅ foreignKey explícita
+  declare afc: BelongsTo<typeof EntidadSalud>
+
+  @column()
+  declare ccfId?: number | null
+  @belongsTo(() => EntidadSalud, { foreignKey: 'ccfId' }) // ✅ foreignKey explícita
+  declare ccf: BelongsTo<typeof EntidadSalud>
+
+  @column()
+  declare nombreArchivoContratoFisico?: string | null
+
+  @column()
+  declare rutaArchivoContratoFisico?: string | null
+
+  @column()
+  declare motivoFinalizacion?: string | null
+
+  @column()
+  declare tieneRecomendacionesMedicas: boolean
+
+  @column()
+  declare rutaArchivoRecomendacionMedica?: string | null
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
+
+  // Relaciones
+  @hasMany(() => ContratoPaso)
+  declare pasos: HasMany<typeof ContratoPaso>
+
+  @hasMany(() => ContratoEvento)
+  declare eventos: HasMany<typeof ContratoEvento>
+
+  @hasMany(() => ContratoHistorialEstado)
+  declare historialEstados: HasMany<typeof ContratoHistorialEstado>
+
+  @hasMany(() => ContratoSalario)
+  declare salarios: HasMany<typeof ContratoSalario>
 }

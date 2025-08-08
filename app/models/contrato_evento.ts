@@ -3,8 +3,8 @@ import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 import Contrato from '#models/contrato'
 
-export default class ContratoEvento extends BaseModel { // ✅ Nombre de la clase cambiado a ContratoEvento
-  public static table = 'contrato_eventos' // ✅ Nombre de la tabla cambiado a 'contrato_eventos'
+export default class ContratoEvento extends BaseModel {
+  public static table = 'contrato_eventos' // Nombre de la tabla explícito
 
   @column({ isPrimary: true })
   declare id: number
@@ -13,22 +13,30 @@ export default class ContratoEvento extends BaseModel { // ✅ Nombre de la clas
   declare contratoId: number
 
   @column()
-  declare tipo: 'incapacidad' | 'suspension' | 'licencia' | 'permiso' | 'vacaciones' | 'cesantias' | 'disciplinario' | 'terminacion'
+  declare tipo:
+    | 'incapacidad'
+    | 'suspension'
+    | 'licencia'
+    | 'permiso'
+    | 'vacaciones'
+    | 'cesantias'
+    | 'disciplinario'
+    | 'terminacion'
 
   @column()
-  declare subtipo?: string
+  declare subtipo?: string | null // Asegúrate que puede ser nulo en la DB
 
   @column.date()
   declare fechaInicio: DateTime
 
   @column.date()
-  declare fechaFin?: DateTime
+  declare fechaFin?: DateTime | null // Asegúrate que puede ser nulo en la DB
 
   @column()
-  declare descripcion?: string
+  declare descripcion?: string | null // Asegúrate que puede ser nulo en la DB
 
   @column()
-  declare documentoUrl?: string
+  declare documentoUrl?: string | null // Asegúrate que puede ser nulo en la DB
 
   @belongsTo(() => Contrato)
   declare contrato: BelongsTo<typeof Contrato>
@@ -38,4 +46,9 @@ export default class ContratoEvento extends BaseModel { // ✅ Nombre de la clas
 
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
+
+  // ✅ ¡IMPORTANTE! Las siguientes propiedades NO pertenecen a ContratoEvento y han sido eliminadas:
+  // declare nombrePaso: string | undefined
+  // declare fase: "inicio" | "desarrollo" | "fin" | undefined
+  // declare orden: number | undefined
 }

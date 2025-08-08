@@ -18,7 +18,7 @@ export default class extends BaseSchema {
       table.string('nombre_paso', 150).notNullable()
 
       table.date('fecha').nullable()
-      table.string('archivo').nullable()
+      table.string('archivo_url').nullable() // ✅ CORREGIDO: Cambiado de 'archivo' a 'archivo_url'
       table.text('observacion').nullable()
 
       table.integer('orden').notNullable()

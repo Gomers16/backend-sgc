@@ -3,8 +3,8 @@ import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 import Contrato from './contrato.js'
 
-export default class ContratoPaso extends BaseModel {
-  public static table = 'contrato_pasos' // Se recomienda usar `public static table`
+export default class ContratoSalario extends BaseModel {
+  public static table = 'contratos_salarios'
 
   @column({ isPrimary: true })
   declare id: number
@@ -16,30 +16,23 @@ export default class ContratoPaso extends BaseModel {
   declare contrato: BelongsTo<typeof Contrato>
 
   @column()
-  declare fase: 'inicio' | 'desarrollo' | 'fin' // Se recomienda tiparlo correctamente
+  declare salarioBasico: number
 
   @column()
-  declare nombrePaso: string
-
-  @column.dateTime()
-  declare fecha?: DateTime | null
+  declare bonoSalarial: number
 
   @column()
-  declare observacion?: string | null
+  declare auxilioTransporte: number
 
   @column()
-  declare orden: number
+  declare auxilioNoSalarial: number
 
-  @column()
-  declare completado: boolean
-
-  @column()
-  declare archivoUrl?: string | null
+  @column.dateTime() // O @column.date() si solo necesitas la fecha sin hora
+  declare fechaEfectiva: DateTime // <-- ¡ESTA ES LA LÍNEA CLAVE QUE FALTABA O ESTABA MAL!
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
-  nombreArchivo: string
 }

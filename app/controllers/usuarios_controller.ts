@@ -1,5 +1,3 @@
-// app/Controllers/Http/UsuariosController.ts
-
 import type { HttpContext } from '@adonisjs/core/http'
 import Usuario from '#models/usuario'
 import app from '@adonisjs/core/services/app'
@@ -34,9 +32,15 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos', (query) => { // ✅ Asegura que precargas los contratos
-          query.preload('eventos') // ✅ Y aquí precargas los eventos dentro de cada contrato
-          query.preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+        .preload('contratos', (contractQuery) => {
+          // ✅ Asegura que precargas los contratos
+          contractQuery
+            .preload('eventos') // ✅ Y aquí precargas los eventos dentro de cada contrato
+            .preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+            .preload('historialEstados', (historialQuery) => {
+              // ✅ Precarga el historial de estados
+              historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+            })
         })
 
       if (razonSocialId) {
@@ -71,9 +75,15 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos', (query) => { // ✅ Precarga los contratos
-          query.preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
-          query.preload('pasos') // También precarga los pasos si los necesitas
+        .preload('contratos', (contractQuery) => {
+          // ✅ Precarga los contratos
+          contractQuery
+            .preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
+            .preload('pasos') // También precarga los pasos si los necesitas
+            .preload('historialEstados', (historialQuery) => {
+              // ✅ Precarga el historial de estados
+              historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+            })
         })
         .firstOrFail()
 
@@ -192,9 +202,15 @@ export default class UsuariosController {
           .preload('afp')
           .preload('afc')
           .preload('ccf')
-          .preload('contratos', (query) => { // ✅ Precarga los contratos
-            query.preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
-            query.preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+          .preload('contratos', (contractQuery) => {
+            // ✅ Precarga los contratos
+            contractQuery
+              .preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
+              .preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+              .preload('historialEstados', (historialQuery) => {
+                // ✅ Precarga el historial de estados
+                historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+              })
           })
       })
 
@@ -316,6 +332,13 @@ export default class UsuariosController {
       })
     }
 
+    // ✅ CORRECCIÓN: Asegurarse de que tmpPath no sea undefined
+    if (!foto.tmpPath) {
+      return response.internalServerError({
+        message: 'No se pudo obtener la ruta temporal del archivo de imagen.',
+      })
+    }
+
     const uploadDir = 'uploads/profile_pictures'
     const fileName = `${user.id}_${cuid()}.${foto.extname}`
 
@@ -342,7 +365,7 @@ export default class UsuariosController {
 
       // Mueve el archivo del directorio temporal al destino final
       const newPhotoFullPath = path.join(destinationDir, fileName)
-      await fs.copyFile(foto.tmpPath, newPhotoFullPath)
+      await fs.copyFile(foto.tmpPath, newPhotoFullPath) // `foto.tmpPath` ahora está garantizado como string
 
       // Construye la URL pública para el frontend
       const publicUrl = `/${uploadDir}/${fileName}`
@@ -363,9 +386,15 @@ export default class UsuariosController {
           .preload('afp')
           .preload('afc')
           .preload('ccf')
-          .preload('contratos', (query) => { // ✅ Precarga los contratos
-            query.preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
-            query.preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+          .preload('contratos', (contractQuery) => {
+            // ✅ Precarga los contratos
+            contractQuery
+              .preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
+              .preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+              .preload('historialEstados', (historialQuery) => {
+                // ✅ Precarga el historial de estados
+                historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+              })
           })
       })
 
