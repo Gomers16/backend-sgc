@@ -133,7 +133,7 @@ router
       return new ContratosController().index(ctx)
     })
 
-    // RUTA CORREGIDA: Ya no se exige autenticación para esta ruta
+    // (sin exigir auth)
     router.get('/usuarios/:usuarioId/contratos', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getContratosUsuario(ctx)
@@ -144,6 +144,7 @@ router
       return new ContratosController().store(ctx)
     })
 
+    // Dual mode: crear+anexar (legacy) o anexar a existente si llega contratoId
     router.post('/contratos/anexar-fisico', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().anexarFisico(ctx)
@@ -159,55 +160,91 @@ router
       return new ContratosController().update(ctx)
     })
 
+    router.patch('/contratos/:id/recomendacion-medica', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().updateRecomendacionMedica(ctx)
+    })
+
     router.delete('/contratos/:id', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().destroy(ctx)
     })
 
-    // === CONTRATO PASOS (tus rutas existentes) ===
-    router.group(() => {
-      router.get('/', async (ctx) => {
-        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
-        return new ContratoPasosController().index(ctx)
-      })
+    // === CONTRATO PASOS ===
+    router
+      .group(() => {
+        router.get('/', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().index(ctx)
+        })
 
-      router.post('/', async (ctx) => {
-        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
-        return new ContratoPasosController().store(ctx)
-      })
+        router.post('/', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().store(ctx)
+        })
 
-      router.put('/:id', async (ctx) => {
-        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
-        return new ContratoPasosController().update(ctx)
-      })
+        router.put('/:id', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().update(ctx)
+        })
 
-      router.delete('/:id', async (ctx) => {
-        const { default: ContratoPasosController } = await import('#controllers/contrato_pasos_controller')
-        return new ContratoPasosController().destroy(ctx)
-      })
-    }).prefix('/contratos/:contratoId/pasos')
+        router.delete('/:id', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().destroy(ctx)
+        })
 
-    // === CONTRATO EVENTOS (NUEVAS RUTAS) ===
-    router.group(() => {
-      router.get('/', async (ctx) => {
-        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
-        return new ContratoEventoController().index(ctx)
+        router.post('/:pasoId/recomendacion-medica', async (ctx) => {
+          const { default: ContratosController } = await import('#controllers/contratos_controller')
+          return new ContratosController().uploadRecomendacionMedica(ctx)
+        })
       })
+      .prefix('/contratos/:contratoId/pasos')
 
-      router.post('/', async (ctx) => {
-        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
-        return new ContratoEventoController().store(ctx)
-      })
+    // === CONTRATO EVENTOS ===
+    router
+      .group(() => {
+        router.get('/', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().index(ctx)
+        })
 
-      router.put('/:id', async (ctx) => {
-        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
-        return new ContratoEventoController().update(ctx)
-      })
+        router.post('/', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().store(ctx)
+        })
 
-      router.delete('/:id', async (ctx) => {
-        const { default: ContratoEventoController } = await import('#controllers/contrato_evento_controller')
-        return new ContratoEventoController().destroy(ctx)
+        router.put('/:id', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().update(ctx)
+        })
+
+        router.delete('/:id', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().destroy(ctx)
+        })
       })
-    }).prefix('/contratos/:contratoId/eventos')
+      .prefix('/contratos/:contratoId/eventos')
+
+    // === CONTRATO SALARIOS (coincide con tu frontend) ===
+    router.post('/contratos/:contratoId/salarios', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().storeSalario(ctx)
+    })
   })
   .prefix('/api')
