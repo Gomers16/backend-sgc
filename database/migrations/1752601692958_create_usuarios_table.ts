@@ -1,3 +1,4 @@
+// database/migrations/xxxx_usuarios.ts
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
@@ -7,8 +8,7 @@ export default class extends BaseSchema {
     this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
 
-      // ❌ ELIMINA ESTA LÍNEA:
-      // table.string('auth_id', 255).unique().nullable() // o .notNullable() si es siempre requerido
+      // ❌ ELIMINADA en tu comentario: auth_id (no se crea)
 
       // Relaciones existentes
       table
@@ -20,23 +20,9 @@ export default class extends BaseSchema {
 
       table.integer('rol_id').unsigned().references('id').inTable('roles').onDelete('SET NULL')
 
-      // Clave foránea para la tabla 'sedes'
-      table
-        .integer('sede_id')
-        .unsigned()
-        .references('id')
-        .inTable('sedes')
-        .onDelete('RESTRICT')
-        .notNullable()
-
-      // *** NUEVA RELACIÓN: La clave foránea para la tabla 'cargos' ***
-      table
-        .integer('cargo_id')
-        .unsigned()
-        .references('id')
-        .inTable('cargos')
-        .onDelete('RESTRICT')
-        .notNullable()
+      // ✅ AHORA OPCIONALES (sin .notNullable()):
+      table.integer('sede_id').unsigned().references('id').inTable('sedes').onDelete('RESTRICT')
+      table.integer('cargo_id').unsigned().references('id').inTable('cargos').onDelete('RESTRICT')
 
       table
         .integer('eps_id')
@@ -91,7 +77,6 @@ export default class extends BaseSchema {
 
       table.timestamp('created_at', { useTz: true }).notNullable()
       table.timestamp('updated_at', { useTz: true }).notNullable()
-      // ✅ AÑADIDA: Columna para Soft Deletes (esta sí la dejas)
       table.timestamp('deleted_at', { useTz: true }).nullable()
     })
   }

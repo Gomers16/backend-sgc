@@ -22,7 +22,7 @@ export default class RazonesSocialesController {
         message: 'Lista de razones sociales obtenida exitosamente.',
         data: razonesSociales,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al obtener razones sociales:', error)
       return response.internalServerError({
         message: 'Error al obtener razones sociales',
@@ -46,7 +46,7 @@ export default class RazonesSocialesController {
         message: 'Razón social obtenida exitosamente.',
         data: razonSocial,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al obtener razón social por ID:', error)
       if (error.code === 'E_ROW_NOT_FOUND') {
         return response.notFound({ message: 'Razón social no encontrada.' })
@@ -59,7 +59,10 @@ export default class RazonesSocialesController {
   }
 
   /**
-   * Obtener los usuarios asociados a una razón social (con contrato activo).
+   * Obtener los usuarios asociados a una razón social
+   * (con sus contratos ordenados por fecha y cargo del contrato).
+   * Nota: no se filtra únicamente por activos para permitir
+   * mostrar también cargos de contratos anteriores.
    */
   public async usuarios({ params, response }: HttpContext) {
     try {
@@ -67,17 +70,21 @@ export default class RazonesSocialesController {
 
       const usuarios = await Usuario.query()
         .where('razon_social_id', razonSocialId)
-        .preload('cargo')
+        .preload('cargo') // cargo del usuario (fallback)
         .preload('rol')
         .preload('contratos', (contratoQuery) => {
-          contratoQuery.where('estado', 'activo')
+          contratoQuery
+            .preload('cargo') // 👈 traer cargo del contrato
+            .preload('pasos') // usado en la vista
+            .preload('eventos') // usado en la vista
+            .orderBy('fecha_inicio', 'desc')
         })
 
       return response.ok({
         message: 'Usuarios por razón social cargados exitosamente.',
         data: usuarios,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al obtener usuarios de razón social:', error)
       return response.internalServerError({
         message: 'Error al obtener usuarios',

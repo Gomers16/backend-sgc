@@ -5,12 +5,15 @@ import Contrato from '#models/contrato'
 import ContratoPaso from '#models/contrato_paso'
 import ContratoHistorialEstado from '#models/contrato_historial_estado'
 import ContratoSalario from '#models/contrato_salario'
+import Usuario from '#models/usuario'
 import app from '@adonisjs/core/services/app'
 import { DateTime } from 'luxon'
 import { cuid } from '@adonisjs/core/helpers'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import db from '@adonisjs/lucid/services/db'
+
+type Estado = 'activo' | 'inactivo'
 
 export default class ContratosController {
   /**
@@ -35,6 +38,71 @@ export default class ContratosController {
         // la columna en DB es fecha_efectiva
         salarioQuery.orderBy('fecha_efectiva', 'desc').limit(1)
       })
+  }
+
+  /** ============================
+   *  SINCRONIZACIÓN USUARIO <—> CONTRATO
+   *  ============================ */
+
+  /** Contrato prioritario:
+   *  1) Activo más reciente
+   *  2) Si no hay activos, el más reciente en general
+   */
+  private async getContratoPrioritario(usuarioId: number): Promise<Contrato | null> {
+    const activo = await Contrato
+      .query()
+      .where('usuarioId', usuarioId)
+      .where('estado', 'activo' as Estado)
+      .orderBy('fechaInicio', 'desc')
+      .first()
+    if (activo) return activo
+
+    const masReciente = await Contrato
+      .query()
+      .where('usuarioId', usuarioId)
+      .orderBy('fechaInicio', 'desc')
+      .first()
+    return masReciente ?? null
+  }
+
+  /** Copia “lo que ves en contrato” al usuario */
+  private copiarCamposContratoEnUsuario(src: Contrato, user: Usuario) {
+    user.razonSocialId = src.razonSocialId
+    user.sedeId = src.sedeId
+    user.cargoId = src.cargoId
+
+    if (src.centroCosto !== undefined && src.centroCosto !== null) {
+      user.centroCosto = src.centroCosto
+    }
+
+    // Entidades de salud: solo sobreescribe si hay valor
+    if (src.epsId !== undefined && src.epsId !== null) user.epsId = src.epsId
+    if (src.arlId !== undefined && src.arlId !== null) user.arlId = src.arlId
+    if (src.afpId !== undefined && src.afpId !== null) user.afpId = src.afpId
+    if (src.afcId !== undefined && src.afcId !== null) user.afcId = src.afcId
+    if (src.ccfId !== undefined && src.ccfId !== null) user.ccfId = src.ccfId
+  }
+
+  /** Sincroniza usuario tras guardar un contrato:
+   *  - Si el contrato quedó ACTIVO ⇒ copiar este contrato.
+   *  - Si quedó INACTIVO ⇒ copiar el contrato prioritario del usuario.
+   */
+  private async syncUsuarioTrasGuardarContrato(contrato: Contrato) {
+    if (!contrato.usuarioId) return
+    const user = await Usuario.find(contrato.usuarioId)
+    if (!user) return
+
+    if (contrato.estado === 'activo') {
+      this.copiarCamposContratoEnUsuario(contrato, user)
+      await user.save()
+      return
+    }
+
+    const primary = await this.getContratoPrioritario(contrato.usuarioId)
+    if (primary) {
+      this.copiarCamposContratoEnUsuario(primary, user)
+      await user.save()
+    }
   }
 
   /** Lista todos los contratos */
@@ -183,6 +251,9 @@ export default class ContratosController {
 
       await trx.commit()
 
+      // 🔄 Sincroniza usuario con este contrato activo
+      await this.syncUsuarioTrasGuardarContrato(contrato)
+
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.created(contrato)
     } catch (error: any) {
@@ -269,6 +340,9 @@ export default class ContratosController {
 
         await contrato.save({ client: trx })
         await trx.commit()
+
+        // 🔄 Sincroniza usuario (por si actualizaste razonSocial u otros campos)
+        await this.syncUsuarioTrasGuardarContrato(contrato)
 
         await contrato.load((loader) => this.preloadRelations(loader))
         return response.ok({ message: 'Archivo anexado correctamente', contrato })
@@ -412,6 +486,9 @@ export default class ContratosController {
 
       await trx.commit()
 
+      // 🔄 Sincroniza usuario con este contrato activo
+      await this.syncUsuarioTrasGuardarContrato(contrato)
+
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.created({
         message: 'Contrato creado y anexado correctamente.',
@@ -541,6 +618,9 @@ export default class ContratosController {
 
       await trx.commit()
 
+      // 🔄 Sincroniza usuario con el contrato (activo => este; inactivo => prioritario)
+      await this.syncUsuarioTrasGuardarContrato(contrato)
+
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.ok(contrato)
     } catch (error: any) {
@@ -600,6 +680,8 @@ export default class ContratosController {
       await contrato.save({ client: trx })
       await trx.commit()
       await contrato.load((loader) => this.preloadRelations(loader))
+
+      // (No hace falta sincronizar usuario aquí; no cambian sede/cargo/entidades)
 
       return response.ok(contrato)
     } catch (error: any) {
@@ -664,7 +746,8 @@ export default class ContratosController {
 
       await archivo.move(publicPath, { name: fileName })
 
-      paso.nombreArchivo = archivo.clientName
+      // si tienes esos campos en la tabla de pasos:
+      ;(paso as any).nombreArchivo = archivo.clientName
       paso.archivoUrl = `/${uploadDir}/${fileName}`
 
       await paso.save()

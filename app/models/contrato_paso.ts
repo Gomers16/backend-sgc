@@ -41,5 +41,5 @@ export default class ContratoPaso extends BaseModel {
 
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
-  nombreArchivo: string
+  nombreArchivo: string | undefined
 }

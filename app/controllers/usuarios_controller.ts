@@ -1,10 +1,12 @@
+// app/controllers/usuarios_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
-import Usuario from '#models/usuario'
 import app from '@adonisjs/core/services/app'
 import { cuid } from '@adonisjs/core/helpers'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+// Modelos
+import Usuario from '#models/usuario'
 import Rol from '#models/rol'
 import RazonSocial from '#models/razon_social'
 import Sede from '#models/sede'
@@ -12,17 +14,13 @@ import Cargo from '#models/cargo'
 import EntidadSalud from '#models/entidad_salud'
 
 export default class UsuariosController {
-  updateProfilePictureUrlNoAuth(): any {
-    throw new Error('Method not implemented.')
-  }
-  /**
-   * Obtener todos los usuarios o filtrados por razón social.
-   */
+  /** Lista de usuarios (opcionalmente filtrados por razón social) */
   public async index({ request, response }: HttpContext) {
     try {
       const razonSocialId = request.input('razon_social_id')
 
-      let query = Usuario.query()
+      const query = Usuario.query()
+        // Fallbacks a nivel usuario
         .preload('rol')
         .preload('razonSocial')
         .preload('sede')
@@ -32,14 +30,21 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
+        // Contratos + TODAS las relaciones que usa el front
         .preload('contratos', (contractQuery) => {
-          // ✅ Asegura que precargas los contratos
           contractQuery
-            .preload('eventos') // ✅ Y aquí precargas los eventos dentro de cada contrato
-            .preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+            .orderBy('fecha_inicio', 'desc') // <- importante para "primer contrato"
+            .preload('cargo')
+            .preload('sede')
+            .preload('eps')
+            .preload('arl')
+            .preload('afp')
+            .preload('afc')
+            .preload('ccf')
+            .preload('eventos')
+            .preload('pasos')
             .preload('historialEstados', (historialQuery) => {
-              // ✅ Precarga el historial de estados
-              historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+              historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
             })
         })
 
@@ -48,9 +53,8 @@ export default class UsuariosController {
       }
 
       const users = await query.orderBy('id', 'asc')
-
       return response.ok(users)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al obtener usuarios:', error)
       return response.internalServerError({
         message: 'Error al obtener usuarios',
@@ -59,13 +63,12 @@ export default class UsuariosController {
     }
   }
 
-  /**
-   * Obtener un usuario por su ID.
-   */
+  /** Usuario por ID (con contratos y relaciones completas) */
   public async show({ params, response }: HttpContext) {
     try {
       const usuario = await Usuario.query()
         .where('id', params.id)
+        // Fallbacks a nivel usuario
         .preload('rol')
         .preload('razonSocial')
         .preload('sede')
@@ -75,20 +78,27 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
+        // Contratos + TODAS las relaciones
         .preload('contratos', (contractQuery) => {
-          // ✅ Precarga los contratos
           contractQuery
-            .preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
-            .preload('pasos') // También precarga los pasos si los necesitas
+            .orderBy('fecha_inicio', 'desc')
+            .preload('cargo')
+            .preload('sede')
+            .preload('eps')
+            .preload('arl')
+            .preload('afp')
+            .preload('afc')
+            .preload('ccf')
+            .preload('eventos')
+            .preload('pasos')
             .preload('historialEstados', (historialQuery) => {
-              // ✅ Precarga el historial de estados
-              historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+              historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
             })
         })
         .firstOrFail()
 
       return response.ok(usuario)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al obtener usuario por ID:', error)
       if (error.code === 'E_ROW_NOT_FOUND') {
         return response.notFound({ message: 'Usuario no encontrado' })
@@ -100,9 +110,7 @@ export default class UsuariosController {
     }
   }
 
-  /**
-   * Crear un nuevo usuario.
-   */
+  /** Crear usuario (sede/cargo/entidades pueden venir o no) */
   public async store({ request, response }: HttpContext) {
     const payload = request.only([
       'nombres',
@@ -128,11 +136,16 @@ export default class UsuariosController {
     ])
 
     try {
-      if (!payload.sedeId) {
-        return response.badRequest({ message: 'SedeId es requerida.' })
-      }
-
-      const user = await Usuario.create(payload)
+      const user = await Usuario.create({
+        ...payload,
+        sedeId: payload.sedeId ?? null,
+        cargoId: payload.cargoId ?? null,
+        epsId: payload.epsId ?? null,
+        arlId: payload.arlId ?? null,
+        afpId: payload.afpId ?? null,
+        afcId: payload.afcId ?? null,
+        ccfId: payload.ccfId ?? null,
+      })
 
       await user.load('rol')
       await user.load('razonSocial')
@@ -145,7 +158,7 @@ export default class UsuariosController {
       await user.load('ccf')
 
       return response.created(user)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al crear usuario:', error)
       if (error.code === 'ER_DUP_ENTRY') {
         return response.conflict({ message: 'El correo electrónico ya está registrado.' })
@@ -157,9 +170,7 @@ export default class UsuariosController {
     }
   }
 
-  /**
-   * Actualizar un usuario existente.
-   */
+  /** Actualizar usuario */
   public async update({ params, request, response }: HttpContext) {
     try {
       const user = await Usuario.findOrFail(params.id)
@@ -187,10 +198,18 @@ export default class UsuariosController {
         'ccfId',
       ])
 
-      user.merge(payload)
+      user.merge({
+        ...payload,
+        sedeId: payload.sedeId ?? null,
+        cargoId: payload.cargoId ?? null,
+        epsId: payload.epsId ?? null,
+        arlId: payload.arlId ?? null,
+        afpId: payload.afpId ?? null,
+        afcId: payload.afcId ?? null,
+        ccfId: payload.ccfId ?? null,
+      })
       await user.save()
 
-      // ✅ Asegúrate de precargar todas las relaciones relevantes después de guardar
       await user.load((loader) => {
         loader
           .preload('rol')
@@ -203,19 +222,25 @@ export default class UsuariosController {
           .preload('afc')
           .preload('ccf')
           .preload('contratos', (contractQuery) => {
-            // ✅ Precarga los contratos
             contractQuery
-              .preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
-              .preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+              .orderBy('fecha_inicio', 'desc')
+              .preload('cargo')
+              .preload('sede')
+              .preload('eps')
+              .preload('arl')
+              .preload('afp')
+              .preload('afc')
+              .preload('ccf')
+              .preload('eventos')
+              .preload('pasos')
               .preload('historialEstados', (historialQuery) => {
-                // ✅ Precarga el historial de estados
-                historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+                historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
               })
           })
       })
 
       return response.ok(user)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al actualizar usuario:', error)
       if (error.code === 'E_ROW_NOT_FOUND') {
         return response.notFound({ message: 'Usuario a actualizar no encontrado.' })
@@ -227,9 +252,7 @@ export default class UsuariosController {
     }
   }
 
-  /**
-   * Eliminar un usuario.
-   */
+  /** Eliminar usuario */
   public async destroy({ params, response }: HttpContext) {
     try {
       const user = await Usuario.findOrFail(params.id)
@@ -237,10 +260,9 @@ export default class UsuariosController {
       if (user.fotoPerfil) {
         const oldPhotoRelativePath = user.fotoPerfil.replace(/^\//, '')
         const oldPhotoFullPath = path.join(app.publicPath(), oldPhotoRelativePath)
-
         try {
           await fs.unlink(oldPhotoFullPath)
-        } catch (unlinkError) {
+        } catch (unlinkError: any) {
           if (unlinkError.code !== 'ENOENT') {
             console.error('Error al eliminar archivo de perfil:', unlinkError)
           }
@@ -249,7 +271,7 @@ export default class UsuariosController {
 
       await user.delete()
       return response.ok({ message: 'Usuario eliminado correctamente' })
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al eliminar usuario:', error)
       if (error.code === 'E_ROW_NOT_FOUND') {
         return response.notFound({ message: 'Usuario a eliminar no encontrado.' })
@@ -261,14 +283,15 @@ export default class UsuariosController {
     }
   }
 
-  /**
-   * Listas auxiliares
-   */
+  /* ============
+     SELECTORES
+     ============ */
+
   public async getRoles({ response }: HttpContext) {
     try {
       const roles = await Rol.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(roles)
-    } catch (error) {
+    } catch {
       return response.internalServerError({ message: 'Error al obtener roles' })
     }
   }
@@ -277,7 +300,7 @@ export default class UsuariosController {
     try {
       const razones = await RazonSocial.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(razones)
-    } catch (error) {
+    } catch {
       return response.internalServerError({ message: 'Error al obtener razones sociales' })
     }
   }
@@ -286,7 +309,7 @@ export default class UsuariosController {
     try {
       const sedes = await Sede.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(sedes)
-    } catch (error) {
+    } catch {
       return response.internalServerError({ message: 'Error al obtener sedes' })
     }
   }
@@ -295,7 +318,7 @@ export default class UsuariosController {
     try {
       const cargos = await Cargo.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(cargos)
-    } catch (error) {
+    } catch {
       return response.internalServerError({ message: 'Error al obtener cargos' })
     }
   }
@@ -304,26 +327,18 @@ export default class UsuariosController {
     try {
       const entidades = await EntidadSalud.query().select('id', 'nombre').orderBy('nombre', 'asc')
       return response.ok(entidades)
-    } catch (error) {
+    } catch {
       return response.internalServerError({ message: 'Error al obtener entidades de salud' })
     }
   }
 
-  /**
-   * Subir foto de perfil.
-   */
+  /** Subir foto de perfil */
   public async uploadProfilePicture({ request, response, params }: HttpContext) {
     const userId = params.id
-
-    if (!userId) {
-      return response.badRequest({ message: 'Se requiere el ID del usuario.' })
-    }
+    if (!userId) return response.badRequest({ message: 'Se requiere el ID del usuario.' })
 
     const user = await Usuario.findOrFail(userId)
-    const foto = request.file('foto', {
-      size: '2mb',
-      extnames: ['jpg', 'png', 'jpeg'],
-    })
+    const foto = request.file('foto', { size: '2mb', extnames: ['jpg', 'png', 'jpeg'] })
 
     if (!foto || !foto.isValid) {
       const error = foto?.errors[0]
@@ -331,8 +346,6 @@ export default class UsuariosController {
         message: error?.message || 'No se ha adjuntado ninguna foto o el archivo es inválido.',
       })
     }
-
-    // ✅ CORRECCIÓN: Asegurarse de que tmpPath no sea undefined
     if (!foto.tmpPath) {
       return response.internalServerError({
         message: 'No se pudo obtener la ruta temporal del archivo de imagen.',
@@ -343,38 +356,27 @@ export default class UsuariosController {
     const fileName = `${user.id}_${cuid()}.${foto.extname}`
 
     try {
-      // ✅ SOLUCIÓN FINAL: Usamos fs/promises para manejar las rutas absolutas
-      // Elimina la foto de perfil anterior si existe
+      // Elimina la anterior si existe
       if (user.fotoPerfil) {
         const oldPhotoRelativePath = user.fotoPerfil.replace(/^\//, '')
         const oldPhotoFullPath = path.join(app.publicPath(), oldPhotoRelativePath)
-
         try {
-          // Intentamos borrar el archivo. Si no existe (ENOENT), no hacemos nada.
           await fs.unlink(oldPhotoFullPath)
-        } catch (unlinkError) {
-          if (unlinkError.code !== 'ENOENT') {
+        } catch (unlinkError: any) {
+          if (unlinkError.code !== 'ENOENT')
             console.error('Error al eliminar archivo de perfil anterior:', unlinkError)
-          }
         }
       }
 
-      // Crea la carpeta de destino si no existe
       const destinationDir = path.join(app.publicPath(), uploadDir)
       await fs.mkdir(destinationDir, { recursive: true })
-
-      // Mueve el archivo del directorio temporal al destino final
       const newPhotoFullPath = path.join(destinationDir, fileName)
-      await fs.copyFile(foto.tmpPath, newPhotoFullPath) // `foto.tmpPath` ahora está garantizado como string
+      await fs.copyFile(foto.tmpPath, newPhotoFullPath)
 
-      // Construye la URL pública para el frontend
-      const publicUrl = `/${uploadDir}/${fileName}`
-
-      // Actualiza la propiedad `fotoPerfil` del usuario con la nueva URL
-      user.fotoPerfil = publicUrl
+      user.fotoPerfil = `/${uploadDir}/${fileName}`
       await user.save()
 
-      // Precarga todas las relaciones antes de devolver el usuario
+      // Recargar con todas las relaciones
       await user.load((loader) => {
         loader
           .preload('rol')
@@ -387,20 +389,25 @@ export default class UsuariosController {
           .preload('afc')
           .preload('ccf')
           .preload('contratos', (contractQuery) => {
-            // ✅ Precarga los contratos
             contractQuery
-              .preload('eventos') // ✅ Y precarga los eventos dentro de cada contrato
-              .preload('pasos') // Si también necesitas los pasos, precárgalos aquí
+              .orderBy('fecha_inicio', 'desc')
+              .preload('cargo')
+              .preload('sede')
+              .preload('eps')
+              .preload('arl')
+              .preload('afp')
+              .preload('afc')
+              .preload('ccf')
+              .preload('eventos')
+              .preload('pasos')
               .preload('historialEstados', (historialQuery) => {
-                // ✅ Precarga el historial de estados
-                historialQuery.preload('usuario') // ✅ Precarga el usuario que hizo el cambio en el historial
+                historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
               })
           })
       })
 
-      // Devuelve el objeto de usuario completo para que el frontend lo use
       return response.ok(user)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al subir la foto de perfil:', error)
       return response.internalServerError({
         message: 'Error al subir la foto de perfil',
