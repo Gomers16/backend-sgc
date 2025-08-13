@@ -1,3 +1,4 @@
+// start/routes.ts
 import router from '@adonisjs/core/services/router'
 
 // Ruta raíz
@@ -240,6 +241,26 @@ router
         })
       })
       .prefix('/contratos/:contratoId/eventos')
+
+    // === CONTRATO CAMBIOS ===
+    router
+      .group(() => {
+        router.get('/', async (ctx) => {
+          const { default: ContratoCambiosController } = await import(
+            '#controllers/contrato_cambios_controller'
+          )
+          return new ContratoCambiosController().index(ctx)
+        })
+
+        // (opcional) crear un registro manual de cambio
+        router.post('/', async (ctx) => {
+          const { default: ContratoCambiosController } = await import(
+            '#controllers/contrato_cambios_controller'
+          )
+          return new ContratoCambiosController().store(ctx)
+        })
+      })
+      .prefix('/contratos/:contratoId/cambios')
 
     // === CONTRATO SALARIOS (coincide con tu frontend) ===
     router.post('/contratos/:contratoId/salarios', async (ctx) => {

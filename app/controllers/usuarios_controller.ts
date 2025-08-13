@@ -46,6 +46,9 @@ export default class UsuariosController {
             .preload('historialEstados', (historialQuery) => {
               historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
             })
+            .preload('cambios', (c) => {
+              c.preload('usuario').orderBy('created_at', 'desc') // <<--- NUEVO
+            })
         })
 
       if (razonSocialId) {
@@ -93,6 +96,9 @@ export default class UsuariosController {
             .preload('pasos')
             .preload('historialEstados', (historialQuery) => {
               historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
+            })
+            .preload('cambios', (c) => {
+              c.preload('usuario').orderBy('created_at', 'desc') // <<--- NUEVO
             })
         })
         .firstOrFail()
@@ -236,6 +242,9 @@ export default class UsuariosController {
               .preload('historialEstados', (historialQuery) => {
                 historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
               })
+              .preload('cambios', (c) => {
+                c.preload('usuario').orderBy('created_at', 'desc') // <<--- NUEVO
+              })
           })
       })
 
@@ -283,9 +292,7 @@ export default class UsuariosController {
     }
   }
 
-  /* ============
-     SELECTORES
-     ============ */
+  /* ============ SELECTORES ============ */
 
   public async getRoles({ response }: HttpContext) {
     try {
@@ -402,6 +409,9 @@ export default class UsuariosController {
               .preload('pasos')
               .preload('historialEstados', (historialQuery) => {
                 historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
+              })
+              .preload('cambios', (c) => {
+                c.preload('usuario').orderBy('created_at', 'desc') // <<--- NUEVO
               })
           })
       })

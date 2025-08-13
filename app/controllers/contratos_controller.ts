@@ -6,6 +6,12 @@ import ContratoPaso from '#models/contrato_paso'
 import ContratoHistorialEstado from '#models/contrato_historial_estado'
 import ContratoSalario from '#models/contrato_salario'
 import Usuario from '#models/usuario'
+import ContratoCambio from '#models/contrato_cambio'
+import EntidadSalud from '#models/entidad_salud'
+import Sede from '#models/sede'
+import Cargo from '#models/cargo'
+import RazonSocial from '#models/razon_social'
+
 import app from '@adonisjs/core/services/app'
 import { DateTime } from 'luxon'
 import { cuid } from '@adonisjs/core/helpers'
@@ -16,9 +22,100 @@ import db from '@adonisjs/lucid/services/db'
 type Estado = 'activo' | 'inactivo'
 
 export default class ContratosController {
-  /**
-   * Relacionado común para contratos.
-   */
+  /* ============================
+     Helpers internos
+  ============================ */
+
+  /** Convierte a 'YYYY-MM-DD' o null sin romper si no es DateTime */
+  private toIsoDate(value: any): string | null {
+    if (!value) return null
+    if (typeof value?.toISODate === 'function') return value.toISODate()
+    if (typeof value === 'string') {
+      const dt = DateTime.fromISO(value)
+      return dt.isValid ? dt.toISODate() : null
+    }
+    if (value instanceof Date) return DateTime.fromJSDate(value).toISODate()
+    return null
+  }
+
+  /** Convierte a DateTime o null */
+  private toDateTime(value: any): DateTime | null {
+    if (!value) return null
+    if (typeof value?.toISO === 'function') return value as DateTime
+    if (typeof value === 'string') {
+      const dt = DateTime.fromISO(value)
+      return dt.isValid ? dt : null
+    }
+    if (value instanceof Date) return DateTime.fromJSDate(value)
+    return null
+  }
+
+  /** Serializa para columnas JSON (old_value/new_value) */
+  private json(value: any): string {
+    return JSON.stringify(value ?? null)
+  }
+
+  /** Obtiene el actor (usuario que hace la acción) con fallbacks */
+  private getActorId(ctx: HttpContext): number | null {
+    const { auth, request } = ctx
+    const fromAuth = auth?.user?.id
+    const fromHeader = Number(request.header('x-actor-id'))
+    const fromBody = Number(request.input('actorId') ?? request.input('usuarioId'))
+    return (
+      fromAuth ??
+      (Number.isFinite(fromHeader) ? fromHeader : null) ??
+      (Number.isFinite(fromBody) ? fromBody : null) ??
+      null
+    )
+  }
+
+  /** Normaliza valores por campo (evita falsos cambios tipo 0 vs false) */
+  private normalizeForField(campo: string, v: any): any {
+    if (v === undefined) return undefined
+    if (v === null) return null
+    if (campo === 'tieneRecomendacionesMedicas') {
+      if (typeof v === 'boolean') return v
+      const s = String(v).trim().toLowerCase()
+      return s === '1' || s === 'true' || s === 'si' || s === 'sí'
+    }
+    return v
+  }
+
+  /** Para campos *_Id devuelve { id, nombre } — o el valor tal cual si no aplica */
+  private async wrapValueWithName(campo: string, val: any): Promise<any> {
+    if (val === null || val === undefined || val === '') return null
+    if (typeof val === 'object') return val
+
+    const num = Number(val)
+    if (!Number.isFinite(num)) return val
+
+    switch (campo) {
+      case 'epsId':
+      case 'arlId':
+      case 'afpId':
+      case 'afcId':
+      case 'ccfId': {
+        const ent = await EntidadSalud.find(num)
+        return { id: num, nombre: ent?.nombre ?? `#${num}` }
+      }
+      case 'sedeId': {
+        const s = await Sede.find(num)
+        return { id: num, nombre: s?.nombre ?? `#${num}` }
+      }
+      case 'cargoId': {
+        const c = await Cargo.find(num)
+        return { id: num, nombre: c?.nombre ?? `#${num}` }
+      }
+      case 'razonSocialId': {
+        const r = await RazonSocial.find(num)
+        return { id: num, nombre: r?.nombre ?? `#${num}` }
+      }
+      default:
+        return val
+    }
+  }
+
+  /** Relaciones comunes */
   private preloadRelations(query: any) {
     query
       .preload('usuario')
@@ -32,22 +129,20 @@ export default class ContratosController {
       .preload('pasos')
       .preload('eventos')
       .preload('historialEstados', (historialQuery: any) => {
-        historialQuery.preload('usuario')
+        historialQuery.preload('usuario').orderBy('fecha_cambio', 'desc')
       })
       .preload('salarios', (salarioQuery: any) => {
-        // la columna en DB es fecha_efectiva
         salarioQuery.orderBy('fecha_efectiva', 'desc').limit(1)
+      })
+      .preload('cambios', (q: any) => {
+        q.preload('usuario').orderBy('created_at', 'desc')
       })
   }
 
-  /** ============================
-   *  SINCRONIZACIÓN USUARIO <—> CONTRATO
-   *  ============================ */
+  /* ============================
+     SINCRONIZACIÓN USUARIO
+  ============================ */
 
-  /** Contrato prioritario:
-   *  1) Activo más reciente
-   *  2) Si no hay activos, el más reciente en general
-   */
   private async getContratoPrioritario(usuarioId: number): Promise<Contrato | null> {
     const activo = await Contrato
       .query()
@@ -65,28 +160,18 @@ export default class ContratosController {
     return masReciente ?? null
   }
 
-  /** Copia “lo que ves en contrato” al usuario */
   private copiarCamposContratoEnUsuario(src: Contrato, user: Usuario) {
     user.razonSocialId = src.razonSocialId
     user.sedeId = src.sedeId
     user.cargoId = src.cargoId
-
-    if (src.centroCosto !== undefined && src.centroCosto !== null) {
-      user.centroCosto = src.centroCosto
-    }
-
-    // Entidades de salud: solo sobreescribe si hay valor
-    if (src.epsId !== undefined && src.epsId !== null) user.epsId = src.epsId
-    if (src.arlId !== undefined && src.arlId !== null) user.arlId = src.arlId
-    if (src.afpId !== undefined && src.afpId !== null) user.afpId = src.afpId
-    if (src.afcId !== undefined && src.afcId !== null) user.afcId = src.afcId
-    if (src.ccfId !== undefined && src.ccfId !== null) user.ccfId = src.ccfId
+    if (src.centroCosto !== undefined && src.centroCosto !== null) user.centroCosto = src.centroCosto
+    if (src.epsId != null) user.epsId = src.epsId
+    if (src.arlId != null) user.arlId = src.arlId
+    if (src.afpId != null) user.afpId = src.afpId
+    if (src.afcId != null) user.afcId = src.afcId
+    if (src.ccfId != null) user.ccfId = src.ccfId
   }
 
-  /** Sincroniza usuario tras guardar un contrato:
-   *  - Si el contrato quedó ACTIVO ⇒ copiar este contrato.
-   *  - Si quedó INACTIVO ⇒ copiar el contrato prioritario del usuario.
-   */
   private async syncUsuarioTrasGuardarContrato(contrato: Contrato) {
     if (!contrato.usuarioId) return
     const user = await Usuario.find(contrato.usuarioId)
@@ -105,8 +190,12 @@ export default class ContratosController {
     }
   }
 
-  /** Lista todos los contratos */
-  public async index({ response }: HttpContext) {
+  /* ============================
+     CRUD
+  ============================ */
+
+  public async index(ctx: HttpContext) {
+    const { response } = ctx
     try {
       const query = Contrato.query()
       this.preloadRelations(query)
@@ -114,15 +203,12 @@ export default class ContratosController {
       return response.ok(contratos)
     } catch (error: any) {
       console.error('Error al obtener contratos:', error)
-      return response.internalServerError({
-        message: 'Error al obtener contratos',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener contratos', error: error.message })
     }
   }
 
-  /** Muestra un contrato por ID */
-  public async show({ params, response }: HttpContext) {
+  public async show(ctx: HttpContext) {
+    const { params, response } = ctx
     try {
       const query = Contrato.query().where('id', params.id)
       this.preloadRelations(query)
@@ -130,18 +216,13 @@ export default class ContratosController {
       return response.ok(contrato)
     } catch (error: any) {
       console.error('Error al obtener contrato por ID:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') {
-        return response.notFound({ message: 'Contrato no encontrado' })
-      }
-      return response.internalServerError({
-        message: 'Error al obtener contrato',
-        error: error.message,
-      })
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      return response.internalServerError({ message: 'Error al obtener contrato', error: error.message })
     }
   }
 
-  /** Contratos de un usuario */
-  public async getContratosUsuario({ params, response }: HttpContext) {
+  public async getContratosUsuario(ctx: HttpContext) {
+    const { params, response } = ctx
     try {
       const usuarioId = params.usuarioId
       const query = Contrato.query().where('usuarioId', usuarioId)
@@ -150,17 +231,15 @@ export default class ContratosController {
       return response.ok(contratos)
     } catch (error: any) {
       console.error('Error al obtener contratos del usuario:', error)
-      return response.internalServerError({
-        message: 'Error al obtener contratos del usuario',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al obtener contratos del usuario', error: error.message })
     }
   }
 
-  /** Crea contrato (solo datos) */
-  public async store({ request, response }: HttpContext) {
+  public async store(ctx: HttpContext) {
+    const { request, response } = ctx
     const trx = await db.transaction()
     try {
+      const actorId = this.getActorId(ctx)
       const allRequestData = request.all()
 
       if (!allRequestData.razonSocialId) {
@@ -177,12 +256,8 @@ export default class ContratosController {
         ...contratoData
       } = allRequestData
 
-      const fechaInicioLuxon = contratoData.fechaInicio
-        ? DateTime.fromISO(contratoData.fechaInicio)
-        : undefined
-      const fechaTerminacionLuxon = fechaTerminacion
-        ? DateTime.fromISO(fechaTerminacion)
-        : undefined
+      const fechaInicioLuxon = contratoData.fechaInicio ? DateTime.fromISO(contratoData.fechaInicio) : undefined
+      const fechaTerminacionLuxon = fechaTerminacion ? DateTime.fromISO(fechaTerminacion) : undefined
 
       const contrato = await Contrato.create(
         {
@@ -191,15 +266,11 @@ export default class ContratosController {
           fechaInicio: fechaInicioLuxon,
           fechaTerminacion: fechaTerminacionLuxon || null,
           estado: 'activo',
-          terminoContrato:
-            contratoData.tipoContrato === 'prestacion'
-              ? null
-              : contratoData.terminoContrato || 'indefinido',
+          terminoContrato: contratoData.tipoContrato === 'prestacion' ? null : contratoData.terminoContrato || 'indefinido',
         },
         { client: trx }
       )
 
-      // Crear salario inicial si corresponde (no prestación)
       if (contratoData.tipoContrato !== 'prestacion' && salarioBasico !== undefined) {
         await ContratoSalario.create(
           {
@@ -214,7 +285,6 @@ export default class ContratosController {
         )
       }
 
-      // Pasos (si llegan)
       const pasosRecibidos = JSON.parse(pasos || '[]')
       const pasosParaGuardar: any[] = []
       if (Array.isArray(pasosRecibidos)) {
@@ -235,11 +305,10 @@ export default class ContratosController {
         await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
       }
 
-      // Historial estado
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
+          usuarioId: actorId,
           oldEstado: 'inactivo',
           newEstado: 'activo',
           fechaCambio: DateTime.now(),
@@ -249,64 +318,54 @@ export default class ContratosController {
         { client: trx }
       )
 
+      await ContratoCambio.create(
+        {
+          contratoId: contrato.id,
+          usuarioId: actorId,
+          campo: 'creacion',
+          oldValue: this.json(null),
+          newValue: this.json({ estado: 'activo' }),
+        },
+        { client: trx }
+      )
+
       await trx.commit()
-
-      // 🔄 Sincroniza usuario con este contrato activo
       await this.syncUsuarioTrasGuardarContrato(contrato)
-
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.created(contrato)
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al crear contrato:', error)
-      return response.internalServerError({
-        message: 'Error al crear contrato',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al crear contrato', error: error.message })
     }
   }
 
-  /**
-   * Anexar archivo físico a contrato existente (MODO A) o
-   * crear + anexar (legacy, MODO B).
-   */
-  public async anexarFisico({ request, response }: HttpContext) {
+  public async anexarFisico(ctx: HttpContext) {
+    const { request, response } = ctx
     const trx = await db.transaction()
     try {
+      const actorId = this.getActorId(ctx)
       const contratoId = request.input('contratoId')
 
-      // ========== MODO A: Adjuntar a EXISTENTE ==========
       if (contratoId) {
         const contrato = await Contrato.findOrFail(contratoId)
 
-        const archivoContrato = request.file('archivo', {
-          size: '5mb',
-          extnames: ['pdf'],
-        })
+        const archivoContrato = request.file('archivo', { size: '5mb', extnames: ['pdf'] })
         if (!archivoContrato || !archivoContrato.isValid) {
-          throw new Error(
-            archivoContrato?.errors[0]?.message || 'Archivo de contrato inválido o no adjunto.'
-          )
+          throw new Error(archivoContrato?.errors[0]?.message || 'Archivo de contrato inválido o no adjunto.')
         }
 
-        // (opcional) actualizar razón social
         const razonSocialId = request.input('razonSocialId')
-        if (razonSocialId) {
-          contrato.razonSocialId = Number(razonSocialId)
-        }
+        if (razonSocialId) contrato.razonSocialId = Number(razonSocialId)
 
-        // elimina archivo anterior si existe
         if (contrato.rutaArchivoContratoFisico) {
           try {
-            await fs.unlink(
-              path.join(app.publicPath(), contrato.rutaArchivoContratoFisico.replace(/^\//, ''))
-            )
+            await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoContratoFisico.replace(/^\//, '')))
           } catch (e: any) {
             if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo anterior:', e)
           }
         }
 
-        // subir archivo
         const uploadDir = 'uploads/contratos'
         const fileName = `${cuid()}_${archivoContrato.clientName}`
         const destinationDir = path.join(app.publicPath(), uploadDir)
@@ -316,16 +375,10 @@ export default class ContratosController {
         contrato.nombreArchivoContratoFisico = fileName
         contrato.rutaArchivoContratoFisico = `/${uploadDir}/${fileName}`
 
-        // (opcional) recomendación médica en el mismo request
         if (request.input('tieneRecomendacionesMedicas') === 'true') {
-          const archivoRec = request.file('archivoRecomendacionMedica', {
-            size: '5mb',
-            extnames: ['pdf', 'doc', 'docx'],
-          })
+          const archivoRec = request.file('archivoRecomendacionMedica', { size: '5mb', extnames: ['pdf', 'doc', 'docx'] })
           if (!archivoRec || !archivoRec.isValid) {
-            throw new Error(
-              archivoRec?.errors[0]?.message || 'Archivo de recomendación médica inválido o no adjunto.'
-            )
+            throw new Error(archivoRec?.errors[0]?.message || 'Archivo de recomendación médica inválido o no adjunto.')
           }
 
           const recDir = 'uploads/recomendaciones_medicas'
@@ -340,17 +393,13 @@ export default class ContratosController {
 
         await contrato.save({ client: trx })
         await trx.commit()
-
-        // 🔄 Sincroniza usuario (por si actualizaste razonSocial u otros campos)
         await this.syncUsuarioTrasGuardarContrato(contrato)
-
         await contrato.load((loader) => this.preloadRelations(loader))
         return response.ok({ message: 'Archivo anexado correctamente', contrato })
       }
 
-      // ====== MODO B (legacy): Crear + anexar en un solo request ======
+      // ====== MODO B (legacy): Crear + anexar ======
       const allRequestData = request.all()
-
       if (!allRequestData.razonSocialId) {
         return response.badRequest({ message: "El campo 'razonSocialId' es obligatorio." })
       }
@@ -366,26 +415,14 @@ export default class ContratosController {
         ...contratoData
       } = allRequestData
 
-      if (!contratoData.sedeId) {
-        return response.badRequest({ message: "El campo 'sedeId' es obligatorio." })
-      }
+      if (!contratoData.sedeId) return response.badRequest({ message: "El campo 'sedeId' es obligatorio." })
 
-      const fechaInicioLuxon = contratoData.fechaInicio
-        ? DateTime.fromISO(contratoData.fechaInicio)
-        : undefined
-      const fechaTerminacionLuxon = fechaTerminacion
-        ? DateTime.fromISO(fechaTerminacion)
-        : undefined
+      const fechaInicioLuxon = contratoData.fechaInicio ? DateTime.fromISO(contratoData.fechaInicio) : undefined
+      const fechaTerminacionLuxon = fechaTerminacion ? DateTime.fromISO(fechaTerminacion) : undefined
 
-      // en legacy se usaba 'archivoContrato'
-      const archivoContratoLegacy = request.file('archivoContrato', {
-        size: '5mb',
-        extnames: ['pdf'],
-      })
+      const archivoContratoLegacy = request.file('archivoContrato', { size: '5mb', extnames: ['pdf'] })
       if (!archivoContratoLegacy || !archivoContratoLegacy.isValid) {
-        throw new Error(
-          archivoContratoLegacy?.errors[0]?.message || 'Archivo de contrato inválido o no adjunto.'
-        )
+        throw new Error(archivoContratoLegacy?.errors[0]?.message || 'Archivo de contrato inválido o no adjunto.')
       }
 
       const uploadDir = 'uploads/contratos'
@@ -395,17 +432,11 @@ export default class ContratosController {
       await archivoContratoLegacy.move(destinationDir, { name: fileName })
       const publicUrl = `/${uploadDir}/${fileName}`
 
-      // recomendación médica (opcional)
       let rutaArchivoRecomendacionMedica: string | null = null
       if (tieneRecomendacionesMedicas === 'true') {
-        const archivoRecomendacion = request.file('archivoRecomendacionMedica', {
-          size: '5mb',
-          extnames: ['pdf', 'doc', 'docx'],
-        })
+        const archivoRecomendacion = request.file('archivoRecomendacionMedica', { size: '5mb', extnames: ['pdf', 'doc', 'docx'] })
         if (!archivoRecomendacion || !archivoRecomendacion.isValid) {
-          throw new Error(
-            archivoRecomendacion?.errors[0]?.message || 'Archivo de recomendación médica inválido o no adjunto.'
-          )
+          throw new Error(archivoRecomendacion?.errors[0]?.message || 'Archivo de recomendación médica inválido o no adjunto.')
         }
         const recomendacionUploadDir = 'uploads/recomendaciones_medicas'
         const recomendacionFileName = `${cuid()}_${archivoRecomendacion.clientName}`
@@ -424,17 +455,13 @@ export default class ContratosController {
           estado: 'activo',
           nombreArchivoContratoFisico: fileName,
           rutaArchivoContratoFisico: publicUrl,
-          terminoContrato:
-            contratoData.tipoContrato === 'prestacion'
-              ? null
-              : contratoData.terminoContrato || 'indefinido',
+          terminoContrato: contratoData.tipoContrato === 'prestacion' ? null : contratoData.terminoContrato || 'indefinido',
           tieneRecomendacionesMedicas: tieneRecomendacionesMedicas === 'true',
           rutaArchivoRecomendacionMedica: rutaArchivoRecomendacionMedica,
         },
         { client: trx }
       )
 
-      // salario inicial (si no es prestación)
       if (contratoData.tipoContrato !== 'prestacion' && salarioBasico !== undefined) {
         await ContratoSalario.create(
           {
@@ -449,7 +476,6 @@ export default class ContratosController {
         )
       }
 
-      // pasos
       const pasosRecibidos = JSON.parse(pasos || '[]')
       const pasosParaGuardar: any[] = []
       if (Array.isArray(pasosRecibidos)) {
@@ -470,11 +496,10 @@ export default class ContratosController {
         await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
       }
 
-      // historial
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
+          usuarioId: actorId,
           oldEstado: 'inactivo',
           newEstado: 'activo',
           fechaCambio: DateTime.now(),
@@ -484,29 +509,33 @@ export default class ContratosController {
         { client: trx }
       )
 
+      await ContratoCambio.create(
+        {
+          contratoId: contrato.id,
+          usuarioId: actorId,
+          campo: 'creacion',
+          oldValue: this.json(null),
+          newValue: this.json({ estado: 'activo' }),
+        },
+        { client: trx }
+      )
+
       await trx.commit()
-
-      // 🔄 Sincroniza usuario con este contrato activo
       await this.syncUsuarioTrasGuardarContrato(contrato)
-
       await contrato.load((loader) => this.preloadRelations(loader))
-      return response.created({
-        message: 'Contrato creado y anexado correctamente.',
-        contrato,
-      })
+      return response.created({ message: 'Contrato creado y anexado correctamente.', contrato })
     } catch (error: any) {
       await trx.rollback()
       console.error('Error en anexarFisico (crear y/o anexar):', error)
-      return response.badRequest({
-        message: error.message || 'Error al crear y anexar contrato físico',
-      })
+      return response.badRequest({ message: error.message || 'Error al crear y anexar contrato físico' })
     }
   }
 
-  /** Actualiza contrato (datos, no archivos) */
-  public async update({ params, request, response }: HttpContext) {
+  public async update(ctx: HttpContext) {
+    const { params, request, response } = ctx
     const trx = await db.transaction()
     try {
+      const actorId = this.getActorId(ctx)
       const contrato = await Contrato.findOrFail(params.id)
       const oldEstado = contrato.estado
 
@@ -514,6 +543,32 @@ export default class ContratosController {
         .where('contratoId', contrato.id)
         .orderBy('fecha_efectiva', 'desc')
         .first()
+
+      const before = {
+        razonSocialId: contrato.razonSocialId,
+        sedeId: contrato.sedeId,
+        cargoId: contrato.cargoId,
+        funcionesCargo: contrato.funcionesCargo,
+        tipoContrato: contrato.tipoContrato,
+        terminoContrato: (contrato as any).terminoContrato ?? null,
+        fechaInicio: this.toIsoDate(contrato.fechaInicio),
+        fechaTerminacion: this.toIsoDate(contrato.fechaTerminacion),
+        periodoPrueba: (contrato as any).periodoPrueba ?? null,
+        horarioTrabajo: (contrato as any).horarioTrabajo ?? null,
+        centroCosto: contrato.centroCosto ?? null,
+        epsId: contrato.epsId ?? null,
+        arlId: contrato.arlId ?? null,
+        afpId: contrato.afpId ?? null,
+        afcId: contrato.afcId ?? null,
+        ccfId: contrato.ccfId ?? null,
+        estado: contrato.estado,
+        motivoFinalizacion: contrato.motivoFinalizacion ?? null,
+        tieneRecomendacionesMedicas: contrato.tieneRecomendacionesMedicas ?? null,
+        salarioBasico: currentSalario?.salarioBasico ?? null,
+        bonoSalarial: currentSalario?.bonoSalarial ?? null,
+        auxilioTransporte: currentSalario?.auxilioTransporte ?? null,
+        auxilioNoSalarial: currentSalario?.auxilioNoSalarial ?? null,
+      }
 
       const payload = request.only([
         'identificacion',
@@ -542,28 +597,28 @@ export default class ContratosController {
         'razonSocialId',
       ])
 
+      // Normalización y fechas
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
-        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd')
-          .startOf('day')
-          .toUTC()
+        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd').startOf('day').toUTC()
       }
       if (payload.fechaTerminacion !== undefined && typeof payload.fechaTerminacion === 'string') {
-        contrato.fechaTerminacion = DateTime.fromFormat(payload.fechaTerminacion, 'yyyy-MM-dd')
-          .startOf('day')
-          .toUTC()
+        contrato.fechaTerminacion = DateTime.fromFormat(payload.fechaTerminacion, 'yyyy-MM-dd').startOf('day').toUTC()
       }
 
-      // si desmarcan recomendaciones, borra archivo anterior si existía
+      // Normaliza boolean para evitar 0 vs false
+      if (payload.tieneRecomendacionesMedicas !== undefined) {
+        (payload as any).tieneRecomendacionesMedicas = this.normalizeForField(
+          'tieneRecomendacionesMedicas',
+          payload.tieneRecomendacionesMedicas
+        )
+      }
+
       if (payload.tieneRecomendacionesMedicas === false && contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(
-            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
-          )
+          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
           contrato.rutaArchivoRecomendacionMedica = null
         } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') {
-            console.error('Error al eliminar archivo de recomendación:', unlinkError)
-          }
+          if (unlinkError.code !== 'ENOENT') console.error('Error al eliminar archivo de recomendación:', unlinkError)
         }
       }
 
@@ -578,66 +633,149 @@ export default class ContratosController {
       contrato.merge(contratoPayload)
       await contrato.save({ client: trx })
 
-      // Si cambian valores de salario, crea nuevo registro
-      if (
-        contrato.tipoContrato !== 'prestacion' &&
-        (!currentSalario ||
-          currentSalario.salarioBasico !== salarioBasico ||
-          currentSalario.bonoSalarial !== bonoSalarial ||
-          currentSalario.auxilioTransporte !== auxilioTransporte ||
-          currentSalario.auxilioNoSalarial !== auxilioNoSalarial)
-      ) {
-        await ContratoSalario.create(
-          {
-            contratoId: contrato.id,
-            salarioBasico: salarioBasico || 0,
-            bonoSalarial: bonoSalarial || 0,
-            auxilioTransporte: auxilioTransporte || 0,
-            auxilioNoSalarial: auxilioNoSalarial || 0,
-            fechaEfectiva: DateTime.now(),
-          },
-          { client: trx }
-        )
-      }
+      // ======= Salario =======
+      const sbRaw  = salarioBasico
+      const bsRaw  = bonoSalarial
+      const atRaw  = auxilioTransporte
+      const ansRaw = auxilioNoSalarial
 
-      // Historial de estado si cambió
+      const salarioFueEnviado =
+        sbRaw !== undefined || bsRaw !== undefined || atRaw !== undefined || ansRaw !== undefined
+
+      let nuevoSalario: { salarioBasico: number; bonoSalarial: number; auxilioTransporte: number; auxilioNoSalarial: number } | null = null
+
+      if (contrato.tipoContrato !== 'prestacion' && salarioFueEnviado) {
+        const base = currentSalario || { salarioBasico: 0, bonoSalarial: 0, auxilioTransporte: 0, auxilioNoSalarial: 0 }
+        const toNumberOr = (v: any, fallback: number) => {
+          if (v === undefined || v === '' || v === null) return fallback
+          const n = Number(v)
+          return Number.isFinite(n) ? n : fallback
+        }
+
+        const nuevo = {
+          salarioBasico:     toNumberOr(sbRaw,  base.salarioBasico),
+          bonoSalarial:      toNumberOr(bsRaw,  base.bonoSalarial),
+          auxilioTransporte: toNumberOr(atRaw,  base.auxilioTransporte),
+          auxilioNoSalarial: toNumberOr(ansRaw, base.auxilioNoSalarial),
+        }
+
+        const hayCambio =
+          !currentSalario ||
+          currentSalario.salarioBasico     !== nuevo.salarioBasico ||
+          currentSalario.bonoSalarial      !== nuevo.bonoSalarial ||
+          currentSalario.auxilioTransporte !== nuevo.auxilioTransporte ||
+          currentSalario.auxilioNoSalarial !== nuevo.auxilioNoSalarial
+
+        if (hayCambio) {
+          nuevoSalario = nuevo
+          if (currentSalario) {
+            currentSalario.merge({ ...nuevo, fechaEfectiva: DateTime.now() })
+            await currentSalario.save({ client: trx })
+          } else {
+            await ContratoSalario.create({ contratoId: contrato.id, ...nuevo, fechaEfectiva: DateTime.now() }, { client: trx })
+          }
+        }
+      }
+      // ======= Fin salario =======
+
       if (oldEstado !== contrato.estado) {
+        const fechaInicioHist = this.toDateTime(contrato.fechaInicio)
         await ContratoHistorialEstado.create(
           {
             contratoId: contrato.id,
-            usuarioId: null,
-            oldEstado: oldEstado,
+            usuarioId: actorId,
+            oldEstado,
             newEstado: contrato.estado,
             fechaCambio: DateTime.now(),
-            fechaInicioContrato: contrato.fechaInicio,
+            fechaInicioContrato: fechaInicioHist ?? null,
             motivo: contrato.estado === 'inactivo' ? contrato.motivoFinalizacion : null,
           },
           { client: trx }
         )
       }
 
+      // Construcción de cambios
+      const after = {
+        razonSocialId: contrato.razonSocialId,
+        sedeId: contrato.sedeId,
+        cargoId: contrato.cargoId,
+        funcionesCargo: contrato.funcionesCargo,
+        tipoContrato: contrato.tipoContrato,
+        terminoContrato: (contrato as any).terminoContrato ?? null,
+        fechaInicio: this.toIsoDate(contrato.fechaInicio),
+        fechaTerminacion: this.toIsoDate(contrato.fechaTerminacion),
+        periodoPrueba: (contrato as any).periodoPrueba ?? null,
+        horarioTrabajo: (contrato as any).horarioTrabajo ?? null,
+        centroCosto: contrato.centroCosto ?? null,
+        epsId: contrato.epsId ?? null,
+        arlId: contrato.arlId ?? null,
+        afpId: contrato.afpId ?? null,
+        afcId: contrato.afcId ?? null,
+        ccfId: contrato.ccfId ?? null,
+        estado: contrato.estado,
+        motivoFinalizacion: contrato.motivoFinalizacion ?? null,
+        tieneRecomendacionesMedicas: contrato.tieneRecomendacionesMedicas ?? null,
+        salarioBasico: nuevoSalario ? nuevoSalario.salarioBasico : (currentSalario?.salarioBasico ?? null),
+        bonoSalarial: nuevoSalario ? nuevoSalario.bonoSalarial : (currentSalario?.bonoSalarial ?? null),
+        auxilioTransporte: nuevoSalario ? nuevoSalario.auxilioTransporte : (currentSalario?.auxilioTransporte ?? null),
+        auxilioNoSalarial: nuevoSalario ? nuevoSalario.auxilioNoSalarial : (currentSalario?.auxilioNoSalarial ?? null),
+      }
+
+      const camposTrackeables: (keyof typeof after)[] = [
+        'razonSocialId','sedeId','cargoId','funcionesCargo','tipoContrato','terminoContrato',
+        'fechaInicio','fechaTerminacion','periodoPrueba','horarioTrabajo','centroCosto',
+        'epsId','arlId','afpId','afcId','ccfId','estado','motivoFinalizacion',
+        'tieneRecomendacionesMedicas','salarioBasico','bonoSalarial','auxilioTransporte','auxilioNoSalarial',
+      ]
+
+      const cambios: Array<{ contratoId: number; usuarioId: number | null; campo: string; oldValue: any; newValue: any }> = []
+
+      const rawBody = request.body()
+
+      for (const campo of camposTrackeables) {
+        const vinoEnPayload =
+          campo === 'salarioBasico' || campo === 'bonoSalarial' || campo === 'auxilioTransporte' || campo === 'auxilioNoSalarial'
+            ? salarioFueEnviado
+            : Object.prototype.hasOwnProperty.call(rawBody, campo)
+
+        if (!vinoEnPayload) continue
+
+        const oldV = this.normalizeForField(String(campo), (before as any)[campo])
+        const newV = this.normalizeForField(String(campo), (after as any)[campo])
+
+        // compara normalizado para evitar 0 vs false, etc.
+        if (JSON.stringify(oldV) === JSON.stringify(newV)) continue
+
+        const oldWrapped = await this.wrapValueWithName(String(campo), oldV)
+        const newWrapped = await this.wrapValueWithName(String(campo), newV)
+
+        cambios.push({
+          contratoId: contrato.id,
+          usuarioId: actorId,
+          campo: String(campo),
+          oldValue: this.json(oldWrapped),
+          newValue: this.json(newWrapped),
+        })
+      }
+
+      if (cambios.length > 0) {
+        await ContratoCambio.createMany(cambios, { client: trx })
+      }
+
       await trx.commit()
-
-      // 🔄 Sincroniza usuario con el contrato (activo => este; inactivo => prioritario)
       await this.syncUsuarioTrasGuardarContrato(contrato)
-
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.ok(contrato)
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al actualizar contrato:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') {
-        return response.notFound({ message: 'Contrato no encontrado para actualizar' })
-      }
-      return response.internalServerError({
-        message: 'Error al actualizar contrato',
-        error: error.message,
-      })
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado para actualizar' })
+      return response.internalServerError({ message: 'Error al actualizar contrato', error: error.message })
     }
   }
 
-  /** Actualiza SOLO el archivo de recomendación médica del contrato */
-  public async updateRecomendacionMedica({ params, request, response }: HttpContext) {
+  public async updateRecomendacionMedica(ctx: HttpContext) {
+    const { params, request, response } = ctx
     const trx = await db.transaction()
     try {
       const contrato = await Contrato.findOrFail(params.id)
@@ -652,20 +790,14 @@ export default class ContratosController {
       })
 
       if (!archivoRecomendacion || !archivoRecomendacion.isValid) {
-        throw new Error(
-          archivoRecomendacion?.errors[0]?.message || 'Archivo de recomendación médica inválido.'
-        )
+        throw new Error(archivoRecomendacion?.errors[0]?.message || 'Archivo de recomendación médica inválido.')
       }
 
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(
-            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
-          )
+          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
         } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') {
-            console.error('Error al eliminar archivo de recomendación anterior en update:', unlinkError)
-          }
+          if (unlinkError.code !== 'ENOENT') console.error('Error al eliminar archivo de recomendación anterior en update:', unlinkError)
         }
       }
 
@@ -680,43 +812,30 @@ export default class ContratosController {
       await contrato.save({ client: trx })
       await trx.commit()
       await contrato.load((loader) => this.preloadRelations(loader))
-
-      // (No hace falta sincronizar usuario aquí; no cambian sede/cargo/entidades)
-
       return response.ok(contrato)
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al actualizar el archivo de recomendación médica:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') {
-        return response.notFound({ message: 'Contrato no encontrado' })
-      }
-      return response.internalServerError({
-        message: 'Error al actualizar el archivo de recomendación médica',
-        error: error.message,
-      })
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      return response.internalServerError({ message: 'Error al actualizar el archivo de recomendación médica', error: error.message })
     }
   }
 
-  /** Elimina contrato */
-  public async destroy({ params, response }: HttpContext) {
+  public async destroy(ctx: HttpContext) {
+    const { params, response } = ctx
     try {
       const contrato = await Contrato.findOrFail(params.id)
       await contrato.delete()
       return response.ok({ message: 'Contrato eliminado correctamente' })
     } catch (error: any) {
       console.error('Error al eliminar contrato:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') {
-        return response.notFound({ message: 'Contrato no encontrado para eliminar' })
-      }
-      return response.internalServerError({
-        message: 'Error al eliminar contrato',
-        error: error.message,
-      })
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado para eliminar' })
+      return response.internalServerError({ message: 'Error al eliminar contrato', error: error.message })
     }
   }
 
-  /** Sube archivo de recomendación para un PASO específico */
-  public async uploadRecomendacionMedica({ params, request, response }: HttpContext) {
+  public async uploadRecomendacionMedica(ctx: HttpContext) {
+    const { params, request, response } = ctx
     try {
       const paso = await ContratoPaso.query().where('id', params.pasoId).firstOrFail()
 
@@ -733,20 +852,17 @@ export default class ContratosController {
         try {
           await fs.unlink(path.join(app.publicPath(), paso.archivoUrl.replace(/^\//, '')))
         } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') {
-            console.error('Error al eliminar archivo de recomendación anterior:', unlinkError)
-          }
+          if (unlinkError.code !== 'ENOENT') console.error('Error al eliminar archivo de recomendación anterior:', unlinkError)
         }
       }
 
       const uploadDir = `uploads/pasos/${paso.contratoId}`
       const fileName = `${cuid()}.${archivo.extname}`
-      const publicPath = path.join(app.publicPath(), uploadDir)
-      await fs.mkdir(publicPath, { recursive: true })
+      const publicPathDir = path.join(app.publicPath(), uploadDir)
+      await fs.mkdir(publicPathDir, { recursive: true })
 
-      await archivo.move(publicPath, { name: fileName })
+      await archivo.move(publicPathDir, { name: fileName })
 
-      // si tienes esos campos en la tabla de pasos:
       ;(paso as any).nombreArchivo = archivo.clientName
       paso.archivoUrl = `/${uploadDir}/${fileName}`
 
@@ -754,28 +870,22 @@ export default class ContratosController {
 
       return response.ok(paso)
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') {
-        return response.notFound({ message: 'Paso de contrato no encontrado.' })
-      }
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Paso de contrato no encontrado.' })
       console.error('Error al subir recomendación médica:', error)
-      return response.internalServerError({
-        message: 'Error al subir recomendación médica',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al subir recomendación médica', error: error.message })
     }
   }
 
   /* =========================
      SALARIOS
-     ========================= */
+  ========================= */
 
-  /** Alias para evitar el 500 en la ruta existente */
   public async storeSalario(ctx: HttpContext) {
     return this.createSalario(ctx)
   }
 
-  /** Lista salarios de un contrato */
-  public async listSalarios({ params, response }: HttpContext) {
+  public async listSalarios(ctx: HttpContext) {
+    const { params, response } = ctx
     try {
       const salarios = await ContratoSalario.query()
         .where('contratoId', params.contratoId)
@@ -784,15 +894,12 @@ export default class ContratosController {
       return response.ok(salarios)
     } catch (error: any) {
       console.error('Error al listar salarios:', error)
-      return response.internalServerError({
-        message: 'Error al listar salarios',
-        error: error.message,
-      })
+      return response.internalServerError({ message: 'Error al listar salarios', error: error.message })
     }
   }
 
-  /** Crea registro de salario para un contrato */
-  public async createSalario({ params, request, response }: HttpContext) {
+  public async createSalario(ctx: HttpContext) {
+    const { params, request, response } = ctx
     try {
       const contrato = await Contrato.findOrFail(params.contratoId)
 
@@ -801,14 +908,8 @@ export default class ContratosController {
         bonoSalarial = 0,
         auxilioTransporte = 0,
         auxilioNoSalarial = 0,
-        fechaEfectiva, // ISO: 'YYYY-MM-DDTHH:mm:ss'
-      } = request.only([
-        'salarioBasico',
-        'bonoSalarial',
-        'auxilioTransporte',
-        'auxilioNoSalarial',
-        'fechaEfectiva',
-      ])
+        fechaEfectiva,
+      } = request.only(['salarioBasico','bonoSalarial','auxilioTransporte','auxilioNoSalarial','fechaEfectiva'])
 
       const fecha = fechaEfectiva ? DateTime.fromISO(fechaEfectiva) : DateTime.now()
 
@@ -824,9 +925,7 @@ export default class ContratosController {
       return response.created(registro)
     } catch (error: any) {
       console.error('Error al crear salario:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') {
-        return response.notFound({ message: 'Contrato no encontrado' })
-      }
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
       return response.badRequest({ message: error.message || 'Error al crear salario' })
     }
   }

@@ -6,33 +6,33 @@ import Contrato from './contrato.js'
 export default class ContratoSalario extends BaseModel {
   public static table = 'contratos_salarios'
 
-  @column({ isPrimary: true })
+  @column({ isPrimary: true, columnName: 'id' })
   declare id: number
 
-  @column()
+  @column({ columnName: 'contrato_id' })
   declare contratoId: number
 
-  @belongsTo(() => Contrato)
+  @belongsTo(() => Contrato, { foreignKey: 'contratoId' })
   declare contrato: BelongsTo<typeof Contrato>
 
-  @column()
+  @column({ columnName: 'salario_basico' })
   declare salarioBasico: number
 
-  @column()
+  @column({ columnName: 'bono_salarial' })
   declare bonoSalarial: number
 
-  @column()
+  @column({ columnName: 'auxilio_transporte' })
   declare auxilioTransporte: number
 
-  @column()
+  @column({ columnName: 'auxilio_no_salarial' })
   declare auxilioNoSalarial: number
 
-  @column.dateTime() // O @column.date() si solo necesitas la fecha sin hora
-  declare fechaEfectiva: DateTime // <-- ¡ESTA ES LA LÍNEA CLAVE QUE FALTABA O ESTABA MAL!
+  @column.dateTime({ columnName: 'fecha_efectiva' })
+  declare fechaEfectiva: DateTime
 
-  @column.dateTime({ autoCreate: true })
+  @column.dateTime({ columnName: 'created_at', autoCreate: true })
   declare createdAt: DateTime
 
-  @column.dateTime({ autoCreate: true, autoUpdate: true })
+  @column.dateTime({ columnName: 'updated_at', autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 }

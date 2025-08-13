@@ -11,6 +11,7 @@ import Sede from './sede.js'
 import Cargo from './cargo.js'
 import EntidadSalud from './entidad_salud.js'
 import RazonSocial from './razon_social.js'
+import ContratoCambio from './contrato_cambio.js' // 👈 NUEVO
 
 export default class Contrato extends BaseModel {
   public static table = 'contratos'
@@ -74,27 +75,27 @@ export default class Contrato extends BaseModel {
 
   @column()
   declare epsId?: number | null
-  @belongsTo(() => EntidadSalud, { foreignKey: 'epsId' }) // ✅ foreignKey explícita
+  @belongsTo(() => EntidadSalud, { foreignKey: 'epsId' })
   declare eps: BelongsTo<typeof EntidadSalud>
 
   @column()
   declare arlId?: number | null
-  @belongsTo(() => EntidadSalud, { foreignKey: 'arlId' }) // ✅ foreignKey explícita
+  @belongsTo(() => EntidadSalud, { foreignKey: 'arlId' })
   declare arl: BelongsTo<typeof EntidadSalud>
 
   @column()
   declare afpId?: number | null
-  @belongsTo(() => EntidadSalud, { foreignKey: 'afpId' }) // ✅ foreignKey explícita
+  @belongsTo(() => EntidadSalud, { foreignKey: 'afpId' })
   declare afp: BelongsTo<typeof EntidadSalud>
 
   @column()
   declare afcId?: number | null
-  @belongsTo(() => EntidadSalud, { foreignKey: 'afcId' }) // ✅ foreignKey explícita
+  @belongsTo(() => EntidadSalud, { foreignKey: 'afcId' })
   declare afc: BelongsTo<typeof EntidadSalud>
 
   @column()
   declare ccfId?: number | null
-  @belongsTo(() => EntidadSalud, { foreignKey: 'ccfId' }) // ✅ foreignKey explícita
+  @belongsTo(() => EntidadSalud, { foreignKey: 'ccfId' })
   declare ccf: BelongsTo<typeof EntidadSalud>
 
   @column()
@@ -130,4 +131,8 @@ export default class Contrato extends BaseModel {
 
   @hasMany(() => ContratoSalario)
   declare salarios: HasMany<typeof ContratoSalario>
+
+  // 👇 NUEVO: relación con cambios
+  @hasMany(() => ContratoCambio, { foreignKey: 'contratoId' })
+  declare cambios: HasMany<typeof ContratoCambio>
 }
