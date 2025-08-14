@@ -19,6 +19,10 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import db from '@adonisjs/lucid/services/db'
 
+// ⬇️ para servir el archivo descargable
+import { createReadStream, existsSync, statSync } from 'node:fs'
+import mime from 'mime-types'
+
 type Estado = 'activo' | 'inactivo'
 
 export default class ContratosController {
@@ -1057,5 +1061,33 @@ export default class ContratosController {
       if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
       return response.badRequest({ message: error.message || 'Error al crear salario' })
     }
+  }
+
+  /* =========================
+     DESCARGA DE ARCHIVO (NUEVO)
+  ========================= */
+  public async descargarArchivo({ params, response }: HttpContext) {
+    const contrato = await Contrato.findOrFail(params.id)
+
+    const relativo = contrato.rutaArchivoContratoFisico
+    if (!relativo) {
+      return response.notFound({ message: 'Contrato sin archivo' })
+    }
+
+    const absPath = path.join(app.publicPath(), relativo.replace(/^\//, ''))
+    if (!existsSync(absPath)) {
+      return response.notFound({ message: 'Archivo no existe' })
+    }
+
+    const stat = statSync(absPath)
+    const contentType = (mime.lookup(absPath) as string) || 'application/octet-stream'
+    const fileName = path.basename(absPath)
+
+    response.header('Content-Type', contentType)
+    response.header('Content-Length', String(stat.size))
+    // Si prefieres abrir en navegador: usa "inline"
+    response.header('Content-Disposition', `attachment; filename="${fileName}"`)
+
+    return response.stream(createReadStream(absPath))
   }
 }

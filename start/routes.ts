@@ -171,6 +171,12 @@ router
       return new ContratosController().destroy(ctx)
     })
 
+    // ⬇️ NUEVA RUTA: descarga de archivo del contrato
+    router.get('/contratos/:id/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().descargarArchivo(ctx)
+    })
+
     // === CONTRATO PASOS ===
     router
       .group(() => {
