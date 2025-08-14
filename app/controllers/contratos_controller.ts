@@ -41,7 +41,7 @@ export default class ContratosController {
   /** Convierte a DateTime o null */
   private toDateTime(value: any): DateTime | null {
     if (!value) return null
-    if (typeof value?.toISO === 'function') return value as DateTime
+    if (typeof value?.toISO === 'function') return value as any
     if (typeof value === 'string') {
       const dt = DateTime.fromISO(value)
       return dt.isValid ? dt : null
@@ -69,23 +69,10 @@ export default class ContratosController {
     )
   }
 
-  /** Normaliza valores por campo (evita falsos cambios tipo 0 vs false) */
-  private normalizeForField(campo: string, v: any): any {
-    if (v === undefined) return undefined
-    if (v === null) return null
-    if (campo === 'tieneRecomendacionesMedicas') {
-      if (typeof v === 'boolean') return v
-      const s = String(v).trim().toLowerCase()
-      return s === '1' || s === 'true' || s === 'si' || s === 'sí'
-    }
-    return v
-  }
-
   /** Para campos *_Id devuelve { id, nombre } — o el valor tal cual si no aplica */
   private async wrapValueWithName(campo: string, val: any): Promise<any> {
     if (val === null || val === undefined || val === '') return null
     if (typeof val === 'object') return val
-
     const num = Number(val)
     if (!Number.isFinite(num)) return val
 
@@ -113,6 +100,20 @@ export default class ContratosController {
       default:
         return val
     }
+  }
+
+  /** Normaliza boolean-like a boolean o null */
+  private toBoolOrNull(v: any): boolean | null {
+    if (v === null || v === undefined) return null
+    if (typeof v === 'boolean') return v
+    if (typeof v === 'number') return v !== 0
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase()
+      if (s === 'true' || s === '1' || s === 'si' || s === 'sí') return true
+      if (s === 'false' || s === '0' || s === 'no') return false
+      return s.length ? true : null
+    }
+    return !!v
   }
 
   /** Relaciones comunes */
@@ -499,7 +500,7 @@ export default class ContratosController {
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
-          usuarioId: actorId,
+          usuarioId: this.getActorId(ctx),
           oldEstado: 'inactivo',
           newEstado: 'activo',
           fechaCambio: DateTime.now(),
@@ -512,7 +513,7 @@ export default class ContratosController {
       await ContratoCambio.create(
         {
           contratoId: contrato.id,
-          usuarioId: actorId,
+          usuarioId: this.getActorId(ctx),
           campo: 'creacion',
           oldValue: this.json(null),
           newValue: this.json({ estado: 'activo' }),
@@ -539,11 +540,15 @@ export default class ContratosController {
       const contrato = await Contrato.findOrFail(params.id)
       const oldEstado = contrato.estado
 
+      // ⚠️ Usamos el raw para saber QUÉ campos realmente llegaron
+      const raw = request.all()
+
       const currentSalario = await ContratoSalario.query({ client: trx })
         .where('contratoId', contrato.id)
         .orderBy('fecha_efectiva', 'desc')
         .first()
 
+      // Normalizamos BEFORE
       const before = {
         razonSocialId: contrato.razonSocialId,
         sedeId: contrato.sedeId,
@@ -563,13 +568,15 @@ export default class ContratosController {
         ccfId: contrato.ccfId ?? null,
         estado: contrato.estado,
         motivoFinalizacion: contrato.motivoFinalizacion ?? null,
-        tieneRecomendacionesMedicas: contrato.tieneRecomendacionesMedicas ?? null,
+        // 👇 aquí normalizamos boolean-like
+        tieneRecomendacionesMedicas: this.toBoolOrNull((contrato as any).tieneRecomendacionesMedicas),
         salarioBasico: currentSalario?.salarioBasico ?? null,
         bonoSalarial: currentSalario?.bonoSalarial ?? null,
         auxilioTransporte: currentSalario?.auxilioTransporte ?? null,
         auxilioNoSalarial: currentSalario?.auxilioNoSalarial ?? null,
       }
 
+      // Tomamos payload seleccionado (para merge) desde el RAW
       const payload = request.only([
         'identificacion',
         'sedeId',
@@ -597,7 +604,6 @@ export default class ContratosController {
         'razonSocialId',
       ])
 
-      // Normalización y fechas
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
         contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd').startOf('day').toUTC()
       }
@@ -605,15 +611,9 @@ export default class ContratosController {
         contrato.fechaTerminacion = DateTime.fromFormat(payload.fechaTerminacion, 'yyyy-MM-dd').startOf('day').toUTC()
       }
 
-      // Normaliza boolean para evitar 0 vs false
-      if (payload.tieneRecomendacionesMedicas !== undefined) {
-        (payload as any).tieneRecomendacionesMedicas = this.normalizeForField(
-          'tieneRecomendacionesMedicas',
-          payload.tieneRecomendacionesMedicas
-        )
-      }
-
-      if (payload.tieneRecomendacionesMedicas === false && contrato.rutaArchivoRecomendacionMedica) {
+      // Si piden limpiar recomendación médica
+      const trmSent = Object.prototype.hasOwnProperty.call(raw, 'tieneRecomendacionesMedicas')
+      if (trmSent && payload.tieneRecomendacionesMedicas === false && contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
           contrato.rutaArchivoRecomendacionMedica = null
@@ -639,8 +639,13 @@ export default class ContratosController {
       const atRaw  = auxilioTransporte
       const ansRaw = auxilioNoSalarial
 
-      const salarioFueEnviado =
-        sbRaw !== undefined || bsRaw !== undefined || atRaw !== undefined || ansRaw !== undefined
+      // 🔎 flags por-campo: ¿llegó en el request?
+      const sbSent  = Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
+      const bsSent  = Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
+      const atSent  = Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
+      const ansSent = Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
+
+      const salarioFueEnviado = sbSent || bsSent || atSent || ansSent
 
       let nuevoSalario: { salarioBasico: number; bonoSalarial: number; auxilioTransporte: number; auxilioNoSalarial: number } | null = null
 
@@ -714,7 +719,8 @@ export default class ContratosController {
         ccfId: contrato.ccfId ?? null,
         estado: contrato.estado,
         motivoFinalizacion: contrato.motivoFinalizacion ?? null,
-        tieneRecomendacionesMedicas: contrato.tieneRecomendacionesMedicas ?? null,
+        // 👇 normalizado otra vez
+        tieneRecomendacionesMedicas: this.toBoolOrNull((contrato as any).tieneRecomendacionesMedicas),
         salarioBasico: nuevoSalario ? nuevoSalario.salarioBasico : (currentSalario?.salarioBasico ?? null),
         bonoSalarial: nuevoSalario ? nuevoSalario.bonoSalarial : (currentSalario?.bonoSalarial ?? null),
         auxilioTransporte: nuevoSalario ? nuevoSalario.auxilioTransporte : (currentSalario?.auxilioTransporte ?? null),
@@ -730,21 +736,28 @@ export default class ContratosController {
 
       const cambios: Array<{ contratoId: number; usuarioId: number | null; campo: string; oldValue: any; newValue: any }> = []
 
-      const rawBody = request.body()
+      const vinoEnPayloadFor = (campo: string) => {
+        if (campo === 'salarioBasico') return sbSent
+        if (campo === 'bonoSalarial') return bsSent
+        if (campo === 'auxilioTransporte') return atSent
+        if (campo === 'auxilioNoSalarial') return ansSent
+        if (campo === 'tieneRecomendacionesMedicas') return trmSent
+        return Object.prototype.hasOwnProperty.call(raw, campo)
+      }
 
       for (const campo of camposTrackeables) {
-        const vinoEnPayload =
-          campo === 'salarioBasico' || campo === 'bonoSalarial' || campo === 'auxilioTransporte' || campo === 'auxilioNoSalarial'
-            ? salarioFueEnviado
-            : Object.prototype.hasOwnProperty.call(rawBody, campo)
+        if (!vinoEnPayloadFor(String(campo))) continue
 
-        if (!vinoEnPayload) continue
+        let oldV = (before as any)[campo]
+        let newV = (after as any)[campo]
 
-        const oldV = this.normalizeForField(String(campo), (before as any)[campo])
-        const newV = this.normalizeForField(String(campo), (after as any)[campo])
+        // compara booleans normalizados para TRM
+        if (campo === 'tieneRecomendacionesMedicas') {
+          oldV = this.toBoolOrNull(oldV)
+          newV = this.toBoolOrNull(newV)
+        }
 
-        // compara normalizado para evitar 0 vs false, etc.
-        if (JSON.stringify(oldV) === JSON.stringify(newV)) continue
+        if ((oldV ?? null) === (newV ?? null)) continue
 
         const oldWrapped = await this.wrapValueWithName(String(campo), oldV)
         const newWrapped = await this.wrapValueWithName(String(campo), newV)
