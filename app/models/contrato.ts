@@ -56,7 +56,7 @@ export default class Contrato extends BaseModel {
   declare fechaTerminacion?: DateTime | null
 
   @column()
-  declare tipoContrato: 'laboral' | 'temporal' | 'prestacion'
+  declare tipoContrato: 'laboral' | 'temporal' | 'prestacion' | 'aprendizaje' // 👈 agregado
 
   @column()
   declare terminoContrato?: 'fijo' | 'obra_o_labor' | 'indefinido' | null
