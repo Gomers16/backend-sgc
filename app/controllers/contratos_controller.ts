@@ -253,40 +253,77 @@ export default class ContratosController {
         bonoSalarial,
         auxilioTransporte,
         auxilioNoSalarial,
-        fechaTerminacion,
+        fechaFin,
+        fechaFinalizacion,
+        fechaTerminacion: fechaTermInput,
         ...contratoData
       } = allRequestData
 
-      const fechaInicioLuxon = contratoData.fechaInicio ? DateTime.fromISO(contratoData.fechaInicio) : undefined
-      const fechaTerminacionLuxon = fechaTerminacion ? DateTime.fromISO(fechaTerminacion) : undefined
+      // alias robusto para fecha de terminación
+      const aliasFechaTerm = fechaTermInput ?? fechaFin ?? fechaFinalizacion ?? null
+
+      // normaliza '' a null para columnas numéricas/FK
+      const nullIfEmpty = (v: any) => (v === '' || v === undefined ? null : v)
+
+      const contratoDataNorm: any = {
+        ...contratoData,
+        usuarioId: nullIfEmpty(contratoData.usuarioId),
+        razonSocialId: nullIfEmpty(contratoData.razonSocialId),
+        sedeId: nullIfEmpty(contratoData.sedeId),
+        cargoId: nullIfEmpty(contratoData.cargoId),
+        epsId: nullIfEmpty(contratoData.epsId),
+        arlId: nullIfEmpty(contratoData.arlId),
+        afpId: nullIfEmpty(contratoData.afpId),
+        afcId: nullIfEmpty(contratoData.afcId),
+        ccfId: nullIfEmpty(contratoData.ccfId),
+      }
+
+      const fechaInicioLuxon = this.toDateTime(contratoDataNorm.fechaInicio)
+      if (!fechaInicioLuxon) {
+        await trx.rollback()
+        return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
+      }
+      const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
 
       const contrato = await Contrato.create(
         {
-          ...contratoData,
-          razonSocialId: contratoData.razonSocialId,
+          ...contratoDataNorm,
+          razonSocialId: contratoDataNorm.razonSocialId,
           fechaInicio: fechaInicioLuxon,
           fechaTerminacion: fechaTerminacionLuxon || null,
           estado: 'activo',
-          terminoContrato: contratoData.tipoContrato === 'prestacion' ? null : contratoData.terminoContrato || 'indefinido',
+          // aprendizaje sin término también
+          terminoContrato:
+            contratoDataNorm.tipoContrato === 'prestacion' || contratoDataNorm.tipoContrato === 'aprendizaje'
+              ? null
+              : (contratoDataNorm.terminoContrato || 'indefinido'),
         },
         { client: trx }
       )
 
-      if (contratoData.tipoContrato !== 'prestacion' && salarioBasico !== undefined) {
+      // crea salario solo si no es prestación y el campo fue enviado
+      if (contratoDataNorm.tipoContrato !== 'prestacion' && salarioBasico !== undefined) {
         await ContratoSalario.create(
           {
             contratoId: contrato.id,
-            salarioBasico: salarioBasico || 0,
-            bonoSalarial: bonoSalarial || 0,
-            auxilioTransporte: auxilioTransporte || 0,
-            auxilioNoSalarial: auxilioNoSalarial || 0,
+            salarioBasico: Number(salarioBasico) || 0,
+            bonoSalarial: Number(bonoSalarial) || 0,
+            auxilioTransporte: Number(auxilioTransporte) || 0,
+            auxilioNoSalarial: Number(auxilioNoSalarial) || 0,
             fechaEfectiva: DateTime.now(),
           },
           { client: trx }
         )
       }
 
-      const pasosRecibidos = JSON.parse(pasos || '[]')
+      // pasos robusto: acepta array o JSON string
+      let pasosRecibidos: any[] = []
+      if (Array.isArray(pasos)) {
+        pasosRecibidos = pasos
+      } else if (typeof pasos === 'string' && pasos.trim()) {
+        try { pasosRecibidos = JSON.parse(pasos) } catch { pasosRecibidos = [] }
+      }
+
       const pasosParaGuardar: any[] = []
       if (Array.isArray(pasosRecibidos)) {
         for (const pasoData of pasosRecibidos) {
@@ -297,7 +334,7 @@ export default class ContratosController {
             fecha: pasoData.fecha ? DateTime.fromISO(pasoData.fecha) : null,
             observacion: pasoData.observacion,
             orden: pasoData.orden,
-            completado: pasoData.completado,
+            completado: !!pasoData.completado,
             archivoUrl: pasoData.archivoUrl || null,
           })
         }
@@ -349,6 +386,7 @@ export default class ContratosController {
       const contratoId = request.input('contratoId')
 
       if (contratoId) {
+        // ====== MODO A: anexar a contrato existente ======
         const contrato = await Contrato.findOrFail(contratoId)
 
         const archivoContrato = request.file('archivo', { size: '5mb', extnames: ['pdf'] })
@@ -399,7 +437,7 @@ export default class ContratosController {
         return response.ok({ message: 'Archivo anexado correctamente', contrato })
       }
 
-      // ====== MODO B (legacy): Crear + anexar ======
+      // ====== MODO B (legacy): Crear + anexar en una sola llamada ======
       const allRequestData = request.all()
       if (!allRequestData.razonSocialId) {
         return response.badRequest({ message: "El campo 'razonSocialId' es obligatorio." })
@@ -411,15 +449,24 @@ export default class ContratosController {
         bonoSalarial,
         auxilioTransporte,
         auxilioNoSalarial,
-        fechaTerminacion,
+        fechaFin,
+        fechaFinalizacion,
+        fechaTerminacion: fechaTermInput,
         tieneRecomendacionesMedicas,
         ...contratoData
       } = allRequestData
 
+      // (en esta rama ya exigías sedeId; lo mantengo por compatibilidad)
       if (!contratoData.sedeId) return response.badRequest({ message: "El campo 'sedeId' es obligatorio." })
 
-      const fechaInicioLuxon = contratoData.fechaInicio ? DateTime.fromISO(contratoData.fechaInicio) : undefined
-      const fechaTerminacionLuxon = fechaTerminacion ? DateTime.fromISO(fechaTerminacion) : undefined
+      const aliasFechaTerm = fechaTermInput ?? fechaFin ?? fechaFinalizacion ?? null
+
+      const fechaInicioLuxon = this.toDateTime(contratoData.fechaInicio)
+      if (!fechaInicioLuxon) {
+        await trx.rollback()
+        return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
+      }
+      const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
 
       const archivoContratoLegacy = request.file('archivoContrato', { size: '5mb', extnames: ['pdf'] })
       if (!archivoContratoLegacy || !archivoContratoLegacy.isValid) {
@@ -456,7 +503,11 @@ export default class ContratosController {
           estado: 'activo',
           nombreArchivoContratoFisico: fileName,
           rutaArchivoContratoFisico: publicUrl,
-          terminoContrato: contratoData.tipoContrato === 'prestacion' ? null : contratoData.terminoContrato || 'indefinido',
+          // aprendizaje sin término también
+          terminoContrato:
+            contratoData.tipoContrato === 'prestacion' || contratoData.tipoContrato === 'aprendizaje'
+              ? null
+              : (contratoData.terminoContrato || 'indefinido'),
           tieneRecomendacionesMedicas: tieneRecomendacionesMedicas === 'true',
           rutaArchivoRecomendacionMedica: rutaArchivoRecomendacionMedica,
         },
@@ -467,17 +518,23 @@ export default class ContratosController {
         await ContratoSalario.create(
           {
             contratoId: contrato.id,
-            salarioBasico: salarioBasico || 0,
-            bonoSalarial: bonoSalarial || 0,
-            auxilioTransporte: auxilioTransporte || 0,
-            auxilioNoSalarial: auxilioNoSalarial || 0,
+            salarioBasico: Number(salarioBasico) || 0,
+            bonoSalarial: Number(bonoSalarial) || 0,
+            auxilioTransporte: Number(auxilioTransporte) || 0,
+            auxilioNoSalarial: Number(auxilioNoSalarial) || 0,
             fechaEfectiva: DateTime.now(),
           },
           { client: trx }
         )
       }
 
-      const pasosRecibidos = JSON.parse(pasos || '[]')
+      let pasosRecibidos: any[] = []
+      if (Array.isArray(pasos)) {
+        pasosRecibidos = pasos
+      } else if (typeof pasos === 'string' && pasos.trim()) {
+        try { pasosRecibidos = JSON.parse(pasos) } catch { pasosRecibidos = [] }
+      }
+
       const pasosParaGuardar: any[] = []
       if (Array.isArray(pasosRecibidos)) {
         for (const pasoData of pasosRecibidos) {
@@ -488,7 +545,7 @@ export default class ContratosController {
             fecha: pasoData.fecha ? DateTime.fromISO(pasoData.fecha) : null,
             observacion: pasoData.observacion,
             orden: pasoData.orden,
-            completado: pasoData.completado,
+            completado: !!pasoData.completado,
             archivoUrl: pasoData.archivoUrl || null,
           })
         }
@@ -576,7 +633,7 @@ export default class ContratosController {
         auxilioNoSalarial: currentSalario?.auxilioNoSalarial ?? null,
       }
 
-      // Tomamos payload seleccionado (para merge) desde el RAW
+      // payload seleccionado (para merge) desde el RAW
       const payload = request.only([
         'identificacion',
         'sedeId',
@@ -604,11 +661,15 @@ export default class ContratosController {
         'razonSocialId',
       ])
 
+      // Aliases de fecha de terminación también aceptados en update
+      const aliasFechaTerm =
+        raw.fechaTerminacion ?? raw.fechaFin ?? raw.fechaFinalizacion
+
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
         contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd').startOf('day').toUTC()
       }
-      if (payload.fechaTerminacion !== undefined && typeof payload.fechaTerminacion === 'string') {
-        contrato.fechaTerminacion = DateTime.fromFormat(payload.fechaTerminacion, 'yyyy-MM-dd').startOf('day').toUTC()
+      if (aliasFechaTerm !== undefined && typeof aliasFechaTerm === 'string') {
+        contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day').toUTC()
       }
 
       // Si piden limpiar recomendación médica
@@ -720,21 +781,56 @@ export default class ContratosController {
         estado: contrato.estado,
         motivoFinalizacion: contrato.motivoFinalizacion ?? null,
         // 👇 normalizado otra vez
-        tieneRecomendacionesMedicas: this.toBoolOrNull((contrato as any).tieneRecomendacionesMedicas),
-        salarioBasico: nuevoSalario ? nuevoSalario.salarioBasico : (currentSalario?.salarioBasico ?? null),
-        bonoSalarial: nuevoSalario ? nuevoSalario.bonoSalarial : (currentSalario?.bonoSalarial ?? null),
-        auxilioTransporte: nuevoSalario ? nuevoSalario.auxilioTransporte : (currentSalario?.auxilioTransporte ?? null),
-        auxilioNoSalarial: nuevoSalario ? nuevoSalario.auxilioNoSalarial : (currentSalario?.auxilioNoSalarial ?? null),
+        tieneRecomendacionesMedicas: this.toBoolOrNull(
+          (contrato as any).tieneRecomendacionesMedicas
+        ),
+        salarioBasico: nuevoSalario
+          ? nuevoSalario.salarioBasico
+          : (currentSalario?.salarioBasico ?? null),
+        bonoSalarial: nuevoSalario
+          ? nuevoSalario.bonoSalarial
+          : (currentSalario?.bonoSalarial ?? null),
+        auxilioTransporte: nuevoSalario
+          ? nuevoSalario.auxilioTransporte
+          : (currentSalario?.auxilioTransporte ?? null),
+        auxilioNoSalarial: nuevoSalario
+          ? nuevoSalario.auxilioNoSalarial
+          : (currentSalario?.auxilioNoSalarial ?? null),
       }
 
       const camposTrackeables: (keyof typeof after)[] = [
-        'razonSocialId','sedeId','cargoId','funcionesCargo','tipoContrato','terminoContrato',
-        'fechaInicio','fechaTerminacion','periodoPrueba','horarioTrabajo','centroCosto',
-        'epsId','arlId','afpId','afcId','ccfId','estado','motivoFinalizacion',
-        'tieneRecomendacionesMedicas','salarioBasico','bonoSalarial','auxilioTransporte','auxilioNoSalarial',
+        'razonSocialId',
+        'sedeId',
+        'cargoId',
+        'funcionesCargo',
+        'tipoContrato',
+        'terminoContrato',
+        'fechaInicio',
+        'fechaTerminacion',
+        'periodoPrueba',
+        'horarioTrabajo',
+        'centroCosto',
+        'epsId',
+        'arlId',
+        'afpId',
+        'afcId',
+        'ccfId',
+        'estado',
+        'motivoFinalizacion',
+        'tieneRecomendacionesMedicas',
+        'salarioBasico',
+        'bonoSalarial',
+        'auxilioTransporte',
+        'auxilioNoSalarial',
       ]
 
-      const cambios: Array<{ contratoId: number; usuarioId: number | null; campo: string; oldValue: any; newValue: any }> = []
+      const cambios: Array<{
+        contratoId: number
+        usuarioId: number | null
+        campo: string
+        oldValue: any
+        newValue: any
+      }> = []
 
       const vinoEnPayloadFor = (campo: string) => {
         if (campo === 'salarioBasico') return sbSent
@@ -742,6 +838,11 @@ export default class ContratosController {
         if (campo === 'auxilioTransporte') return atSent
         if (campo === 'auxilioNoSalarial') return ansSent
         if (campo === 'tieneRecomendacionesMedicas') return trmSent
+        if (campo === 'fechaTerminacion') return (
+            Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
+            Object.prototype.hasOwnProperty.call(raw, 'fechaFin') ||
+            Object.prototype.hasOwnProperty.call(raw, 'fechaFinalizacion')
+          )
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
@@ -782,8 +883,12 @@ export default class ContratosController {
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al actualizar contrato:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado para actualizar' })
-      return response.internalServerError({ message: 'Error al actualizar contrato', error: error.message })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado para actualizar' })
+      return response.internalServerError({
+        message: 'Error al actualizar contrato',
+        error: error.message,
+      })
     }
   }
 
@@ -803,14 +908,22 @@ export default class ContratosController {
       })
 
       if (!archivoRecomendacion || !archivoRecomendacion.isValid) {
-        throw new Error(archivoRecomendacion?.errors[0]?.message || 'Archivo de recomendación médica inválido.')
+        throw new Error(
+          archivoRecomendacion?.errors[0]?.message || 'Archivo de recomendación médica inválido.'
+        )
       }
 
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+          await fs.unlink(
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
+          )
         } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') console.error('Error al eliminar archivo de recomendación anterior en update:', unlinkError)
+          if (unlinkError.code !== 'ENOENT')
+            console.error(
+              'Error al eliminar archivo de recomendación anterior en update:',
+              unlinkError
+            )
         }
       }
 
@@ -830,7 +943,10 @@ export default class ContratosController {
       await trx.rollback()
       console.error('Error al actualizar el archivo de recomendación médica:', error)
       if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
-      return response.internalServerError({ message: 'Error al actualizar el archivo de recomendación médica', error: error.message })
+      return response.internalServerError({
+        message: 'Error al actualizar el archivo de recomendación médica',
+        error: error.message,
+      })
     }
   }
 
