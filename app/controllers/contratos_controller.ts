@@ -24,6 +24,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs'
 import mime from 'mime-types'
 
 type Estado = 'activo' | 'inactivo'
+type TipoContrato = 'prestacion' | 'temporal' | 'laboral' | 'aprendizaje'
 
 export default class ContratosController {
   /* ============================
@@ -118,6 +119,21 @@ export default class ContratosController {
       return s.length ? true : null
     }
     return !!v
+  }
+
+  /** Validación de tipo de contrato (evita truncados en DB) */
+  private assertTipoContrato(tipo: any): asserts tipo is TipoContrato {
+    const ok = ['prestacion', 'temporal', 'laboral', 'aprendizaje'].includes(String(tipo))
+    if (!ok) {
+      throw new Error("Valor inválido para 'tipoContrato'. Debe ser 'prestacion' | 'temporal' | 'laboral' | 'aprendizaje'.")
+    }
+  }
+
+  /** ¿Requiere fecha de terminación? */
+  private requiresEndDate(tipo: TipoContrato, terminoContrato: string | null | undefined): boolean {
+    if (tipo === 'prestacion' || tipo === 'aprendizaje' || tipo === 'temporal') return true
+    if (tipo === 'laboral') return (terminoContrato ?? '').toLowerCase() !== 'indefinido'
+    return false
   }
 
   /** Relaciones comunes */
@@ -263,6 +279,26 @@ export default class ContratosController {
         ...contratoData
       } = allRequestData
 
+      // Validar tipo_contrato explícitamente
+      this.assertTipoContrato(contratoData.tipoContrato)
+      const tipo: TipoContrato = contratoData.tipoContrato
+
+      // 🔹 salario: acepta 'salario' o 'salarioBasico' y lo exige si NO es prestación
+      const rawSalario = allRequestData.salario ?? salarioBasico
+      const salarioNum = Number(rawSalario)
+      let salarioFinal: number
+      if (tipo !== 'prestacion') {
+        if (!Number.isFinite(salarioNum)) {
+          await trx.rollback()
+          return response.badRequest({
+            message: "El campo 'salario' (o 'salarioBasico') es obligatorio para contratos de tipo " + tipo,
+          })
+        }
+        salarioFinal = salarioNum
+      } else {
+        salarioFinal = Number.isFinite(salarioNum) ? salarioNum : 0
+      }
+
       // alias robusto para fecha de terminación
       const aliasFechaTerm = fechaTermInput ?? fechaFin ?? fechaFinalizacion ?? null
 
@@ -287,6 +323,18 @@ export default class ContratosController {
         await trx.rollback()
         return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
       }
+
+      // Reglas: fechaTerminacion requerida según tipo/termino
+      const terminoEff =
+        tipo === 'prestacion' || tipo === 'aprendizaje'
+          ? null
+          : (contratoDataNorm.terminoContrato ?? 'indefinido')
+
+      if (this.requiresEndDate(tipo, terminoEff) && !aliasFechaTerm) {
+        await trx.rollback()
+        return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para el tipo de contrato enviado." })
+      }
+
       const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
 
       const contrato = await Contrato.create(
@@ -296,17 +344,19 @@ export default class ContratosController {
           fechaInicio: fechaInicioLuxon,
           fechaTerminacion: fechaTerminacionLuxon || null,
           estado: 'activo',
-          // aprendizaje sin término también
+          // ✅ incluir salario para cumplir NOT NULL
+          salario: salarioFinal,
+          // aprendizaje sin término; prestación también
           terminoContrato:
-            contratoDataNorm.tipoContrato === 'prestacion' || contratoDataNorm.tipoContrato === 'aprendizaje'
+            tipo === 'prestacion' || tipo === 'aprendizaje'
               ? null
               : (contratoDataNorm.terminoContrato || 'indefinido'),
         },
         { client: trx }
       )
 
-      // crea salario solo si no es prestación y el campo fue enviado
-      if (contratoDataNorm.tipoContrato !== 'prestacion' && salarioBasico !== undefined) {
+      // crea salario histórico solo si no es prestación y el campo fue enviado explícitamente
+      if (tipo !== 'prestacion' && salarioBasico !== undefined) {
         await ContratoSalario.create(
           {
             contratoId: contrato.id,
@@ -460,6 +510,26 @@ export default class ContratosController {
         ...contratoData
       } = allRequestData
 
+      // Validar tipo_contrato explícitamente
+      this.assertTipoContrato(contratoData.tipoContrato)
+      const tipo: TipoContrato = contratoData.tipoContrato
+
+      // 🔹 salario: acepta 'salario' o 'salarioBasico' y lo exige si NO es prestación
+      const rawSalario2 = allRequestData.salario ?? salarioBasico
+      const salarioNum2 = Number(rawSalario2)
+      let salarioFinal2: number
+      if (tipo !== 'prestacion') {
+        if (!Number.isFinite(salarioNum2)) {
+          await trx.rollback()
+          return response.badRequest({
+            message: "El campo 'salario' (o 'salarioBasico') es obligatorio para contratos de tipo " + tipo,
+          })
+        }
+        salarioFinal2 = salarioNum2
+      } else {
+        salarioFinal2 = Number.isFinite(salarioNum2) ? salarioNum2 : 0
+      }
+
       // (en esta rama ya exigías sedeId; lo mantengo por compatibilidad)
       if (!contratoData.sedeId) return response.badRequest({ message: "El campo 'sedeId' es obligatorio." })
 
@@ -470,6 +540,18 @@ export default class ContratosController {
         await trx.rollback()
         return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
       }
+
+      // Reglas: fechaTerminacion requerida según tipo/termino
+      const terminoEff =
+        tipo === 'prestacion' || tipo === 'aprendizaje'
+          ? null
+          : (contratoData.terminoContrato ?? 'indefinido')
+
+      if (this.requiresEndDate(tipo, terminoEff) && !aliasFechaTerm) {
+        await trx.rollback()
+        return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para el tipo de contrato enviado." })
+      }
+
       const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
 
       const archivoContratoLegacy = request.file('archivoContrato', { size: '5mb', extnames: ['pdf'] })
@@ -507,9 +589,11 @@ export default class ContratosController {
           estado: 'activo',
           nombreArchivoContratoFisico: fileName,
           rutaArchivoContratoFisico: publicUrl,
-          // aprendizaje sin término también
+          // ✅ incluir salario para cumplir NOT NULL
+          salario: salarioFinal2,
+          // aprendizaje sin término; prestación también
           terminoContrato:
-            contratoData.tipoContrato === 'prestacion' || contratoData.tipoContrato === 'aprendizaje'
+            tipo === 'prestacion' || tipo === 'aprendizaje'
               ? null
               : (contratoData.terminoContrato || 'indefinido'),
           tieneRecomendacionesMedicas: tieneRecomendacionesMedicas === 'true',
@@ -518,7 +602,7 @@ export default class ContratosController {
         { client: trx }
       )
 
-      if (contratoData.tipoContrato !== 'prestacion' && salarioBasico !== undefined) {
+      if (tipo !== 'prestacion' && salarioBasico !== undefined) {
         await ContratoSalario.create(
           {
             contratoId: contrato.id,
@@ -669,6 +753,16 @@ export default class ContratosController {
       const aliasFechaTerm =
         raw.fechaTerminacion ?? raw.fechaFin ?? raw.fechaFinalizacion
 
+      // Determinar tipo/termino efectivos considerando payload + estado actual
+      const tipoEff: TipoContrato = (payload.tipoContrato as TipoContrato) ?? (contrato.tipoContrato as TipoContrato)
+      this.assertTipoContrato(tipoEff)
+
+      const terminoEff =
+        (tipoEff === 'prestacion' || tipoEff === 'aprendizaje')
+          ? null
+          : ((payload.terminoContrato ?? (contrato as any).terminoContrato) || 'indefinido')
+
+      // Escribir fechas si llegaron en payload
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
         contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd').startOf('day').toUTC()
       }
@@ -676,15 +770,14 @@ export default class ContratosController {
         contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day').toUTC()
       }
 
-      // Si piden limpiar recomendación médica
-      const trmSent = Object.prototype.hasOwnProperty.call(raw, 'tieneRecomendacionesMedicas')
-      if (trmSent && payload.tieneRecomendacionesMedicas === false && contrato.rutaArchivoRecomendacionMedica) {
-        try {
-          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
-          contrato.rutaArchivoRecomendacionMedica = null
-        } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') console.error('Error al eliminar archivo de recomendación:', unlinkError)
-        }
+      // Validar requerimiento de fecha terminación (usar la definitiva: payload o existente)
+      const fechaTermDef = aliasFechaTerm !== undefined
+        ? this.toDateTime(aliasFechaTerm)
+        : (contrato.fechaTerminacion ?? null)
+
+      if (this.requiresEndDate(tipoEff, terminoEff) && !fechaTermDef) {
+        await trx.rollback()
+        return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para el tipo/termino de contrato actual." })
       }
 
       const {
@@ -694,6 +787,11 @@ export default class ContratosController {
         auxilioNoSalarial,
         ...contratoPayload
       } = payload
+
+      // Ajuste: si el tipo efectivo es prestacion/aprendizaje, forzar terminoContrato = null
+      if (tipoEff === 'prestacion' || tipoEff === 'aprendizaje') {
+        (contratoPayload as any).terminoContrato = null
+      }
 
       contrato.merge(contratoPayload)
       await contrato.save({ client: trx })
@@ -841,7 +939,7 @@ export default class ContratosController {
         if (campo === 'bonoSalarial') return bsSent
         if (campo === 'auxilioTransporte') return atSent
         if (campo === 'auxilioNoSalarial') return ansSent
-        if (campo === 'tieneRecomendacionesMedicas') return trmSent
+        if (campo === 'tieneRecomendacionesMedicas') return Object.prototype.hasOwnProperty.call(raw, 'tieneRecomendacionesMedicas')
         if (campo === 'fechaTerminacion') return (
             Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
             Object.prototype.hasOwnProperty.call(raw, 'fechaFin') ||

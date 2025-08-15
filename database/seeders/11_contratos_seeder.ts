@@ -1,5 +1,4 @@
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
-import Contrato from '#models/contrato'
 import ContratoSalario from '#models/contrato_salario'
 import ContratoPaso from '#models/contrato_paso'
 import Sede from '#models/sede'
@@ -8,13 +7,14 @@ import RazonSocial from '#models/razon_social'
 import Cargo from '#models/cargo'
 import EntidadSalud from '#models/entidad_salud'
 import { DateTime } from 'luxon'
+import db from '@adonisjs/lucid/services/db'
 
 export default class ContratosSeeder extends BaseSeeder {
   public async run() {
-    // Limpiar tablas relacionadas primero
-    await ContratoSalario.query().delete()
+    // Limpiar tablas relacionadas primero (orden seguro)
     await ContratoPaso.query().delete()
-    await Contrato.query().delete()
+    await ContratoSalario.query().delete()
+    await db.from('contratos').delete()
 
     const bogotaSede = await Sede.findBy('nombre', 'Bogotá')
     const razonSocialEjemplo = await RazonSocial.findBy('nombre', 'CDA del Centro')
@@ -42,30 +42,47 @@ export default class ContratosSeeder extends BaseSeeder {
       return
     }
 
-    const contrato1 = await Contrato.create({
-      usuarioId: usuarioAdmin.id,
+    const now = new Date()
+
+    // ── Contrato 1 ──────────────────────────────────────────────────────────────
+    await db.table('contratos').insert({
+      usuario_id: usuarioAdmin.id,
       identificacion: '1020304050',
-      razonSocialId: razonSocialEjemplo.id,
-      sedeId: bogotaSede.id,
-      cargoId: cargoEjemplo.id,
-      funcionesCargo: 'Desarrollo de software y gestión de proyectos.',
-      fechaInicio: DateTime.fromISO('2024-01-10'),
-      fechaTerminacion: null, // ✅ Renombrado de fechaFin a fechaTerminacion
-      tipoContrato: 'laboral',
-      terminoContrato: 'indefinido',
+      razon_social_id: razonSocialEjemplo.id,
+      sede_id: bogotaSede.id,
+      cargo_id: cargoEjemplo.id,
+      funciones_cargo: 'Desarrollo de software y gestión de proyectos.',
+      fecha_inicio: '2024-01-10',
+      fecha_terminacion: null,
+      tipo_contrato: 'laboral',
+      termino_contrato: 'indefinido',
       estado: 'activo',
-      centroCosto: 'IT_DEP',
-      epsId: epsEjemplo.id,
-      arlId: arlEjemplo.id,
-      afpId: afpEjemplo.id,
-      afcId: afcEjemplo?.id || null,
-      ccfId: ccfEjemplo.id,
-      tieneRecomendacionesMedicas: false, // ✅ Añadido
-      rutaArchivoRecomendacionMedica: null, // ✅ Añadido
+      centro_costo: 'IT_DEP',
+      eps_id: epsEjemplo.id,
+      arl_id: arlEjemplo.id,
+      afp_id: afpEjemplo.id,
+      afc_id: afcEjemplo?.id || null,
+      ccf_id: ccfEjemplo.id,
+      tiene_recomendaciones_medicas: false,
+      ruta_archivo_recomendacion_medica: null,
+      salario: 2500000,                    // ← requerido por NOT NULL
+      created_at: now,
+      updated_at: now,
     })
 
+    const contrato1 = await db.from('contratos')
+      .select('id')
+      .where('identificacion', '1020304050')
+      .first()
+    const contrato1Id = contrato1?.id
+
+    if (!contrato1Id) {
+      console.error('❌ No se pudo obtener el ID del contrato 1.')
+      return
+    }
+
     await ContratoSalario.create({
-      contratoId: contrato1.id,
+      contratoId: contrato1Id,
       salarioBasico: 2500000,
       bonoSalarial: 0,
       auxilioTransporte: 162000,
@@ -73,10 +90,9 @@ export default class ContratosSeeder extends BaseSeeder {
       fechaEfectiva: DateTime.now(),
     })
 
-    // 👉 PASOS del contrato 1
     await ContratoPaso.createMany([
       {
-        contratoId: contrato1.id,
+        contratoId: contrato1Id,
         fase: 'inicio',
         nombrePaso: 'Firma contrato',
         fecha: DateTime.fromISO('2024-01-10'),
@@ -86,7 +102,7 @@ export default class ContratosSeeder extends BaseSeeder {
         archivoUrl: null,
       },
       {
-        contratoId: contrato1.id,
+        contratoId: contrato1Id,
         fase: 'desarrollo',
         nombrePaso: 'Evaluación mensual',
         fecha: DateTime.fromISO('2024-02-10'),
@@ -96,7 +112,7 @@ export default class ContratosSeeder extends BaseSeeder {
         archivoUrl: null,
       },
       {
-        contratoId: contrato1.id,
+        contratoId: contrato1Id,
         fase: 'fin',
         nombrePaso: 'Cierre de contrato',
         fecha: null,
@@ -107,32 +123,45 @@ export default class ContratosSeeder extends BaseSeeder {
       },
     ])
 
-    const contrato2 = await Contrato.create({
-      usuarioId: usuarioContabilidad.id,
+    // ── Contrato 2 ──────────────────────────────────────────────────────────────
+    await db.table('contratos').insert({
+      usuario_id: usuarioContabilidad.id,
       identificacion: '1098765432',
-      razonSocialId: razonSocialEjemplo.id,
-      sedeId: bogotaSede.id,
-      cargoId: cargoEjemplo.id,
-      funcionesCargo: 'Gestión contable y financiera.',
-      fechaInicio: DateTime.fromISO('2024-03-01'),
-      fechaTerminacion: DateTime.fromISO('2024-12-31'), // ✅ Renombrado de fechaFin a fechaTerminacion
-      tipoContrato: 'prestacion',
-      terminoContrato: null,
+      razon_social_id: razonSocialEjemplo.id,
+      sede_id: bogotaSede.id,
+      cargo_id: cargoEjemplo.id,
+      funciones_cargo: 'Gestión contable y financiera.',
+      fecha_inicio: '2024-03-01',
+      fecha_terminacion: '2024-12-31',
+      tipo_contrato: 'prestacion',
+      termino_contrato: null,
       estado: 'activo',
-      centroCosto: 'CONTABILIDAD',
-      epsId: epsEjemplo.id,
-      arlId: arlEjemplo.id,
-      afpId: afpEjemplo.id,
-      afcId: null,
-      ccfId: ccfEjemplo.id,
-      tieneRecomendacionesMedicas: true, // ✅ Añadido
-      // Ejemplo de ruta de archivo para fines de seeder. En un entorno real, esto sería una URL válida.
-      rutaArchivoRecomendacionMedica:
-        '/uploads/recomendaciones_medicas/ejemplo_recomendacion_medica.pdf', // ✅ Añadido
+      centro_costo: 'CONTABILIDAD',
+      eps_id: epsEjemplo.id,
+      arl_id: arlEjemplo.id,
+      afp_id: afpEjemplo.id,
+      afc_id: null,
+      ccf_id: ccfEjemplo.id,
+      tiene_recomendaciones_medicas: true,
+      ruta_archivo_recomendacion_medica: '/uploads/recomendaciones_medicas/ejemplo_recomendacion_medica.pdf',
+      salario: 1800000,                    // ← requerido por NOT NULL
+      created_at: now,
+      updated_at: now,
     })
 
+    const contrato2 = await db.from('contratos')
+      .select('id')
+      .where('identificacion', '1098765432')
+      .first()
+    const contrato2Id = contrato2?.id
+
+    if (!contrato2Id) {
+      console.error('❌ No se pudo obtener el ID del contrato 2.')
+      return
+    }
+
     await ContratoSalario.create({
-      contratoId: contrato2.id,
+      contratoId: contrato2Id,
       salarioBasico: 1800000,
       bonoSalarial: 0,
       auxilioTransporte: 0,
@@ -140,10 +169,9 @@ export default class ContratosSeeder extends BaseSeeder {
       fechaEfectiva: DateTime.now(),
     })
 
-    // 👉 PASOS del contrato 2
     await ContratoPaso.createMany([
       {
-        contratoId: contrato2.id,
+        contratoId: contrato2Id,
         fase: 'inicio',
         nombrePaso: 'Firma contrato prestación',
         fecha: DateTime.fromISO('2024-03-01'),
@@ -153,7 +181,7 @@ export default class ContratosSeeder extends BaseSeeder {
         archivoUrl: null,
       },
       {
-        contratoId: contrato2.id,
+        contratoId: contrato2Id,
         fase: 'desarrollo',
         nombrePaso: 'Entrega mensual',
         fecha: DateTime.fromISO('2024-04-01'),
@@ -163,7 +191,7 @@ export default class ContratosSeeder extends BaseSeeder {
         archivoUrl: null,
       },
       {
-        contratoId: contrato2.id,
+        contratoId: contrato2Id,
         fase: 'fin',
         nombrePaso: 'Liquidación contrato',
         fecha: null,

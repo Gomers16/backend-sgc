@@ -1,26 +1,36 @@
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import ContratoPaso from '#models/contrato_paso'
 import { DateTime } from 'luxon'
+import db from '@adonisjs/lucid/services/db'
 
 export default class ContratoPasoSeeder extends BaseSeeder {
   public async run() {
-    // Es buena práctica limpiar la tabla antes de sembrar para evitar duplicados
+    // Limpiar tabla de pasos
     await ContratoPaso.query().delete()
 
+    // Buscar IDs reales de los contratos por identificación
+    const contrato1 = await db.from('contratos').select('id').where('identificacion', '1020304050').first()
+    const contrato2 = await db.from('contratos').select('id').where('identificacion', '1098765432').first()
+
+    if (!contrato1?.id || !contrato2?.id) {
+      console.error('❌ No se encontraron los contratos requeridos para sembrar pasos.')
+      return
+    }
+
     await ContratoPaso.createMany([
-      // Contrato 1 (laboral) - Carlos Rodríguez
+      // Contrato 1 (laboral)
       {
-        contratoId: 1, // Este ID debe existir en la tabla 'contratos'
+        contratoId: contrato1.id,
         fase: 'inicio',
         nombrePaso: 'Reclutamiento/selección',
         fecha: DateTime.fromISO('2024-01-05'),
-        archivoUrl: '', // ✅ Correcto: coincide con el modelo y migración
+        archivoUrl: '',
         observacion: 'Proceso completado sin observaciones',
         orden: 1,
         completado: true,
       },
       {
-        contratoId: 1,
+        contratoId: contrato1.id,
         fase: 'inicio',
         nombrePaso: 'Referenciación',
         fecha: DateTime.fromISO('2024-01-06'),
@@ -30,7 +40,7 @@ export default class ContratoPasoSeeder extends BaseSeeder {
         completado: true,
       },
       {
-        contratoId: 1,
+        contratoId: contrato1.id,
         fase: 'inicio',
         nombrePaso: 'Pruebas',
         fecha: DateTime.fromISO('2024-01-07'),
@@ -40,9 +50,9 @@ export default class ContratoPasoSeeder extends BaseSeeder {
         completado: true,
       },
 
-      // Contrato 2 (prestación) - Laura González
+      // Contrato 2 (prestación)
       {
-        contratoId: 2, // Este ID también debe existir en la tabla 'contratos'
+        contratoId: contrato2.id,
         fase: 'inicio',
         nombrePaso: 'Solicitud',
         fecha: DateTime.fromISO('2024-02-25'),
@@ -52,7 +62,7 @@ export default class ContratoPasoSeeder extends BaseSeeder {
         completado: true,
       },
       {
-        contratoId: 2,
+        contratoId: contrato2.id,
         fase: 'inicio',
         nombrePaso: 'Pruebas',
         fecha: DateTime.fromISO('2024-02-26'),

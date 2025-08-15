@@ -3,20 +3,28 @@ import { BaseSchema } from '@adonisjs/lucid/schema'
 export default class extends BaseSchema {
   protected tableName = 'contratos'
 
-  async up() {
-    this.schema.createTable(this.tableName, (table) => {
+  public async up () {
+    // Idempotente: si quedó una tabla vieja, elimínala antes de crear
+    await this.schema.dropTableIfExists(this.tableName)
+
+    await this.schema.createTable(this.tableName, (table) => {
       table.increments('id').primary()
 
       // Columnas sin claves foráneas
       table.string('identificacion', 255).notNullable()
-      table.string('tipo_contrato', 50).notNullable() // 'prestacion', 'temporal', 'laboral'
-      table.string('estado', 20).defaultTo('activo').notNullable() // 'activo', 'inactivo'
+
+      // ENUM con 'aprendizaje'
+      table.enu('tipo_contrato', ['prestacion', 'temporal', 'laboral', 'aprendizaje']).notNullable()
+
+      table.string('estado', 20).notNullable().defaultTo('activo') // 'activo', 'inactivo'
       table.date('fecha_inicio').notNullable()
       table.date('fecha_terminacion').nullable()
       table.text('funciones_cargo').nullable()
-      table.decimal('salario', 15, 2).notNullable() // ← Corregido
 
-      // ✅ Añadida la columna 'termino_contrato' con una longitud adecuada
+      // MANTENER salario aquí (NO quitar)
+      table.decimal('salario', 15, 2).notNullable()
+
+      // término de contrato
       table.string('termino_contrato', 50).nullable()
 
       table.integer('periodo_prueba').nullable()
@@ -26,11 +34,11 @@ export default class extends BaseSchema {
       table.string('ruta_archivo_contrato_fisico', 255).nullable()
       table.text('motivo_finalizacion').nullable()
 
-      // Nuevas columnas para las recomendaciones médicas
+      // Recomendaciones médicas
       table.boolean('tiene_recomendaciones_medicas').defaultTo(false)
       table.string('ruta_archivo_recomendacion_medica', 255).nullable()
 
-      // Claves foráneas
+      // Claves foráneas (IDs sin FK explícitas)
       table.integer('usuario_id').unsigned().notNullable()
       table.integer('sede_id').unsigned().notNullable()
       table.integer('razon_social_id').unsigned().notNullable()
@@ -44,9 +52,16 @@ export default class extends BaseSchema {
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())
     })
+
+    // Refuerzo: asegura el ENUM exacto en MySQL
+    await this.schema.raw(`
+      ALTER TABLE \`${this.tableName}\`
+      MODIFY COLUMN \`tipo_contrato\`
+      ENUM('prestacion','temporal','laboral','aprendizaje') NOT NULL
+    `)
   }
 
-  async down() {
-    this.schema.dropTable(this.tableName)
+  public async down () {
+    await this.schema.dropTableIfExists(this.tableName)
   }
 }

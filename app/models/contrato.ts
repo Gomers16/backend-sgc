@@ -1,3 +1,4 @@
+// app/models/contrato.ts
 import { DateTime } from 'luxon'
 import { BaseModel, column, hasMany, belongsTo } from '@adonisjs/lucid/orm'
 import type { HasMany, BelongsTo } from '@adonisjs/lucid/types/relations'
@@ -11,7 +12,7 @@ import Sede from './sede.js'
 import Cargo from './cargo.js'
 import EntidadSalud from './entidad_salud.js'
 import RazonSocial from './razon_social.js'
-import ContratoCambio from './contrato_cambio.js' // 👈 NUEVO
+import ContratoCambio from './contrato_cambio.js'
 
 export default class Contrato extends BaseModel {
   public static table = 'contratos'
@@ -21,13 +22,11 @@ export default class Contrato extends BaseModel {
 
   @column()
   declare usuarioId: number
-
   @belongsTo(() => Usuario)
   declare usuario: BelongsTo<typeof Usuario>
 
   @column()
   declare razonSocialId: number
-
   @belongsTo(() => RazonSocial)
   declare razonSocial: BelongsTo<typeof RazonSocial>
 
@@ -36,13 +35,11 @@ export default class Contrato extends BaseModel {
 
   @column()
   declare sedeId: number
-
   @belongsTo(() => Sede)
   declare sede: BelongsTo<typeof Sede>
 
   @column()
   declare cargoId: number
-
   @belongsTo(() => Cargo)
   declare cargo: BelongsTo<typeof Cargo>
 
@@ -56,10 +53,10 @@ export default class Contrato extends BaseModel {
   declare fechaTerminacion?: DateTime | null
 
   @column()
-  declare tipoContrato: 'laboral' | 'temporal' | 'prestacion' | 'aprendizaje' // 👈 agregado
+  declare tipoContrato: 'laboral' | 'temporal' | 'prestacion' | 'aprendizaje'
 
   @column()
-  declare terminoContrato?: 'fijo' | 'obra_o_labor' | 'indefinido' | null
+  declare terminoContrato?: 'fijo' | 'obra_o_labor_determinada' | 'indefinido' | null
 
   @column()
   declare estado: 'activo' | 'inactivo'
@@ -72,6 +69,10 @@ export default class Contrato extends BaseModel {
 
   @column()
   declare centroCosto?: string | null
+
+  // ✅ NUEVO: columna salario (NOT NULL en DB)
+  @column({ columnName: 'salario' })
+  declare salario: number
 
   @column()
   declare epsId?: number | null
@@ -119,7 +120,6 @@ export default class Contrato extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
-  // Relaciones
   @hasMany(() => ContratoPaso)
   declare pasos: HasMany<typeof ContratoPaso>
 
@@ -132,7 +132,6 @@ export default class Contrato extends BaseModel {
   @hasMany(() => ContratoSalario)
   declare salarios: HasMany<typeof ContratoSalario>
 
-  // 👇 NUEVO: relación con cambios
   @hasMany(() => ContratoCambio, { foreignKey: 'contratoId' })
   declare cambios: HasMany<typeof ContratoCambio>
 }
