@@ -7,7 +7,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 export default class ContratoEventoController {
-  
+ 
   /**
    * Obtener todos los eventos de un contrato específico.
    */
@@ -39,7 +39,7 @@ export default class ContratoEventoController {
         size: '2mb',
         extnames: ['jpg', 'png', 'pdf'],
       })
-      
+     
       // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
       console.log('Payload recibido:', payload)
       // --- FIN DE LÍNEAS DE DEPURACIÓN ---
@@ -50,7 +50,7 @@ export default class ContratoEventoController {
         // --- FIN DE LÍNEAS DE DEPURACIÓN ---
         return response.badRequest({ message: 'Faltan campos requeridos: contratoId, tipo o fechaInicio.' })
       }
-      
+     
       const newEvento = new ContratoEvento()
 
       // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
@@ -62,11 +62,11 @@ export default class ContratoEventoController {
       newEvento.merge(payload)
       newEvento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
       newEvento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : undefined
-      
+     
       // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
       console.log('Objeto a guardar (antes de archivo):', newEvento)
       // Si usas relaciones precargadas en el modelo, podrías verlas aquí:
-      // console.log('Relaciones (si precargadas):', newEvento.related('contrato')); 
+      // console.log('Relaciones (si precargadas):', newEvento.related('contrato'));
       // --- FIN DE LÍNEAS DE DEPURACIÓN ---
 
       // 2. Manejar la subida de archivos
@@ -77,13 +77,13 @@ export default class ContratoEventoController {
             message: error.message,
           })
         }
-        
+       
         const uploadDir = `uploads/contratos/${contratoId}/eventos`
         const fileName = `${cuid()}.${documento.extname}`
-        
+       
         const destinationDir = path.join(app.publicPath(), uploadDir)
         await fs.mkdir(destinationDir, { recursive: true })
-        
+       
         await documento.move(destinationDir, { name: fileName })
         newEvento.documentoUrl = `/${uploadDir}/${fileName}`
       }
@@ -112,14 +112,14 @@ export default class ContratoEventoController {
     try {
       const evento = await ContratoEvento.findOrFail(params.id)
       const payload = request.only(['tipo', 'subtipo', 'fechaInicio', 'fechaFin', 'descripcion'])
-      
+     
       evento.merge(payload)
       evento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
       evento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : undefined
-      
+     
       // La lógica para actualizar el archivo adjunto es más compleja y se omite
       // Si el frontend envía un nuevo archivo, se debería eliminar el anterior
-      
+     
       await evento.save()
       return response.ok(evento)
     } catch (error) {
