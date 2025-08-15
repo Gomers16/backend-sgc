@@ -3,7 +3,7 @@ import { BaseSchema } from '@adonisjs/lucid/schema'
 export default class extends BaseSchema {
   protected tableName = 'contratos'
 
-  public async up () {
+  public async up() {
     // Idempotente: si quedó una tabla vieja, elimínala antes de crear
     await this.schema.dropTableIfExists(this.tableName)
 
@@ -61,7 +61,7 @@ export default class extends BaseSchema {
     `)
   }
 
-  public async down () {
+  public async down() {
     await this.schema.dropTableIfExists(this.tableName)
   }
 }

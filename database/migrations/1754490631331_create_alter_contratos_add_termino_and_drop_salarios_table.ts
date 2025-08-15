@@ -3,7 +3,7 @@ import { BaseSchema } from '@adonisjs/lucid/schema'
 export default class extends BaseSchema {
   protected tableName = 'contratos'
 
-  public async up () {
+  public async up() {
     // 👇 NO eliminamos salario; lo reafirmamos como NOT NULL (opcional, pero explícito)
     await this.schema.raw(`
       ALTER TABLE \`${this.tableName}\`
@@ -18,7 +18,7 @@ export default class extends BaseSchema {
     `)
   }
 
-  public async down () {
+  public async down() {
     // Dejamos el ENUM igual que en la creación (incluye 'aprendizaje')
     await this.schema.raw(`
       ALTER TABLE \`${this.tableName}\`

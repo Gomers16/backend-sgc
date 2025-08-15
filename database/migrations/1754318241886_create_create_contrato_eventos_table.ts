@@ -16,17 +16,19 @@ export default class extends BaseSchema {
         .inTable('contratos')
         .onDelete('CASCADE') // Si se elimina un contrato, se eliminan sus eventos
 
-      table.enum('tipo', [
-        'incapacidad',
-        'suspension',
-        'licencia',
-        'permiso',
-        'vacaciones',
-        'cesantias',
-        'disciplinario',
-        'terminacion'
-      ]).notNullable()
-      
+      table
+        .enum('tipo', [
+          'incapacidad',
+          'suspension',
+          'licencia',
+          'permiso',
+          'vacaciones',
+          'cesantias',
+          'disciplinario',
+          'terminacion',
+        ])
+        .notNullable()
+
       table.string('subtipo').nullable()
 
       table.date('fecha_inicio').notNullable()
