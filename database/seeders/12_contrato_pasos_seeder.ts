@@ -9,8 +9,16 @@ export default class ContratoPasoSeeder extends BaseSeeder {
     await ContratoPaso.query().delete()
 
     // Buscar IDs reales de los contratos por identificación
-    const contrato1 = await db.from('contratos').select('id').where('identificacion', '1020304050').first()
-    const contrato2 = await db.from('contratos').select('id').where('identificacion', '1098765432').first()
+    const contrato1 = await db
+      .from('contratos')
+      .select('id')
+      .where('identificacion', '1020304050')
+      .first()
+    const contrato2 = await db
+      .from('contratos')
+      .select('id')
+      .where('identificacion', '1098765432')
+      .first()
 
     if (!contrato1?.id || !contrato2?.id) {
       console.error('❌ No se encontraron los contratos requeridos para sembrar pasos.')

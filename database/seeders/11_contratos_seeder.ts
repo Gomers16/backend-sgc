@@ -65,7 +65,7 @@ export default class ContratosSeeder extends BaseSeeder {
       ccf_id: ccfEjemplo.id,
       tiene_recomendaciones_medicas: false,
       ruta_archivo_recomendacion_medica: null,
-      salario: 2500000,                    // ← requerido por NOT NULL
+      salario: 2500000, // ← requerido por NOT NULL
       created_at: now,
       updated_at: now,
     })
@@ -143,8 +143,9 @@ export default class ContratosSeeder extends BaseSeeder {
       afc_id: null,
       ccf_id: ccfEjemplo.id,
       tiene_recomendaciones_medicas: true,
-      ruta_archivo_recomendacion_medica: '/uploads/recomendaciones_medicas/ejemplo_recomendacion_medica.pdf',
-      salario: 1800000,                    // ← requerido por NOT NULL
+      ruta_archivo_recomendacion_medica:
+        '/uploads/recomendaciones_medicas/ejemplo_recomendacion_medica.pdf',
+      salario: 1800000, // ← requerido por NOT NULL
       created_at: now,
       updated_at: now,
     })
