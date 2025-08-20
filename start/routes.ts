@@ -113,7 +113,8 @@ router
       { path: 'razones-sociales', controller: '#controllers/razones_sociales_controller' },
       { path: 'sedes', controller: '#controllers/sedes_controller' },
       { path: 'cargos', controller: '#controllers/cargos_controller' },
-      { path: 'entidades-salud', controller: '#controllers/entidades_saluds_controller' },
+      // Listado de entidades de salud (PLURAL)
+      { path: 'entidades-saluds', controller: '#controllers/entidades_saluds_controller' },
     ]
 
     for (const { path, controller } of selectors) {
@@ -128,27 +129,34 @@ router
       return new Ctrl().usuarios(ctx)
     })
 
-    // === ENTIDADES DE SALUD: CERTIFICADO (nuevo) ===
-    // Subir/Reemplazar certificado, Descargar y Eliminar
-    router.post('/entidades-salud/:id/certificado', async (ctx) => {
-      const { default: EntidadesSaludController } = await import(
+    // === ENTIDADES DE SALUD: DETALLE (singular) ===
+    router.get('/entidades-salud/:id', async (ctx) => {
+      const { default: EntidadesSaludsController } = await import(
         '#controllers/entidades_saluds_controller'
       )
-      return new EntidadesSaludController().subirCertificado(ctx)
+      return new EntidadesSaludsController().show(ctx)
+    })
+
+    // === ENTIDADES DE SALUD: CERTIFICADO (singular) ===
+    router.post('/entidades-salud/:id/certificado', async (ctx) => {
+      const { default: EntidadesSaludsController } = await import(
+        '#controllers/entidades_saluds_controller'
+      )
+      return new EntidadesSaludsController().subirCertificado(ctx)
     })
 
     router.get('/entidades-salud/:id/certificado/download', async (ctx) => {
-      const { default: EntidadesSaludController } = await import(
+      const { default: EntidadesSaludsController } = await import(
         '#controllers/entidades_saluds_controller'
       )
-      return new EntidadesSaludController().descargarCertificado(ctx)
+      return new EntidadesSaludsController().descargarCertificado(ctx)
     })
 
     router.delete('/entidades-salud/:id/certificado', async (ctx) => {
-      const { default: EntidadesSaludController } = await import(
+      const { default: EntidadesSaludsController } = await import(
         '#controllers/entidades_saluds_controller'
       )
-      return new EntidadesSaludController().eliminarCertificado(ctx)
+      return new EntidadesSaludsController().eliminarCertificado(ctx)
     })
 
     // === CONTRATOS ===
@@ -194,7 +202,7 @@ router
       return new ContratosController().destroy(ctx)
     })
 
-    // ⬇️ NUEVA RUTA: descarga de archivo del contrato
+    // Descarga de archivo del contrato
     router.get('/contratos/:id/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().descargarArchivo(ctx)
@@ -281,7 +289,6 @@ router
           return new ContratoCambiosController().index(ctx)
         })
 
-        // (opcional) crear un registro manual de cambio
         router.post('/', async (ctx) => {
           const { default: ContratoCambiosController } = await import(
             '#controllers/contrato_cambios_controller'
@@ -291,7 +298,7 @@ router
       })
       .prefix('/contratos/:contratoId/cambios')
 
-    // === CONTRATO SALARIOS (coincide con tu frontend) ===
+    // === CONTRATO SALARIOS ===
     router.post('/contratos/:contratoId/salarios', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().storeSalario(ctx)

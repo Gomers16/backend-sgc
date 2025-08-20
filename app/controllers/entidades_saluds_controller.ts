@@ -1,6 +1,6 @@
 // app/controllers/entidades_salud_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
-import EntidadSalud from '#models/entidad_salud' // Importa el modelo EntidadSalud
+import EntidadSalud from '#models/entidad_salud'
 
 // ===== añadidos para gestionar archivo =====
 import fs from 'node:fs/promises'
@@ -24,11 +24,8 @@ export default class EntidadesSaludController {
         query = query.where('nombre', 'like', `%${name}%`)
       }
 
-      const entidades = await query.exec()
+      const entidades = await query
 
-      if (entidades.length === 0) {
-        return response.ok({ message: 'No se encontraron entidades de salud.', data: [] })
-      }
       return response.ok({
         message: 'Lista de entidades de salud obtenida exitosamente.',
         data: entidades,
@@ -54,8 +51,9 @@ export default class EntidadesSaludController {
           'id',
           'nombre',
           'tipo',
-          // ====== Opcional: exponer metadatos del certificado en show ======
+          // Metadatos del certificado
           'certificado_nombre_original',
+          'certificado_nombre_archivo',
           'certificado_mime',
           'certificado_tamanio',
           'certificado_fecha_emision',
@@ -63,16 +61,17 @@ export default class EntidadesSaludController {
         )
         .firstOrFail()
 
-      // Puedes incluir una URL de descarga si hay archivo
-      const data = entidad.serialize()
-      const tieneArchivo = !!data.certificadoNombreArchivo
+      // serialize() expondrá las props con el mapeo del modelo (camelCase)
+      const data = entidad.serialize() as any
+      const tieneArchivo =
+        !!data.certificadoNombreArchivo || !!data.certificado_nombre_archivo // por si algún mapeo no aplica
       const downloadUrl = tieneArchivo
         ? `/api/entidades-salud/${data.id}/certificado/download`
         : null
 
       return response.ok({
         message: 'Entidad de salud obtenida exitosamente.',
-        data: { ...data, certificadoDownloadUrl: downloadUrl },
+        data: { ...data, tieneArchivo, certificadoDownloadUrl: downloadUrl },
       })
     } catch (error: any) {
       console.error('Error al obtener entidad de salud por ID:', error)
@@ -104,11 +103,13 @@ export default class EntidadesSaludController {
       }
 
       const file = request.file('archivo')
-      if (!file || !file.tmpPath || !file.clientName || !file.headers) {
+      if (!file || !file.tmpPath || !file.clientName) {
         return response.badRequest({ message: 'No se envió un archivo válido.' })
       }
 
-      const mime = file.headers['content-type'] || 'application/octet-stream'
+      // MIME robusto: usa type/subtype de Adonis con fallback al header
+      const fromAdonis = file.type && file.subtype ? `${file.type}/${file.subtype}` : ''
+      const mime = fromAdonis || (file.headers?.['content-type'] as string) || 'application/octet-stream'
       const permitido = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
       if (!permitido.includes(mime)) {
         return response.badRequest({ message: 'Tipo de archivo no permitido.' })
@@ -123,7 +124,9 @@ export default class EntidadesSaludController {
         const anterior = path.join(baseDir, entidad.certificadoNombreArchivo)
         try {
           await fs.unlink(anterior)
-        } catch {}
+        } catch {
+          // si no existe, seguimos
+        }
       }
 
       const ext = path.extname(file.clientName) || ''
@@ -144,9 +147,7 @@ export default class EntidadesSaludController {
         certificadoMime: mime,
         certificadoTamanio: Number(tamanio),
         certificadoFechaEmision: fechaEmisionStr ? DateTime.fromISO(fechaEmisionStr) : null,
-        certificadoFechaExpiracion: fechaExpiracionStr
-          ? DateTime.fromISO(fechaExpiracionStr)
-          : null,
+        certificadoFechaExpiracion: fechaExpiracionStr ? DateTime.fromISO(fechaExpiracionStr) : null,
       })
 
       await entidad.save()
@@ -203,7 +204,9 @@ export default class EntidadesSaludController {
       response.header('Content-Type', entidad.certificadoMime || 'application/octet-stream')
       response.header(
         'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(entidad.certificadoNombreOriginal || 'certificado')}"`
+        `attachment; filename="${encodeURIComponent(
+          entidad.certificadoNombreOriginal || 'certificado'
+        )}"`
       )
       return response.download(filePath)
     } catch (error: any) {
@@ -237,7 +240,9 @@ export default class EntidadesSaludController {
       )
       try {
         await fs.unlink(filePath)
-      } catch {}
+      } catch {
+        // si ya no existe, continuamos igualmente
+      }
 
       entidad.merge({
         certificadoNombreOriginal: null,
