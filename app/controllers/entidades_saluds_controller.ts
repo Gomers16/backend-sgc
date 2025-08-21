@@ -1,37 +1,34 @@
-// app/controllers/entidades_salud_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import EntidadSalud from '#models/entidad_salud'
 
-// ===== añadidos para gestionar archivo =====
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import app from '@adonisjs/core/services/app'
-import { cuid } from '@adonisjs/core/helpers'
-import { DateTime } from 'luxon'
-// ==========================================
+const TIPOS_VALIDOS = ['eps', 'arl', 'afp', 'afc', 'ccf'] as const
+type TipoEntidad = (typeof TIPOS_VALIDOS)[number]
 
 export default class EntidadesSaludController {
   /**
-   * Obtener lista de entidades de salud para selectores (EPS, ARL, AFP, AFC, CCF).
-   * Permite buscar por nombre o mostrar todas.
+   * GET /entidades-salud?name=...&tipo=eps|arl|afp|afc|ccf
+   * Listado con filtro opcional por nombre y tipo.
    */
-  public async index({ response, request }: HttpContext) {
+  public async index({ request, response }: HttpContext) {
     try {
-      const { name } = request.qs()
+      const { name, tipo } = request.qs()
+
       let query = EntidadSalud.query().select('id', 'nombre', 'tipo').orderBy('nombre', 'asc')
 
       if (name) {
-        query = query.where('nombre', 'like', `%${name}%`)
+        query = query.where('nombre', 'like', `%${String(name)}%`)
+      }
+      if (tipo && TIPOS_VALIDOS.includes(String(tipo) as TipoEntidad)) {
+        query = query.where('tipo', String(tipo))
       }
 
       const entidades = await query
-
       return response.ok({
         message: 'Lista de entidades de salud obtenida exitosamente.',
         data: entidades,
       })
     } catch (error: any) {
-      console.error('Error al obtener entidades de salud:', error)
+      console.error('Error al listar entidades de salud:', error)
       return response.internalServerError({
         message: 'Error al obtener entidades de salud',
         error: error.message,
@@ -40,41 +37,22 @@ export default class EntidadesSaludController {
   }
 
   /**
-   * Obtener una entidad de salud por su ID.
+   * GET /entidades-salud/:id
+   * Detalle por ID.
    */
   public async show({ params, response }: HttpContext) {
     try {
-      const { id } = params
       const entidad = await EntidadSalud.query()
-        .where('id', id)
-        .select(
-          'id',
-          'nombre',
-          'tipo',
-          // Metadatos del certificado
-          'certificado_nombre_original',
-          'certificado_nombre_archivo',
-          'certificado_mime',
-          'certificado_tamanio',
-          'certificado_fecha_emision',
-          'certificado_fecha_expiracion'
-        )
+        .where('id', Number(params.id))
+        .select('id', 'nombre', 'tipo')
         .firstOrFail()
-
-      // serialize() expondrá las props con el mapeo del modelo (camelCase)
-      const data = entidad.serialize() as any
-      const tieneArchivo =
-        !!data.certificadoNombreArchivo || !!data.certificado_nombre_archivo // por si algún mapeo no aplica
-      const downloadUrl = tieneArchivo
-        ? `/api/entidades-salud/${data.id}/certificado/download`
-        : null
 
       return response.ok({
         message: 'Entidad de salud obtenida exitosamente.',
-        data: { ...data, tieneArchivo, certificadoDownloadUrl: downloadUrl },
+        data: entidad.serialize(),
       })
     } catch (error: any) {
-      console.error('Error al obtener entidad de salud por ID:', error)
+      console.error('Error al obtener entidad de salud:', error)
       if (error.code === 'E_ROW_NOT_FOUND') {
         return response.notFound({ message: 'Entidad de salud no encontrada.' })
       }
@@ -85,180 +63,119 @@ export default class EntidadesSaludController {
     }
   }
 
-  // ==========================================================
-  // =============== MÉTODOS NUEVOS (archivo) =================
-  // ==========================================================
-
   /**
-   * Subir/Reemplazar certificado de la entidad (1 archivo).
-   * Campos extra opcionales: fechaEmision (YYYY-MM-DD), fechaExpiracion (YYYY-MM-DD)
-   * Campo de archivo: "archivo"
+   * POST /entidades-salud
+   * Crea una nueva entidad del catálogo.
+   * Body: { nombre: string, tipo: 'eps'|'arl'|'afp'|'afc'|'ccf' }
+   * (Sin validator: validación mínima inline)
    */
-  public async subirCertificado({ params, request, response }: HttpContext) {
+  public async store({ request, response }: HttpContext) {
     try {
-      const entidadId = Number(params.id)
-      const entidad = await EntidadSalud.find(entidadId)
-      if (!entidad) {
-        return response.notFound({ message: 'Entidad de salud no encontrada.' })
+      const nombre = String(request.input('nombre') || '').trim()
+      const tipo = String(request.input('tipo') || '').trim() as TipoEntidad
+
+      if (!nombre) {
+        return response.badRequest({ message: 'El nombre es obligatorio.' })
+      }
+      if (!TIPOS_VALIDOS.includes(tipo)) {
+        return response.badRequest({ message: 'Tipo inválido.' })
       }
 
-      const file = request.file('archivo')
-      if (!file || !file.tmpPath || !file.clientName) {
-        return response.badRequest({ message: 'No se envió un archivo válido.' })
+      // Evitar duplicados por nombre+tipo (regla de negocio usual)
+      const existe = await EntidadSalud.query()
+        .where('nombre', nombre)
+        .andWhere('tipo', tipo)
+        .first()
+      if (existe) {
+        return response.conflict({ message: 'Ya existe una entidad con ese nombre y tipo.' })
       }
 
-      // MIME robusto: usa type/subtype de Adonis con fallback al header
-      const fromAdonis = file.type && file.subtype ? `${file.type}/${file.subtype}` : ''
-      const mime = fromAdonis || (file.headers?.['content-type'] as string) || 'application/octet-stream'
-      const permitido = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-      if (!permitido.includes(mime)) {
-        return response.badRequest({ message: 'Tipo de archivo no permitido.' })
-      }
-
-      // Carpeta destino: uploads/entidades_salud/<id>
-      const baseDir = app.makePath('uploads', 'entidades_salud', String(entidadId))
-      await fs.mkdir(baseDir, { recursive: true })
-
-      // Si ya había un archivo, eliminarlo para reemplazar
-      if (entidad.certificadoNombreArchivo) {
-        const anterior = path.join(baseDir, entidad.certificadoNombreArchivo)
-        try {
-          await fs.unlink(anterior)
-        } catch {
-          // si no existe, seguimos
-        }
-      }
-
-      const ext = path.extname(file.clientName) || ''
-      const nombreArchivo = `${cuid()}${ext}`
-      const destino = path.join(baseDir, nombreArchivo)
-      await fs.copyFile(file.tmpPath, destino)
-
-      const stat = await fs.stat(destino)
-      const tamanio = stat.size
-
-      // Fechas opcionales
-      const fechaEmisionStr = request.input('fechaEmision') as string | undefined
-      const fechaExpiracionStr = request.input('fechaExpiracion') as string | undefined
-
-      entidad.merge({
-        certificadoNombreOriginal: file.clientName,
-        certificadoNombreArchivo: nombreArchivo,
-        certificadoMime: mime,
-        certificadoTamanio: Number(tamanio),
-        certificadoFechaEmision: fechaEmisionStr ? DateTime.fromISO(fechaEmisionStr) : null,
-        certificadoFechaExpiracion: fechaExpiracionStr ? DateTime.fromISO(fechaExpiracionStr) : null,
-      })
-
-      await entidad.save()
-
+      const entidad = await EntidadSalud.create({ nombre, tipo })
       return response.created({
-        message: 'Certificado cargado correctamente.',
-        data: {
-          id: entidad.id,
-          nombre: entidad.nombre,
-          tipo: entidad.tipo,
-          certificadoNombreOriginal: entidad.certificadoNombreOriginal,
-          certificadoMime: entidad.certificadoMime,
-          certificadoTamanio: entidad.certificadoTamanio,
-          certificadoFechaEmision: entidad.certificadoFechaEmision,
-          certificadoFechaExpiracion: entidad.certificadoFechaExpiracion,
-          downloadUrl: `/api/entidades-salud/${entidad.id}/certificado/download`,
-        },
+        message: 'Entidad de salud creada correctamente.',
+        data: entidad.serialize(),
       })
     } catch (error: any) {
-      console.error('Error al subir certificado:', error)
+      console.error('Error al crear entidad de salud:', error)
       return response.internalServerError({
-        message: 'Error al subir certificado',
+        message: 'Error al crear entidad de salud',
         error: error.message,
       })
     }
   }
 
   /**
-   * Descargar certificado
+   * PUT /entidades-salud/:id
+   * Actualiza nombre y/o tipo.
+   * Body: { nombre?: string, tipo?: 'eps'|'arl'|'afp'|'afc'|'ccf' }
    */
-  public async descargarCertificado({ params, response }: HttpContext) {
+  public async update({ params, request, response }: HttpContext) {
     try {
-      const entidadId = Number(params.id)
-      const entidad = await EntidadSalud.find(entidadId)
+      const entidad = await EntidadSalud.find(Number(params.id))
       if (!entidad) {
         return response.notFound({ message: 'Entidad de salud no encontrada.' })
       }
-      if (!entidad.certificadoNombreArchivo) {
-        return response.notFound({ message: 'La entidad no tiene certificado cargado.' })
+
+      const nombre = request.input('nombre')
+      const tipo = request.input('tipo')
+
+      if (nombre !== undefined) {
+        const n = String(nombre).trim()
+        if (!n) return response.badRequest({ message: 'El nombre no puede estar vacío.' })
+        entidad.nombre = n
       }
 
-      const filePath = app.makePath(
-        'uploads',
-        'entidades_salud',
-        String(entidadId),
-        entidad.certificadoNombreArchivo
-      )
-      try {
-        await fs.access(filePath)
-      } catch {
-        return response.notFound({ message: 'Archivo de certificado no encontrado.' })
+      if (tipo !== undefined) {
+        const t = String(tipo).trim() as TipoEntidad
+        if (!TIPOS_VALIDOS.includes(t)) {
+          return response.badRequest({ message: 'Tipo inválido.' })
+        }
+        entidad.tipo = t
       }
 
-      response.header('Content-Type', entidad.certificadoMime || 'application/octet-stream')
-      response.header(
-        'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(
-          entidad.certificadoNombreOriginal || 'certificado'
-        )}"`
-      )
-      return response.download(filePath)
-    } catch (error: any) {
-      console.error('Error al descargar certificado:', error)
-      return response.internalServerError({
-        message: 'Error al descargar certificado',
-        error: error.message,
-      })
-    }
-  }
-
-  /**
-   * Eliminar certificado (borra archivo y limpia campos)
-   */
-  public async eliminarCertificado({ params, response }: HttpContext) {
-    try {
-      const entidadId = Number(params.id)
-      const entidad = await EntidadSalud.find(entidadId)
-      if (!entidad) {
-        return response.notFound({ message: 'Entidad de salud no encontrada.' })
-      }
-      if (!entidad.certificadoNombreArchivo) {
-        return response.badRequest({ message: 'La entidad no tiene certificado para eliminar.' })
+      // Verifica duplicado si cambiaron nombre o tipo
+      const duplicado = await EntidadSalud.query()
+        .where('nombre', entidad.nombre)
+        .andWhere('tipo', entidad.tipo)
+        .andWhereNot('id', entidad.id)
+        .first()
+      if (duplicado) {
+        return response.conflict({ message: 'Ya existe una entidad con ese nombre y tipo.' })
       }
 
-      const filePath = app.makePath(
-        'uploads',
-        'entidades_salud',
-        String(entidadId),
-        entidad.certificadoNombreArchivo
-      )
-      try {
-        await fs.unlink(filePath)
-      } catch {
-        // si ya no existe, continuamos igualmente
-      }
-
-      entidad.merge({
-        certificadoNombreOriginal: null,
-        certificadoNombreArchivo: null,
-        certificadoMime: null,
-        certificadoTamanio: null,
-        certificadoFechaEmision: null,
-        certificadoFechaExpiracion: null,
-      })
       await entidad.save()
 
-      return response.ok({ message: 'Certificado eliminado correctamente.' })
+      return response.ok({
+        message: 'Entidad de salud actualizada correctamente.',
+        data: entidad.serialize(),
+      })
     } catch (error: any) {
-      console.error('Error al eliminar certificado:', error)
+      console.error('Error al actualizar entidad de salud:', error)
       return response.internalServerError({
-        message: 'Error al eliminar certificado',
+        message: 'Error al actualizar entidad de salud',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * DELETE /entidades-salud/:id
+   * Elimina la entidad (ten en cuenta FKs en usuarios con ON DELETE SET NULL).
+   */
+  public async destroy({ params, response }: HttpContext) {
+    try {
+      const entidad = await EntidadSalud.find(Number(params.id))
+      if (!entidad) {
+        return response.notFound({ message: 'Entidad de salud no encontrada.' })
+      }
+
+      await entidad.delete()
+
+      return response.ok({ message: 'Entidad de salud eliminada correctamente.' })
+    } catch (error: any) {
+      console.error('Error al eliminar entidad de salud:', error)
+      return response.internalServerError({
+        message: 'Error al eliminar entidad de salud',
         error: error.message,
       })
     }

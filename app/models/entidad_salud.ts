@@ -1,10 +1,10 @@
 import { DateTime } from 'luxon'
 import { BaseModel, column, hasMany } from '@adonisjs/lucid/orm'
 import type { HasMany } from '@adonisjs/lucid/types/relations'
-import Usuario from './usuario.js'
+import Usuario from '#models/usuario'
 
 export default class EntidadSalud extends BaseModel {
-  public static table = 'entidades_salud' // ✅
+  public static table = 'entidades_salud'
 
   @column({ isPrimary: true })
   declare id: number
@@ -15,33 +15,13 @@ export default class EntidadSalud extends BaseModel {
   @column()
   declare tipo: 'eps' | 'arl' | 'afp' | 'afc' | 'ccf'
 
-  // ===== Campos de certificado (1 archivo por entidad) =====
-  @column()
-  declare certificadoNombreOriginal?: string | null
-
-  @column()
-  declare certificadoNombreArchivo?: string | null
-
-  @column()
-  declare certificadoMime?: string | null
-
-  @column()
-  declare certificadoTamanio?: number | null
-
-  @column.date()
-  declare certificadoFechaEmision?: DateTime | null
-
-  @column.date()
-  declare certificadoFechaExpiracion?: DateTime | null
-  // =========================================================
-
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
-  // Relaciones con usuarios
+  // Usuarios que referencian esta entidad por cada tipo
   @hasMany(() => Usuario, { foreignKey: 'eps_id' })
   declare usuariosEps: HasMany<typeof Usuario>
 

@@ -4,10 +4,9 @@ import { compose } from '@adonisjs/core/helpers'
 import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
 import { withAuthFinder } from '@adonisjs/auth/mixins/lucid'
 import { DbAccessTokensProvider } from '@adonisjs/auth/access_tokens'
-
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 
-// Importaciones de modelos relacionados
+// Modelos relacionados
 import Rol from '#models/rol'
 import RazonSocial from '#models/razon_social'
 import EntidadSalud from '#models/entidad_salud'
@@ -15,9 +14,9 @@ import Contrato from '#models/contrato'
 import Sede from '#models/sede'
 import Cargo from '#models/cargo'
 
-// Mezcla de autenticación con Finder (para login con correo)
+// Auth by email
 const AuthFinder = withAuthFinder(() => Hash.use('scrypt'), {
-  uids: ['correo'], // El usuario se autentica por su correo
+  uids: ['correo'],
   passwordColumnName: 'password',
 })
 
@@ -25,10 +24,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   public static table = 'usuarios'
 
   @column({ isPrimary: true })
-  declare id: number // Este es el ID primario que usarás para relacionar todo
-
-  // ❌ LA COLUMNA 'authId' SE HA ELIMINADO DE AQUÍ.
-  //    ASEGÚRATE DE QUE TAMBIÉN SE HAYA ELIMINADO DE LA MIGRACIÓN DE CREACIÓN DE LA TABLA.
+  declare id: number
 
   @column()
   declare razonSocialId: number
@@ -51,23 +47,23 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare correo: string
 
-  @column({ serializeAs: null }) // La contraseña no se serializa en las respuestas
+  @column({ serializeAs: null })
   declare password: string
 
   @column()
-  declare fotoPerfil?: string // Campo opcional
+  declare fotoPerfil?: string
 
   @column()
-  declare direccion?: string // Campo opcional
+  declare direccion?: string
 
   @column()
-  declare celularPersonal?: string // Campo opcional
+  declare celularPersonal?: string
 
   @column()
-  declare celularCorporativo?: string // Campo opcional
+  declare celularCorporativo?: string
 
   @column()
-  declare centroCosto?: string // Campo opcional
+  declare centroCosto?: string
 
   @column()
   declare estado: 'activo' | 'inactivo'
@@ -75,7 +71,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare recomendaciones: boolean
 
-  // IDs de entidades de salud
+  // FKs a entidades_salud (1 por tipo)
   @column()
   declare epsId: number
 
@@ -91,6 +87,39 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare ccfId: number
 
+  // ===== Archivos por afiliación =====
+  @column() declare epsDocPath?: string | null
+  @column() declare epsDocNombre?: string | null
+  @column() declare epsDocMime?: string | null
+  @column() declare epsDocSize?: number | null
+
+  @column() declare arlDocPath?: string | null
+  @column() declare arlDocNombre?: string | null
+  @column() declare arlDocMime?: string | null
+  @column() declare arlDocSize?: number | null
+
+  @column() declare afpDocPath?: string | null
+  @column() declare afpDocNombre?: string | null
+  @column() declare afpDocMime?: string | null
+  @column() declare afpDocSize?: number | null
+
+  @column() declare afcDocPath?: string | null
+  @column() declare afcDocNombre?: string | null
+  @column() declare afcDocMime?: string | null
+  @column() declare afcDocSize?: number | null
+
+  @column() declare ccfDocPath?: string | null
+  @column() declare ccfDocNombre?: string | null
+  @column() declare ccfDocMime?: string | null
+  @column() declare ccfDocSize?: number | null
+
+  // ===== Recomendaciones médicas =====
+  @column() declare recomendacionMedica?: string | null
+  @column() declare recoMedDocPath?: string | null
+  @column() declare recoMedDocNombre?: string | null
+  @column() declare recoMedDocMime?: string | null
+  @column() declare recoMedDocSize?: number | null
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
@@ -98,7 +127,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   declare updatedAt: DateTime
 
   @column.dateTime()
-  declare deletedAt: DateTime | null // Para Soft Deletes
+  declare deletedAt: DateTime | null
 
   // Relaciones (BelongsTo)
   @belongsTo(() => RazonSocial)
@@ -129,12 +158,10 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   declare ccf: BelongsTo<typeof EntidadSalud>
 
   // Relación (HasMany)
-  @hasMany(() => Contrato, {
-    foreignKey: 'usuarioId', // ✅ ¡Esta es la clave! Define explícitamente la clave foránea
-  })
+  @hasMany(() => Contrato, { foreignKey: 'usuarioId' })
   declare contratos: HasMany<typeof Contrato>
 
-  // Configuración de Tokens de Acceso (usa el ID primario por defecto para relacionar)
+  // Tokens
   static accessTokens = DbAccessTokensProvider.forModel(Usuario, {
     expiresIn: '30 days',
     prefix: 'oat_',

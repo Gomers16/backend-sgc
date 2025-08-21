@@ -107,6 +107,34 @@ router
       return new UsuariosController().uploadProfilePicture(ctx)
     })
 
+    // --- NUEVO: Anexos por afiliación (EPS/ARL/AFP/AFC/CCF) ---
+    router.post('/usuarios/:id/afiliacion/:tipo/archivo', async (ctx) => {
+      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+      return new UsuariosController().uploadAfiliacionFile(ctx)
+    })
+    router.get('/usuarios/:id/afiliacion/:tipo/archivo', async (ctx) => {
+      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+      return new UsuariosController().getAfiliacionFile(ctx)
+    })
+    router.delete('/usuarios/:id/afiliacion/:tipo/archivo', async (ctx) => {
+      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+      return new UsuariosController().deleteAfiliacionFile(ctx)
+    })
+
+    // --- NUEVO: Recomendación médica (texto + archivo) ---
+    router.put('/usuarios/:id/recomendacion-medica', async (ctx) => {
+      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+      return new UsuariosController().upsertRecomendacionMedica(ctx)
+    })
+    router.post('/usuarios/:id/recomendacion-medica/archivo', async (ctx) => {
+      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+      return new UsuariosController().uploadRecomendacionMedicaFile(ctx)
+    })
+    router.delete('/usuarios/:id/recomendacion-medica/archivo', async (ctx) => {
+      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+      return new UsuariosController().deleteRecomendacionMedicaFile(ctx)
+    })
+
     // === SELECTORES ===
     const selectors = [
       { path: 'roles', controller: '#controllers/roles_controller' },
@@ -137,27 +165,8 @@ router
       return new EntidadesSaludsController().show(ctx)
     })
 
-    // === ENTIDADES DE SALUD: CERTIFICADO (singular) ===
-    router.post('/entidades-salud/:id/certificado', async (ctx) => {
-      const { default: EntidadesSaludsController } = await import(
-        '#controllers/entidades_saluds_controller'
-      )
-      return new EntidadesSaludsController().subirCertificado(ctx)
-    })
-
-    router.get('/entidades-salud/:id/certificado/download', async (ctx) => {
-      const { default: EntidadesSaludsController } = await import(
-        '#controllers/entidades_saluds_controller'
-      )
-      return new EntidadesSaludsController().descargarCertificado(ctx)
-    })
-
-    router.delete('/entidades-salud/:id/certificado', async (ctx) => {
-      const { default: EntidadesSaludsController } = await import(
-        '#controllers/entidades_saluds_controller'
-      )
-      return new EntidadesSaludsController().eliminarCertificado(ctx)
-    })
+    // ✂️ Se eliminan rutas de certificados en entidades de salud
+    // (ya no hay manejo de archivos en entidades)
 
     // === CONTRATOS ===
     router.get('/contratos', async (ctx) => {
