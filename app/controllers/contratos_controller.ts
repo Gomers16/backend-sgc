@@ -851,7 +851,7 @@ export default class ContratosController {
         await ContratoHistorialEstado.create(
           {
             contratoId: contrato.id,
-            usuarioId: actorId,
+            usuarioId: this.getActorId(ctx),
             oldEstado,
             newEstado: contrato.estado,
             fechaCambio: DateTime.now(),
@@ -935,16 +935,16 @@ export default class ContratosController {
       }> = []
 
       const vinoEnPayloadFor = (campo: string) => {
-        if (campo === 'salarioBasico') return sbSent
-        if (campo === 'bonoSalarial') return bsSent
-        if (campo === 'auxilioTransporte') return atSent
-        if (campo === 'auxilioNoSalarial') return ansSent
+        if (campo === 'salarioBasico') return Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
+        if (campo === 'bonoSalarial') return Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
+        if (campo === 'auxilioTransporte') return Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
+        if (campo === 'auxilioNoSalarial') return Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
         if (campo === 'tieneRecomendacionesMedicas') return Object.prototype.hasOwnProperty.call(raw, 'tieneRecomendacionesMedicas')
         if (campo === 'fechaTerminacion') return (
-            Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
-            Object.prototype.hasOwnProperty.call(raw, 'fechaFin') ||
-            Object.prototype.hasOwnProperty.call(raw, 'fechaFinalizacion')
-          )
+          Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
+          Object.prototype.hasOwnProperty.call(raw, 'fechaFin') ||
+          Object.prototype.hasOwnProperty.call(raw, 'fechaFinalizacion')
+        )
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
@@ -1162,7 +1162,7 @@ export default class ContratosController {
   }
 
   /* =========================
-     DESCARGA DE ARCHIVO (NUEVO)
+     DESCARGA DE ARCHIVO CONTRATO
   ========================= */
   public async descargarArchivo({ params, response }: HttpContext) {
     const contrato = await Contrato.findOrFail(params.id)
@@ -1187,5 +1187,177 @@ export default class ContratosController {
     response.header('Content-Disposition', `attachment; filename="${fileName}"`)
 
     return response.stream(createReadStream(absPath))
+  }
+
+  /* ==========================================================
+     NUEVO: Recomendación Médica por Contrato (CRUD de archivo)
+     Rutas sugeridas:
+       GET    /api/contratos/:id/recomendacion/archivo
+       POST   /api/contratos/:id/recomendacion/archivo
+       DELETE /api/contratos/:id/recomendacion/archivo
+       GET    /api/contratos/:id/recomendacion/descargar
+  ========================================================== */
+
+  /** GET meta para el modal (¿hay archivo?, url/nombre/mime/size) */
+  public async getRecomendacionMedicaMeta({ params, response }: HttpContext) {
+    try {
+      const contrato = await Contrato.findOrFail(params.id)
+
+      const relativo = contrato.rutaArchivoRecomendacionMedica || null
+      if (!relativo) {
+        return response.ok({
+          contratoId: contrato.id,
+          tieneArchivo: false,
+          data: null,
+        })
+      }
+
+      const absPath = path.join(app.publicPath(), relativo.replace(/^\//, ''))
+      if (!existsSync(absPath)) {
+        // Si la ruta quedó huérfana, limpiamos la columna para no confundir la UI
+        contrato.merge({ rutaArchivoRecomendacionMedica: null })
+        await contrato.save()
+        return response.ok({
+          contratoId: contrato.id,
+          tieneArchivo: false,
+          data: null,
+        })
+      }
+
+      const st = statSync(absPath)
+      const fileName = path.basename(absPath)
+      const contentType = (mime.lookup(absPath) as string) || 'application/octet-stream'
+
+      return response.ok({
+        contratoId: contrato.id,
+        tieneArchivo: true,
+        data: {
+          url: relativo,               // relativo público (sirve para abrir/descargar directo)
+          nombreOriginal: fileName,    // mostramos esto en el modal
+          mime: contentType,
+          size: st.size,
+        },
+      })
+    } catch (error: any) {
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      console.error('Error al obtener meta de recomendación médica:', error)
+      return response.internalServerError({ message: 'Error al obtener meta de recomendación médica', error: error.message })
+    }
+  }
+
+  /** POST subir/reemplazar archivo de recomendación médica */
+  public async subirRecomendacionMedica({ params, request, response }: HttpContext) {
+    try {
+      const contrato = await Contrato.findOrFail(params.id)
+
+      const archivo = request.file('archivo', {
+        size: '10mb',
+        extnames: ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp'],
+      })
+      if (!archivo || !archivo.isValid) {
+        throw new Error(archivo?.errors?.[0]?.message || 'Archivo de recomendación inválido o no adjunto.')
+      }
+
+      // Eliminar anterior si existe
+      if (contrato.rutaArchivoRecomendacionMedica) {
+        try {
+          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+        } catch (e: any) {
+          if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación anterior:', e)
+        }
+      }
+
+      // Guardar nuevo
+      const dir = 'uploads/recomendaciones_medicas'
+      const name = `${cuid()}_${archivo.clientName}`
+      const absDir = path.join(app.publicPath(), dir)
+      await fs.mkdir(absDir, { recursive: true })
+      await archivo.move(absDir, { name })
+
+      contrato.merge({
+        tieneRecomendacionesMedicas: true,
+        rutaArchivoRecomendacionMedica: `/${dir}/${name}`,
+      })
+      await contrato.save()
+
+      const absPath = path.join(absDir, name)
+      const st = statSync(absPath)
+      const contentType = (mime.lookup(absPath) as string) || 'application/octet-stream'
+
+      return response.ok({
+        contratoId: contrato.id,
+        tieneArchivo: true,
+        data: {
+          url: `/${dir}/${name}`,
+          nombreOriginal: name,
+          mime: contentType,
+          size: st.size,
+        },
+      })
+    } catch (error: any) {
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      console.error('Error al subir recomendación médica:', error)
+      return response.internalServerError({ message: 'Error al subir recomendación médica', error: error.message })
+    }
+  }
+
+  /** DELETE eliminar archivo de recomendación médica */
+  public async eliminarRecomendacionMedica({ params, response }: HttpContext) {
+    try {
+      const contrato = await Contrato.findOrFail(params.id)
+
+      if (contrato.rutaArchivoRecomendacionMedica) {
+        try {
+          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+        } catch (e: any) {
+          if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo de recomendación:', e)
+        }
+      }
+
+      contrato.merge({
+        rutaArchivoRecomendacionMedica: null,
+        tieneRecomendacionesMedicas: false,
+      })
+      await contrato.save()
+
+      return response.ok({ message: 'Archivo de recomendación médica eliminado.' })
+    } catch (error: any) {
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      console.error('Error al eliminar recomendación médica:', error)
+      return response.internalServerError({ message: 'Error al eliminar recomendación médica', error: error.message })
+    }
+  }
+
+  /** GET descarga directa del archivo de recomendación médica */
+  public async descargarRecomendacionMedica({ params, response }: HttpContext) {
+    try {
+      const contrato = await Contrato.findOrFail(params.id)
+      const relativo = contrato.rutaArchivoRecomendacionMedica
+      if (!relativo) {
+        return response.notFound({ message: 'El contrato no tiene archivo de recomendación médica.' })
+      }
+
+      const absPath = path.join(app.publicPath(), relativo.replace(/^\//, ''))
+      if (!existsSync(absPath)) {
+        return response.notFound({ message: 'Archivo de recomendación no existe' })
+      }
+
+      const st = statSync(absPath)
+      const contentType = (mime.lookup(absPath) as string) || 'application/octet-stream'
+      const fileName = path.basename(absPath)
+
+      response.header('Content-Type', contentType)
+      response.header('Content-Length', String(st.size))
+      response.header('Content-Disposition', `attachment; filename="${fileName}"`)
+
+      return response.stream(createReadStream(absPath))
+    } catch (error: any) {
+      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      console.error('Error al descargar recomendación médica:', error)
+      return response.internalServerError({
+        message: 'Error al descargar recomendación médica',
+        error: error.message,
+      })
+    }
   }
 }

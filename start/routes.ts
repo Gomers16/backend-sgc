@@ -217,6 +217,27 @@ router
       return new ContratosController().descargarArchivo(ctx)
     })
 
+    // --- NUEVO: Recomendación médica por contrato (archivo) ---
+    router.get('/contratos/:id/recomendacion/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().getRecomendacionMedicaMeta(ctx)
+    })
+
+    router.post('/contratos/:id/recomendacion/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().subirRecomendacionMedica(ctx)
+    })
+
+    router.delete('/contratos/:id/recomendacion/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().eliminarRecomendacionMedica(ctx)
+    })
+
+    router.get('/contratos/:id/recomendacion/descargar', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().descargarRecomendacionMedica(ctx)
+    })
+
     // === CONTRATO PASOS ===
     router
       .group(() => {
