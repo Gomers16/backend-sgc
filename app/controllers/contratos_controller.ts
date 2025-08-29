@@ -62,7 +62,10 @@ export default class ContratosController {
     const fromHeader = Number(request.header('x-actor-id'))
     const fromBody = Number(request.input('actorId') ?? request.input('usuarioId'))
     return (
-      fromAuth ?? (Number.isFinite(fromHeader) ? fromHeader : null) ?? (Number.isFinite(fromBody) ? fromBody : null) ?? null
+      fromAuth ??
+      (Number.isFinite(fromHeader) ? fromHeader : null) ??
+      (Number.isFinite(fromBody) ? fromBody : null) ??
+      null
     )
   }
 
@@ -121,8 +124,7 @@ export default class ContratosController {
   }
 
   // === NUEVO: normalización y validación de 'terminoContrato' por tipo ===
-  private normTerm = (v?: string | null) =>
-    v === 'obra_o_labor' ? 'obra_o_labor_determinada' : (v ?? null)
+  private normTerm = (v?: string | null) => (v === 'obra_o_labor' ? 'obra_o_labor_determinada' : v ?? null)
 
   private allowedTerminosByTipo: Record<TipoContrato, string[]> = {
     prestacion: ['fijo', 'obra_o_labor_determinada'],
@@ -134,7 +136,7 @@ export default class ContratosController {
   private assertTerminoParaTipo(tipo: TipoContrato, termino: string | null) {
     const allowed = this.allowedTerminosByTipo[tipo]
     if (!termino) {
-      if (tipo === 'laboral') return // laboral admite default indefinido si viene vacío
+      if (tipo === 'laboral') return
       throw new Error(`'terminoContrato' es obligatorio para tipo '${tipo}'.`)
     }
     if (!allowed.includes(termino)) {
@@ -200,7 +202,11 @@ export default class ContratosController {
     })
   }
 
-  private async logArchivoEliminado(contrato: Contrato, viejo: { nombre: string; url: string } | null, by: number | null) {
+  private async logArchivoEliminado(
+    contrato: Contrato,
+    viejo: { nombre: string; url: string } | null,
+    by: number | null
+  ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
       usuarioId: contrato.usuarioId,
@@ -221,7 +227,7 @@ export default class ContratosController {
     contrato: Contrato,
     oldMeta: { nombre: string; url: string } | null,
     newMeta: { nombre: string; url: string } | null,
-    by: number | null,
+    by: number | null
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
@@ -249,7 +255,7 @@ export default class ContratosController {
 
   private static readonly TIPOS_AFILIACION = ['eps', 'arl', 'afp', 'afc', 'ccf'] as const
 
-  private camposAfiContrato(tipo: typeof ContratosController.TIPOS_AFILIACION[number]) {
+  private camposAfiContrato(tipo: (typeof ContratosController.TIPOS_AFILIACION)[number]) {
     return {
       path: `${tipo}DocPath` as const,
       nombre: `${tipo}DocNombre` as const,
@@ -282,7 +288,11 @@ export default class ContratosController {
   ============================ */
 
   private async getContratoPrioritario(usuarioId: number): Promise<Contrato | null> {
-    const activo = await Contrato.query().where('usuarioId', usuarioId).where('estado', 'activo' as Estado).orderBy('fechaInicio', 'desc').first()
+    const activo = await Contrato.query()
+      .where('usuarioId', usuarioId)
+      .where('estado', 'activo' as Estado)
+      .orderBy('fechaInicio', 'desc')
+      .first()
     if (activo) return activo
 
     const masReciente = await Contrato.query().where('usuarioId', usuarioId).orderBy('fechaInicio', 'desc').first()
@@ -430,7 +440,9 @@ export default class ContratosController {
 
       if (this.requiresEndDate(tipo, terminoEff) && !aliasFechaTerm) {
         await trx.rollback()
-        return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para el tipo de contrato enviado." })
+        return response.badRequest({
+          message: "La 'fechaTerminacion' es obligatoria para el tipo de contrato enviado.",
+        })
       }
 
       const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
@@ -463,7 +475,11 @@ export default class ContratosController {
       // pasos
       let pasosRecibidos: any[] = []
       if (Array.isArray(pasos)) pasosRecibidos = pasos
-      else if (typeof pasos === 'string' && pasos.trim()) { try { pasosRecibidos = JSON.parse(pasos) } catch {} }
+      else if (typeof pasos === 'string' && pasos.trim()) {
+        try {
+          pasosRecibidos = JSON.parse(pasos)
+        } catch {}
+      }
 
       const pasosParaGuardar: any[] = []
       if (Array.isArray(pasosRecibidos)) {
@@ -482,10 +498,11 @@ export default class ContratosController {
       }
       if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
 
+      // 🔴 Historial: usar actorId (no contrato.usuarioId)
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
+          usuarioId: actorId ?? null,
           oldEstado: 'inactivo',
           newEstado: 'activo',
           fechaCambio: DateTime.now(),
@@ -526,9 +543,7 @@ export default class ContratosController {
 
       // Helpers locales para validar PDF por MIME y tamaño
       const getContentType = (file: any): string => {
-        return (file?.type && file?.subtype)
-          ? `${file.type}/${file.subtype}`
-          : (file?.headers?.['content-type'] as string) || ''
+        return file?.type && file?.subtype ? `${file.type}/${file.subtype}` : (file?.headers?.['content-type'] as string) || ''
       }
 
       const ensurePdfOrThrow = (file: any, maxBytes: number) => {
@@ -584,17 +599,12 @@ export default class ContratosController {
         await contrato.save({ client: trx })
 
         // Log del cambio del archivo físico
-        await this.logContratoFisicoCambio(
-          contrato,
-          oldMeta,
-          { nombre: fileName, url: `/${uploadDir}/${fileName}` },
-          actorId
-        )
+        await this.logContratoFisicoCambio(contrato, oldMeta, { nombre: fileName, url: `/${uploadDir}/${fileName}` }, actorId)
         await this.logContratoFisicoObservacion(contrato, observacionArchivo, actorId)
 
         // RECOMENDACIÓN MÉDICA (opcional) -> SOLO 'archivoRecomendacionMedica'
         const tieneRecRaw = request.input('tieneRecomendacionesMedicas')
-        const tieneRec = (tieneRecRaw === true) || (String(tieneRecRaw).toLowerCase() === 'true')
+        const tieneRec = tieneRecRaw === true || String(tieneRecRaw).toLowerCase() === 'true'
 
         if (tieneRec) {
           const archivoRec = request.file('archivoRecomendacionMedica', {
@@ -620,12 +630,7 @@ export default class ContratosController {
 
           // log
           if (oldMetaRec) {
-            await this.logArchivoReemplazado(
-              contrato,
-              oldMetaRec,
-              { nombre: recName, url: `/${recDir}/${recName}` },
-              actorId
-            )
+            await this.logArchivoReemplazado(contrato, oldMetaRec, { nombre: recName, url: `/${recDir}/${recName}` }, actorId)
           } else {
             await this.logArchivoSubido(contrato, recName, `/${recDir}/${recName}`, actorId)
           }
@@ -746,7 +751,7 @@ export default class ContratosController {
 
       // RECOMENDACIÓN (opcional) -> SOLO 'archivoRecomendacionMedica'
       const tieneRecRaw = tieneRecomendacionesMedicas
-      const tieneRec = (tieneRecRaw === true) || (String(tieneRecRaw).toLowerCase() === 'true')
+      const tieneRec = tieneRecRaw === true || String(tieneRecRaw).toLowerCase() === 'true'
       if (tieneRec) {
         const archivoRecomendacion = request.file('archivoRecomendacionMedica', {
           size: '10mb',
@@ -772,7 +777,11 @@ export default class ContratosController {
       // pasos
       let pasosRecibidos: any[] = []
       if (Array.isArray(pasos)) pasosRecibidos = pasos
-      else if (typeof pasos === 'string' && pasos.trim()) { try { pasosRecibidos = JSON.parse(pasos) } catch {} }
+      else if (typeof pasos === 'string' && pasos.trim()) {
+        try {
+          pasosRecibidos = JSON.parse(pasos)
+        } catch {}
+      }
 
       const pasosParaGuardar: any[] = []
       if (Array.isArray(pasosRecibidos)) {
@@ -791,10 +800,11 @@ export default class ContratosController {
       }
       if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
 
+      // 🔴 Historial: usar actorId (no contrato.usuarioId)
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
+          usuarioId: actorId ?? null,
           oldEstado: 'inactivo',
           newEstado: 'activo',
           fechaCambio: DateTime.now(),
@@ -892,7 +902,6 @@ export default class ContratosController {
         'auxilioNoSalarial',
         'tieneRecomendacionesMedicas',
         'razonSocialId',
-        // NUEVO: bandera para borrar recomendación desde update
         'eliminarRecomendacionMedica',
       ])
 
@@ -917,7 +926,8 @@ export default class ContratosController {
         contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day').toUTC()
       }
 
-      const fechaTermDef = aliasFechaTerm !== undefined ? this.toDateTime(aliasFechaTerm) : (contrato.fechaTerminacion ?? null)
+      const fechaTermDef =
+        aliasFechaTerm !== undefined ? this.toDateTime(aliasFechaTerm) : contrato.fechaTerminacion ?? null
 
       if (this.requiresEndDate(tipoEff, terminoEff) && !fechaTermDef) {
         await trx.rollback()
@@ -926,13 +936,7 @@ export default class ContratosController {
         })
       }
 
-      const {
-        salarioBasico,
-        bonoSalarial,
-        auxilioTransporte,
-        auxilioNoSalarial,
-        ...contratoPayload
-      } = payload
+      const { salarioBasico, bonoSalarial, auxilioTransporte, auxilioNoSalarial, ...contratoPayload } = payload
 
       // Aseguramos persistir el término validado
       ;(contratoPayload as any).terminoContrato = terminoEff
@@ -960,21 +964,29 @@ export default class ContratosController {
       }
 
       // ===== Procesar salarios si alguno vino en payload =====
-      const sbRaw  = salarioBasico
-      const bsRaw  = bonoSalarial
-      const atRaw  = auxilioTransporte
+      const sbRaw = salarioBasico
+      const bsRaw = bonoSalarial
+      const atRaw = auxilioTransporte
       const ansRaw = auxilioNoSalarial
 
-      const sbSent  = Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
-      const bsSent  = Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
-      const atSent  = Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
+      const sbSent = Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
+      const bsSent = Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
+      const atSent = Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
       const ansSent = Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
 
       const salarioFueEnviado = sbSent || bsSent || atSent || ansSent
-      let nuevoSalario: { salarioBasico: number; bonoSalarial: number; auxilioTransporte: number; auxilioNoSalarial: number } | null = null
+      let nuevoSalario:
+        | { salarioBasico: number; bonoSalarial: number; auxilioTransporte: number; auxilioNoSalarial: number }
+        | null = null
 
       if (salarioFueEnviado) {
-        const base = currentSalario || { salarioBasico: contrato.salario ?? 0, bonoSalarial: 0, auxilioTransporte: 0, auxilioNoSalarial: 0 }
+        const base =
+          currentSalario || {
+            salarioBasico: contrato.salario ?? 0,
+            bonoSalarial: 0,
+            auxilioTransporte: 0,
+            auxilioNoSalarial: 0,
+          }
         const toNumberOr = (v: any, fallback: number) => {
           if (v === undefined || v === '' || v === null) return fallback
           const n = Number(v)
@@ -982,16 +994,16 @@ export default class ContratosController {
         }
 
         const nuevo = {
-          salarioBasico:     toNumberOr(sbRaw,  base.salarioBasico),
-          bonoSalarial:      toNumberOr(bsRaw,  base.bonoSalarial),
-          auxilioTransporte: toNumberOr(atRaw,  base.auxilioTransporte),
+          salarioBasico: toNumberOr(sbRaw, base.salarioBasico),
+          bonoSalarial: toNumberOr(bsRaw, base.bonoSalarial),
+          auxilioTransporte: toNumberOr(atRaw, base.auxilioTransporte),
           auxilioNoSalarial: toNumberOr(ansRaw, base.auxilioNoSalarial),
         }
 
         const hayCambio =
           !currentSalario ||
-          currentSalario.salarioBasico     !== nuevo.salarioBasico ||
-          currentSalario.bonoSalarial      !== nuevo.bonoSalarial ||
+          currentSalario.salarioBasico !== nuevo.salarioBasico ||
+          currentSalario.bonoSalarial !== nuevo.bonoSalarial ||
           currentSalario.auxilioTransporte !== nuevo.auxilioTransporte ||
           currentSalario.auxilioNoSalarial !== nuevo.auxilioNoSalarial
 
@@ -1001,7 +1013,10 @@ export default class ContratosController {
             currentSalario.merge({ ...nuevo, fechaEfectiva: DateTime.now() })
             await currentSalario.save({ client: trx })
           } else {
-            await ContratoSalario.create({ contratoId: contrato.id, ...nuevo, fechaEfectiva: DateTime.now() }, { client: trx })
+            await ContratoSalario.create(
+              { contratoId: contrato.id, ...nuevo, fechaEfectiva: DateTime.now() },
+              { client: trx }
+            )
           }
 
           if (sbSent) {
@@ -1013,10 +1028,11 @@ export default class ContratosController {
 
       if (oldEstado !== contrato.estado) {
         const fechaInicioHist = this.toDateTime(contrato.fechaInicio)
+        // 🔴 Historial: usar actorId (no contrato.usuarioId)
         await ContratoHistorialEstado.create(
           {
             contratoId: contrato.id,
-            usuarioId: contrato.usuarioId,
+            usuarioId: actorId ?? null,
             oldEstado,
             newEstado: contrato.estado,
             fechaCambio: DateTime.now(),
@@ -1048,31 +1064,59 @@ export default class ContratosController {
         estado: contrato.estado,
         motivoFinalizacion: contrato.motivoFinalizacion ?? null,
         tieneRecomendacionesMedicas: this.toBoolOrNull((contrato as any).tieneRecomendacionesMedicas),
-        salarioBasico: nuevoSalario ? nuevoSalario.salarioBasico : (currentSalario?.salarioBasico ?? null),
-        bonoSalarial: nuevoSalario ? nuevoSalario.bonoSalarial : (currentSalario?.bonoSalarial ?? null),
-        auxilioTransporte: nuevoSalario ? nuevoSalario.auxilioTransporte : (currentSalario?.auxilioTransporte ?? null),
-        auxilioNoSalarial: nuevoSalario ? nuevoSalario.auxilioNoSalarial : (currentSalario?.auxilioNoSalarial ?? null),
+        salarioBasico: nuevoSalario ? nuevoSalario.salarioBasico : currentSalario?.salarioBasico ?? null,
+        bonoSalarial: nuevoSalario ? nuevoSalario.bonoSalarial : currentSalario?.bonoSalarial ?? null,
+        auxilioTransporte: nuevoSalario ? nuevoSalario.auxilioTransporte : currentSalario?.auxilioTransporte ?? null,
+        auxilioNoSalarial: nuevoSalario ? nuevoSalario.auxilioNoSalarial : currentSalario?.auxilioNoSalarial ?? null,
       }
 
       const camposTrackeables: (keyof typeof after)[] = [
-        'razonSocialId','sedeId','cargoId','funcionesCargo','tipoContrato','terminoContrato','fechaInicio','fechaTerminacion',
-        'periodoPrueba','horarioTrabajo','centroCosto','epsId','arlId','afpId','afcId','ccfId','estado',
-        'motivoFinalizacion','tieneRecomendacionesMedicas','salarioBasico','bonoSalarial','auxilioTransporte','auxilioNoSalarial',
+        'razonSocialId',
+        'sedeId',
+        'cargoId',
+        'funcionesCargo',
+        'tipoContrato',
+        'terminoContrato',
+        'fechaInicio',
+        'fechaTerminacion',
+        'periodoPrueba',
+        'horarioTrabajo',
+        'centroCosto',
+        'epsId',
+        'arlId',
+        'afpId',
+        'afcId',
+        'ccfId',
+        'estado',
+        'motivoFinalizacion',
+        'tieneRecomendacionesMedicas',
+        'salarioBasico',
+        'bonoSalarial',
+        'auxilioTransporte',
+        'auxilioNoSalarial',
       ]
 
-      const cambios: Array<{ contratoId: number; usuarioId: number | null; campo: string; oldValue: any; newValue: any }> = []
+      const cambios: Array<{
+        contratoId: number
+        usuarioId: number | null
+        campo: string
+        oldValue: any
+        newValue: any
+      }> = []
 
       const vinoEnPayloadFor = (campo: string) => {
         if (campo === 'salarioBasico') return Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
         if (campo === 'bonoSalarial') return Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
         if (campo === 'auxilioTransporte') return Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
         if (campo === 'auxilioNoSalarial') return Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
-        if (campo === 'fechaTerminacion') return (
-          Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
-          Object.prototype.hasOwnProperty.call(raw, 'fechaFin') ||
-          Object.prototype.hasOwnProperty.call(raw, 'fechaFinalizacion')
-        )
-        if (campo === 'tieneRecomendacionesMedicas') return Object.prototype.hasOwnProperty.call(raw, 'tieneRecomendacionesMedicas')
+        if (campo === 'fechaTerminacion')
+          return (
+            Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
+            Object.prototype.hasOwnProperty.call(raw, 'fechaFin') ||
+            Object.prototype.hasOwnProperty.call(raw, 'fechaFinalizacion')
+          )
+        if (campo === 'tieneRecomendacionesMedicas')
+          return Object.prototype.hasOwnProperty.call(raw, 'tieneRecomendacionesMedicas')
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
@@ -1111,6 +1155,8 @@ export default class ContratosController {
       return response.internalServerError({ message: 'Error al actualizar contrato', error: error.message })
     }
   }
+  /* (continúa en el Bloque 2/2) */
+
   /* =========================
      Actualizar SOLO archivo de recomendación (reemplazo)
   ========================= */
@@ -1490,9 +1536,9 @@ export default class ContratosController {
       await contrato.save()
 
       if (oldMeta) {
-        await this.logArchivoReemplazado(contrato, oldMeta, { nombre: name, url: `/${dir}/${name}` }, (request as any)?.auth?.user?.id ?? null)
+        await this.logArchivoReemplazado(contrato, oldMeta, { nombre: name, url: `/${dir}/${name}` }, actorId)
       } else {
-        await this.logArchivoSubido(contrato, name, `/${dir}/${name}`, (request as any)?.auth?.user?.id ?? null)
+        await this.logArchivoSubido(contrato, name, `/${dir}/${name}`, actorId)
       }
 
       const absPath = path.join(absDir, name)
