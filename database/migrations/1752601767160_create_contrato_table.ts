@@ -38,6 +38,37 @@ export default class extends BaseSchema {
       table.boolean('tiene_recomendaciones_medicas').defaultTo(false)
       table.string('ruta_archivo_recomendacion_medica', 255).nullable()
 
+      // ===== Archivos por afiliación (por CONTRATO) =====
+      // EPS
+      table.string('eps_doc_path', 255).nullable()
+      table.string('eps_doc_nombre', 255).nullable()
+      table.string('eps_doc_mime', 100).nullable()
+      table.bigInteger('eps_doc_size').nullable()
+
+      // ARL
+      table.string('arl_doc_path', 255).nullable()
+      table.string('arl_doc_nombre', 255).nullable()
+      table.string('arl_doc_mime', 100).nullable()
+      table.bigInteger('arl_doc_size').nullable()
+
+      // AFP
+      table.string('afp_doc_path', 255).nullable()
+      table.string('afp_doc_nombre', 255).nullable()
+      table.string('afp_doc_mime', 100).nullable()
+      table.bigInteger('afp_doc_size').nullable()
+
+      // AFC
+      table.string('afc_doc_path', 255).nullable()
+      table.string('afc_doc_nombre', 255).nullable()
+      table.string('afc_doc_mime', 100).nullable()
+      table.bigInteger('afc_doc_size').nullable()
+
+      // CCF
+      table.string('ccf_doc_path', 255).nullable()
+      table.string('ccf_doc_nombre', 255).nullable()
+      table.string('ccf_doc_mime', 100).nullable()
+      table.bigInteger('ccf_doc_size').nullable()
+
       // Claves foráneas (IDs sin FK explícitas)
       table.integer('usuario_id').unsigned().notNullable()
       table.integer('sede_id').unsigned().notNullable()

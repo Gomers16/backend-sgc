@@ -7,13 +7,33 @@ import { cuid } from '@adonisjs/core/helpers'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+/* ===== Helpers rutas/ids ===== */
+function buildUploadDir(contratoId: number) {
+  return `uploads/contratos/${contratoId}/eventos`
+}
+function toRelativePublicPath(p: string) {
+  return p.replace(/^[\\/]+/, '')
+}
+function resolvePublicPathFromUrl(urlOrPath: string) {
+  const rel = toRelativePublicPath(urlOrPath)
+  return path.join(app.publicPath(), rel)
+}
+function toIntOrNull(v: any): number | null {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 export default class ContratoEventoController {
   /**
-   * Obtener todos los eventos de un contrato específico.
+   * GET /api/contratos/:contratoId/eventos
    */
   public async index({ params, response }: HttpContext) {
     try {
-      const eventos = await ContratoEvento.query().where('contrato_id', params.contratoId)
+      const eventos = await ContratoEvento.query()
+        .where('contrato_id', params.contratoId)
+        .preload('usuario', (q) => q.select(['id', 'nombres', 'apellidos', 'correo']))
+        .orderBy('created_at', 'desc')
+
       return response.ok(eventos)
     } catch (error) {
       console.error('Error al obtener eventos del contrato:', error)
@@ -22,102 +42,133 @@ export default class ContratoEventoController {
   }
 
   /**
-   * Crear un nuevo evento para un contrato.
+   * POST /api/contratos/:contratoId/eventos
+   * Acepta JSON o multipart/form-data (campo de archivo: "documento")
+   * Lee el actor desde: auth.user.id -> body.actorId -> header x-actor-id
    */
-  public async store({ request, response, params }: HttpContext) {
-    const contratoIdParam = params.contratoId
-
-    // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
-    console.log('--- INICIANDO CONTROLEVENTS.STORE ---');
-    console.log('Contrato ID:', contratoIdParam);
-    // --- FIN DE LÍNEAS DE DEPURACIÓN ---
-
+  public async store({ request, response, params, auth }: HttpContext) {
     try {
-      // 1. Obtener los datos del formulario, incluyendo el archivo
+      const { contratoId } = params
       const payload = request.only(['tipo', 'subtipo', 'fechaInicio', 'fechaFin', 'descripcion'])
-      const documento = request.file('documento', { size: '2mb', extnames: ['jpg', 'png', 'pdf'] })
 
-      // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
-      console.log('Payload recibido:', payload);
-      // --- FIN DE LÍNEAS DE DEPURACIÓN ---
+      const actorId =
+        toIntOrNull(auth?.user?.id) ??
+        toIntOrNull(request.input('actorId')) ??
+        toIntOrNull(request.header('x-actor-id')) ??
+        null
 
-      if (!contratoIdParam || !payload.tipo || !payload.fechaInicio) {
-        // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
-        console.log('Error: Payload incompleto');
-        // --- FIN DE LÍNEAS DE DEPURACIÓN ---
-        return response.badRequest({
-          message: 'Faltan campos requeridos: contratoId, tipo o fechaInicio.',
-        })
+      const documento = request.file('documento', {
+        size: '5mb',
+        extnames: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+      })
+
+      if (!contratoId || !payload.tipo || !payload.fechaInicio) {
+        return response.badRequest({ message: 'Faltan campos requeridos: contratoId, tipo o fechaInicio.' })
       }
 
-      const contratoId = Number(contratoIdParam)
+      const evento = new ContratoEvento()
+      evento.contratoId = Number(contratoId)
+      evento.usuarioId = actorId ?? null // nunca undefined
+      evento.tipo = String(payload.tipo).toLowerCase() as any
+      evento.subtipo = (payload.subtipo ?? '').trim() || null
+      evento.descripcion = (payload.descripcion ?? '').trim() || null
+      evento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
+      evento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : null
 
-      const newEvento = new ContratoEvento()
-
-      // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
-      console.log('Instancia creada:', newEvento);
-      console.log(
-        'newEvento es una instancia de ContratoEvento:',
-        newEvento instanceof ContratoEvento
-      ); // --- FIN DE LÍNEAS DE DEPURACIÓN ---
-
-      newEvento.contratoId = contratoId
-      newEvento.merge(payload)
-      newEvento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
-      newEvento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : undefined
-
-      // 2. Manejar la subida de archivos
       if (documento) {
         if (!documento.isValid) {
           const error = documento.errors[0]
-          return response.badRequest({
-            message: error.message,
-          })
+          return response.badRequest({ message: error.message })
         }
-
-        const uploadDir = `uploads/contratos/${contratoId}/eventos`
-        const fileName = `${cuid()}.${documento.extname}`
+        const uploadDir = buildUploadDir(evento.contratoId)
         const destinationDir = path.join(app.publicPath(), uploadDir)
-
+        const fileName = `${cuid()}.${documento.extname}`
         await fs.mkdir(destinationDir, { recursive: true })
         await documento.move(destinationDir, { name: fileName })
-
-        newEvento.documentoUrl = `/${uploadDir}/${fileName}`
+        evento.documentoUrl = `/${uploadDir}/${fileName}`
       }
 
-      // 3. Guardar el nuevo evento en la base de datos
-      await newEvento.save()
+      await evento.save()
 
-      // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
-      console.log('¡Evento guardado con éxito!');
-      // --- FIN DE LÍNEAS DE DEPURACIÓN ---
+      // Precargar usuario solo si existe FK
+      if (evento.usuarioId) {
+        await evento.load('usuario', (q) => q.select(['id', 'nombres', 'apellidos', 'correo']))
+      }
 
-      return response.created(newEvento)
+      return response.created(evento)
     } catch (error) {
-      // --- INICIO DE LÍNEAS DE DEPURACIÓN ---
-      console.log('Error capturado en el try-catch:', error);
-      // --- FIN DE LÍNEAS DE DEPURACIÓN ---
       console.error('Error al crear evento de contrato:', error)
       return response.internalServerError({ message: 'Error al crear evento de contrato' })
     }
   }
 
   /**
-   * Actualizar un evento existente.
+   * PUT /api/contratos/:contratoId/eventos/:id
+   * PATCH /api/contratos/:contratoId/eventos/:id  (opcional)
+   * Solo actualiza usuarioId si llega actor; si no, conserva el existente.
    */
-  public async update({ params, request, response }: HttpContext) {
+  public async update({ params, request, response, auth }: HttpContext) {
     try {
       const evento = await ContratoEvento.findOrFail(params.id)
       const payload = request.only(['tipo', 'subtipo', 'fechaInicio', 'fechaFin', 'descripcion'])
 
-      evento.merge(payload)
-      evento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
-      evento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : undefined
+      const actorId =
+        toIntOrNull(auth?.user?.id) ??
+        toIntOrNull(request.input('actorId')) ??
+        toIntOrNull(request.header('x-actor-id')) ??
+        null
 
-      // La lógica para actualizar el archivo adjunto es más compleja y se omite
-      // Si el frontend envía un nuevo archivo, se debería eliminar el anterior
+      const nuevoArchivo = request.file('documento', {
+        size: '5mb',
+        extnames: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+      })
+
+      // Campos básicos
+      if (payload.tipo) evento.tipo = String(payload.tipo).toLowerCase() as any
+      if (payload.subtipo !== undefined) evento.subtipo = (payload.subtipo ?? '').trim() || null
+      if (payload.descripcion !== undefined) evento.descripcion = (payload.descripcion ?? '').trim() || null
+      if (payload.fechaInicio) evento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
+      if (payload.fechaFin !== undefined) evento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : null
+
+      // Mantener el usuario si no llega actorId; si llega, actualizar
+      if (actorId !== null) {
+        evento.usuarioId = actorId
+      } else if (evento.usuarioId === undefined) {
+        evento.usuarioId = null
+      }
+
+      // Reemplazo de archivo (si llega)
+      if (nuevoArchivo) {
+        if (!nuevoArchivo.isValid) {
+          const error = nuevoArchivo.errors[0]
+          return response.badRequest({ message: error.message })
+        }
+
+        // eliminar anterior si existe
+        if (evento.documentoUrl) {
+          try {
+            const oldPath = resolvePublicPathFromUrl(evento.documentoUrl)
+            await fs.unlink(oldPath)
+          } catch (e: any) {
+            if (e.code !== 'ENOENT') console.error('No se pudo eliminar el archivo anterior:', e)
+          }
+        }
+
+        const uploadDir = buildUploadDir(evento.contratoId)
+        const destinationDir = path.join(app.publicPath(), uploadDir)
+        const fileName = `${cuid()}.${nuevoArchivo.extname}`
+        await fs.mkdir(destinationDir, { recursive: true })
+        await nuevoArchivo.move(destinationDir, { name: fileName })
+        evento.documentoUrl = `/${uploadDir}/${fileName}`
+      }
 
       await evento.save()
+
+      // Preload del usuario solo si hay FK
+      if (evento.usuarioId) {
+        await evento.load('usuario', (q) => q.select(['id', 'nombres', 'apellidos', 'correo']))
+      }
+
       return response.ok(evento)
     } catch (error) {
       console.error('Error al actualizar evento de contrato:', error)
@@ -129,21 +180,18 @@ export default class ContratoEventoController {
   }
 
   /**
-   * Eliminar un evento.
+   * DELETE /api/contratos/:contratoId/eventos/:id
    */
   public async destroy({ params, response }: HttpContext) {
     try {
       const evento = await ContratoEvento.findOrFail(params.id)
 
-      // Lógica para eliminar el archivo si existe
       if (evento.documentoUrl) {
-        const filePath = path.join(app.publicPath(), evento.documentoUrl)
+        const filePath = resolvePublicPathFromUrl(evento.documentoUrl)
         try {
           await fs.unlink(filePath)
-        } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') {
-            console.error('Error al eliminar archivo adjunto:', unlinkError)
-          }
+        } catch (e: any) {
+          if (e.code !== 'ENOENT') console.error('Error al eliminar archivo adjunto:', e)
         }
       }
 

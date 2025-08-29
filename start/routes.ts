@@ -107,34 +107,6 @@ router
       return new UsuariosController().uploadProfilePicture(ctx)
     })
 
-    // --- NUEVO: Anexos por afiliación (EPS/ARL/AFP/AFC/CCF) ---
-    router.post('/usuarios/:id/afiliacion/:tipo/archivo', async (ctx) => {
-      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().uploadAfiliacionFile(ctx)
-    })
-    router.get('/usuarios/:id/afiliacion/:tipo/archivo', async (ctx) => {
-      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().getAfiliacionFile(ctx)
-    })
-    router.delete('/usuarios/:id/afiliacion/:tipo/archivo', async (ctx) => {
-      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().deleteAfiliacionFile(ctx)
-    })
-
-    // --- NUEVO: Recomendación médica (texto + archivo) ---
-    router.put('/usuarios/:id/recomendacion-medica', async (ctx) => {
-      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().upsertRecomendacionMedica(ctx)
-    })
-    router.post('/usuarios/:id/recomendacion-medica/archivo', async (ctx) => {
-      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().uploadRecomendacionMedicaFile(ctx)
-    })
-    router.delete('/usuarios/:id/recomendacion-medica/archivo', async (ctx) => {
-      const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-      return new UsuariosController().deleteRecomendacionMedicaFile(ctx)
-    })
-
     // === SELECTORES ===
     const selectors = [
       { path: 'roles', controller: '#controllers/roles_controller' },
@@ -164,9 +136,6 @@ router
       )
       return new EntidadesSaludsController().show(ctx)
     })
-
-    // ✂️ Se eliminan rutas de certificados en entidades de salud
-    // (ya no hay manejo de archivos en entidades)
 
     // === CONTRATOS ===
     router.get('/contratos', async (ctx) => {
@@ -216,8 +185,18 @@ router
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().descargarArchivo(ctx)
     })
+    // Meta del archivo del contrato
+    router.get('/contratos/:id/archivo/meta', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().getArchivoContratoMeta(ctx)
+    })
+    // Eliminar SOLO el archivo del contrato (no el contrato)
+    router.delete('/contratos/:id/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().eliminarArchivoContrato(ctx)
+    })
 
-    // --- NUEVO: Recomendación médica por contrato (archivo) ---
+    // --- Recomendación médica por contrato (archivo) ---
     router.get('/contratos/:id/recomendacion/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getRecomendacionMedicaMeta(ctx)
@@ -238,9 +217,24 @@ router
       return new ContratosController().descargarRecomendacionMedica(ctx)
     })
 
+    // --- Archivos por afiliación (EPS/ARL/AFP/AFC/CCF) por CONTRATO ---
+    router.get('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().getAfiliacionArchivo(ctx)
+    })
+    router.post('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().subirAfiliacionArchivo(ctx)
+    })
+    router.delete('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().eliminarAfiliacionArchivo(ctx)
+    })
+
     // === CONTRATO PASOS ===
     router
       .group(() => {
+        // Listar pasos del contrato (admite ?fase=...)
         router.get('/', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -248,6 +242,7 @@ router
           return new ContratoPasosController().index(ctx)
         })
 
+        // Crear paso (con archivo opcional en campo 'archivo')
         router.post('/', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -255,6 +250,15 @@ router
           return new ContratoPasosController().store(ctx)
         })
 
+        // Obtener un paso puntual por ID
+        router.get('/:id', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().show(ctx)
+        })
+
+        // Actualizar paso (reemplaza/borrar archivo con 'archivo' o 'clearArchivo=true')
         router.put('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -262,6 +266,7 @@ router
           return new ContratoPasosController().update(ctx)
         })
 
+        // Eliminar paso (borra también el archivo si existe)
         router.delete('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -269,10 +274,7 @@ router
           return new ContratoPasosController().destroy(ctx)
         })
 
-        router.post('/:pasoId/recomendacion-medica', async (ctx) => {
-          const { default: ContratosController } = await import('#controllers/contratos_controller')
-          return new ContratosController().uploadRecomendacionMedica(ctx)
-        })
+        // (Eliminada la ruta confusa de recomendación por paso)
       })
       .prefix('/contratos/:contratoId/pasos')
 
@@ -332,6 +334,11 @@ router
     router.post('/contratos/:contratoId/salarios', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().storeSalario(ctx)
+    })
+    // (opcional, por si quieres listar el histórico)
+    router.get('/contratos/:contratoId/salarios', async (ctx) => {
+      const { default: ContratosController } = await import('#controllers/contratos_controller')
+      return new ContratosController().listSalarios(ctx)
     })
   })
   .prefix('/api')

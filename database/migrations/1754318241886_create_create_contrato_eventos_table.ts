@@ -1,20 +1,19 @@
-// Crea un nuevo archivo de migración con el siguiente comando:
-// node ace make:migration create_contrato_eventos_table
-
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
-  protected tableName = 'contrato_eventos' // Un nombre claro para la tabla
+  protected tableName = 'contrato_eventos'
 
-  async up() {
+  public async up() {
     this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
+
       table
         .integer('contrato_id')
         .unsigned()
+        .notNullable()
         .references('id')
         .inTable('contratos')
-        .onDelete('CASCADE') // Si se elimina un contrato, se eliminan sus eventos
+        .onDelete('CASCADE')
 
       table
         .enum('tipo', [
@@ -33,16 +32,32 @@ export default class extends BaseSchema {
 
       table.date('fecha_inicio').notNullable()
       table.date('fecha_fin').nullable()
-      table.text('descripcion').nullable()
 
+      table.text('descripcion').nullable()
       table.string('documento_url').nullable()
 
-      table.timestamp('created_at').notNullable()
-      table.timestamp('updated_at').notNullable()
+      // Quién creó/modificó el evento (nullable)
+      table
+        .integer('usuario_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('usuarios')
+        .onDelete('SET NULL')
+
+      // Timestamps con valor por defecto
+      table.timestamp('created_at').notNullable().defaultTo(this.now())
+      table.timestamp('updated_at').notNullable().defaultTo(this.now())
+
+      // Índices útiles
+      table.index(['contrato_id'])
+      table.index(['usuario_id'])
+      table.index(['tipo'])
+      table.index(['fecha_inicio'])
     })
   }
 
-  async down() {
+  public async down() {
     this.schema.dropTable(this.tableName)
   }
 }

@@ -69,43 +69,8 @@ export default class extends BaseSchema {
       table.enum('estado', ['activo', 'inactivo']).defaultTo('activo').notNullable()
       table.boolean('recomendaciones').defaultTo(false).notNullable()
 
-      // ===== Archivos por afiliación (1 archivo por tipo) =====
-      // EPS
-      table.string('eps_doc_path', 255).nullable()
-      table.string('eps_doc_nombre', 255).nullable()
-      table.string('eps_doc_mime', 100).nullable()
-      table.bigInteger('eps_doc_size').nullable()
-
-      // ARL
-      table.string('arl_doc_path', 255).nullable()
-      table.string('arl_doc_nombre', 255).nullable()
-      table.string('arl_doc_mime', 100).nullable()
-      table.bigInteger('arl_doc_size').nullable()
-
-      // AFP
-      table.string('afp_doc_path', 255).nullable()
-      table.string('afp_doc_nombre', 255).nullable()
-      table.string('afp_doc_mime', 100).nullable()
-      table.bigInteger('afp_doc_size').nullable()
-
-      // AFC
-      table.string('afc_doc_path', 255).nullable()
-      table.string('afc_doc_nombre', 255).nullable()
-      table.string('afc_doc_mime', 100).nullable()
-      table.bigInteger('afc_doc_size').nullable()
-
-      // CCF
-      table.string('ccf_doc_path', 255).nullable()
-      table.string('ccf_doc_nombre', 255).nullable()
-      table.string('ccf_doc_mime', 100).nullable()
-      table.bigInteger('ccf_doc_size').nullable()
-
-      // ===== Recomendaciones médicas (texto + 1 archivo soporte opcional) =====
-      table.text('recomendacion_medica').nullable()
-      table.string('reco_med_doc_path', 255).nullable()
-      table.string('reco_med_doc_nombre', 255).nullable()
-      table.string('reco_med_doc_mime', 100).nullable()
-      table.bigInteger('reco_med_doc_size').nullable()
+      // 🚨 Quitamos: columnas de archivos de afiliación (eps_doc_*, arl_doc_*, etc.)
+      // 🚨 Quitamos: columnas de recomendación médica (recomendacion_medica, reco_med_doc_*)
 
       table.timestamp('created_at', { useTz: true }).notNullable()
       table.timestamp('updated_at', { useTz: true }).notNullable()

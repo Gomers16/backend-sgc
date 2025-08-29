@@ -71,7 +71,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare recomendaciones: boolean
 
-  // FKs a entidades_salud (1 por tipo)
+  // FKs a entidades_salud (uno por tipo)
   @column()
   declare epsId: number
 
@@ -87,38 +87,8 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare ccfId: number
 
-  // ===== Archivos por afiliación =====
-  @column() declare epsDocPath?: string | null
-  @column() declare epsDocNombre?: string | null
-  @column() declare epsDocMime?: string | null
-  @column() declare epsDocSize?: number | null
-
-  @column() declare arlDocPath?: string | null
-  @column() declare arlDocNombre?: string | null
-  @column() declare arlDocMime?: string | null
-  @column() declare arlDocSize?: number | null
-
-  @column() declare afpDocPath?: string | null
-  @column() declare afpDocNombre?: string | null
-  @column() declare afpDocMime?: string | null
-  @column() declare afpDocSize?: number | null
-
-  @column() declare afcDocPath?: string | null
-  @column() declare afcDocNombre?: string | null
-  @column() declare afcDocMime?: string | null
-  @column() declare afcDocSize?: number | null
-
-  @column() declare ccfDocPath?: string | null
-  @column() declare ccfDocNombre?: string | null
-  @column() declare ccfDocMime?: string | null
-  @column() declare ccfDocSize?: number | null
-
-  // ===== Recomendaciones médicas =====
-  @column() declare recomendacionMedica?: string | null
-  @column() declare recoMedDocPath?: string | null
-  @column() declare recoMedDocNombre?: string | null
-  @column() declare recoMedDocMime?: string | null
-  @column() declare recoMedDocSize?: number | null
+  // ⛔️ Eliminado: campos de archivos por afiliación (epsDoc*, arlDoc*, afpDoc*, afcDoc*, ccfDoc*)
+  // ⛔️ Eliminado: recomendación médica y su archivo (recomendacionMedica, recoMedDoc*)
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime

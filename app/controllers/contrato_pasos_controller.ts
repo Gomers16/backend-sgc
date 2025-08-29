@@ -9,6 +9,11 @@ import { DateTime } from 'luxon'
 
 type FasePaso = 'inicio' | 'desarrollo' | 'fin'
 
+const ALLOWED_EXTS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'] as const
+const MAX_FILE_SIZE = '10mb' as const
+
+const USER_SELECT = ['id', 'nombres', 'apellidos', 'correo'] as const
+
 function toBoolean(val: unknown): boolean | undefined {
   if (val === undefined || val === null || val === '') return undefined
   if (typeof val === 'boolean') return val
@@ -24,17 +29,49 @@ function toNumber(val: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
+function toIntOrNull(val: unknown): number | null {
+  if (val === undefined || val === null || val === '') return null
+  const n = Number(val)
+  return Number.isFinite(n) ? n : null
+}
+
+function isValidPhase(f?: string): f is FasePaso {
+  return !!f && ['inicio', 'desarrollo', 'fin'].includes(f)
+}
+
+function resolveActorId(ctx: HttpContext): number | null {
+  const { auth, request } = ctx
+
+  // Prioridad: auth.user.id → body.actorId → header x-actor-id
+  const fromAuth = (auth as any)?.user?.id
+  if (fromAuth != null) return Number(fromAuth)
+
+  const fromBody = toIntOrNull(request.input('actorId'))
+  if (fromBody) return fromBody
+
+  const fromHeader = toIntOrNull(request.header('x-actor-id'))
+  return fromHeader
+}
+
+async function safeUnlink(absPath: string) {
+  try {
+    await fs.unlink(absPath)
+  } catch (e: any) {
+    if (e?.code !== 'ENOENT') {
+      console.error('Error al eliminar archivo:', e)
+    }
+  }
+}
+
 export default class ContratoPasosController {
   /**
    * Listar pasos del contrato
-   * GET /api/contratos/:contratoId/pasos
-   * Admite ?fase=inicio|desarrollo|fin
+   * GET /api/contratos/:contratoId/pasos?fase=inicio|desarrollo|fin
    */
   public async index({ params, request, response }: HttpContext) {
     try {
       const contratoIdParam = params.contratoId
       const contratoId = contratoIdParam ? Number(contratoIdParam) : undefined
-
       const { fase } = request.qs() as { fase?: string }
 
       const query = ContratoPaso.query()
@@ -43,16 +80,23 @@ export default class ContratoPasosController {
         query.where('contrato_id', Number(contratoId))
       }
 
-      if (fase) {
-        const f = String(fase).toLowerCase()
-        if (['inicio', 'desarrollo', 'fin'].includes(f)) {
-          query.where('fase', f as FasePaso)
-        }
+      if (fase && isValidPhase(String(fase).toLowerCase())) {
+        query.where('fase', String(fase).toLowerCase() as FasePaso)
       }
 
-      const pasos = await query.orderBy('fase', 'asc').orderBy('orden', 'asc').orderBy('id', 'asc')
+      const pasos = await query
+        .orderByRaw(`
+          CASE fase
+            WHEN 'inicio' THEN 1
+            WHEN 'desarrollo' THEN 2
+            WHEN 'fin' THEN 3
+            ELSE 4
+          END
+        `)
+        .orderBy('orden', 'asc')
+        .orderBy('id', 'asc')
+        .preload('usuario', (q) => q.select(USER_SELECT)) // ✅ incluir usuario
 
-      // Lucid ya serializa correctamente (incluye fecha como ISO y camelCase si lo definiste en el modelo)
       return response.ok(pasos)
     } catch (error: any) {
       console.error('Error al obtener pasos de contrato:', error)
@@ -69,7 +113,11 @@ export default class ContratoPasosController {
    */
   public async show({ params, response }: HttpContext) {
     try {
-      const paso = await ContratoPaso.findOrFail(params.id)
+      const paso = await ContratoPaso.query()
+        .where('id', params.id)
+        .preload('usuario', (q) => q.select(USER_SELECT)) // ✅ incluir usuario
+        .firstOrFail()
+
       return response.ok(paso)
     } catch (error: any) {
       console.error('Error al obtener paso de contrato por ID:', error)
@@ -88,7 +136,9 @@ export default class ContratoPasosController {
    * POST /api/contratos/:contratoId/pasos
    * (acepta archivo opcional en campo 'archivo')
    */
-  public async store({ params, request, response }: HttpContext) {
+  public async store(ctx: HttpContext) {
+    const { params, request, response } = ctx
+
     const contratoIdParam = params.contratoId ? Number(params.contratoId) : undefined
     const body = request.only([
       'contratoId',
@@ -98,6 +148,7 @@ export default class ContratoPasosController {
       'observacion',
       'orden',
       'completado',
+      'actorId', // opcional
     ])
 
     const contratoId = contratoIdParam ?? (body.contratoId ? Number(body.contratoId) : undefined)
@@ -113,16 +164,27 @@ export default class ContratoPasosController {
     if (!nombrePaso) {
       return response.badRequest({ message: 'El nombrePaso es obligatorio.' })
     }
-    if (!['inicio', 'desarrollo', 'fin'].includes(fase)) {
+    if (!isValidPhase(fase)) {
       return response.badRequest({ message: "La fase debe ser 'inicio', 'desarrollo' o 'fin'." })
     }
 
     const archivoPaso = request.file('archivo', {
-      extnames: ['pdf', 'jpg', 'jpeg', 'png'],
-      size: '5mb',
+      extnames: [...ALLOWED_EXTS],
+      size: MAX_FILE_SIZE,
     })
 
     try {
+      // Si no llega 'orden', asignar el siguiente dentro de esa fase
+      let ordenFinal = orden
+      if (ordenFinal == null) {
+        const last = await ContratoPaso.query()
+          .where('contrato_id', contratoId)
+          .where('fase', fase)
+          .orderBy('orden', 'desc')
+          .first()
+        ordenFinal = ((last?.orden as number | undefined) ?? 0) + 1
+      }
+
       let archivoUrl: string | undefined
 
       if (archivoPaso) {
@@ -147,17 +209,24 @@ export default class ContratoPasosController {
         archivoUrl = `/${uploadDir}/${fileName}`
       }
 
+      // Resolver actor y setear usuarioId (nunca undefined)
+      const actorId = resolveActorId(ctx)
+      const usuarioId = actorId ?? null
+
       const paso = await ContratoPaso.create({
         contratoId,
         fase,
         nombrePaso,
         observacion: body.observacion || undefined,
-        orden: orden ?? undefined,
+        orden: ordenFinal!,
         fecha: fechaISO ? DateTime.fromISO(fechaISO) : undefined,
         completado: completado ?? false,
         archivoUrl,
+        usuarioId,
       })
 
+      // Responder con usuario precargado (si existe)
+      await paso.load('usuario', (q) => q.select(USER_SELECT))
       return response.created(paso)
     } catch (error: any) {
       console.error('Error al crear paso de contrato:', error)
@@ -174,7 +243,8 @@ export default class ContratoPasosController {
    * - Soporta reemplazar archivo (campo 'archivo')
    * - Soporta borrar archivo con 'clearArchivo=true'
    */
-  public async update({ params, request, response }: HttpContext) {
+  public async update(ctx: HttpContext) {
+    const { params, request, response } = ctx
     try {
       const paso = await ContratoPaso.findOrFail(params.id)
 
@@ -186,6 +256,7 @@ export default class ContratoPasosController {
         'orden',
         'completado',
         'clearArchivo',
+        'actorId', // opcional
       ])
       const fase = body.fase ? (String(body.fase).toLowerCase() as FasePaso) : undefined
       const nombrePaso = body.nombrePaso ? String(body.nombrePaso).trim() : undefined
@@ -195,8 +266,8 @@ export default class ContratoPasosController {
       const clearArchivo = toBoolean(body.clearArchivo) === true
 
       const archivoPaso = request.file('archivo', {
-        extnames: ['pdf', 'jpg', 'jpeg', 'png'],
-        size: '5mb',
+        extnames: [...ALLOWED_EXTS],
+        size: MAX_FILE_SIZE,
       })
 
       let archivoUrl: string | undefined | null = paso.archivoUrl
@@ -217,13 +288,7 @@ export default class ContratoPasosController {
         // Eliminar archivo anterior si existe
         if (paso.archivoUrl) {
           const oldFilePath = path.join(app.publicPath(), paso.archivoUrl.replace(/^\//, ''))
-          try {
-            await fs.unlink(oldFilePath)
-          } catch (unlinkError: any) {
-            if (unlinkError.code !== 'ENOENT') {
-              console.error('Error al eliminar archivo anterior del paso:', unlinkError)
-            }
-          }
+          await safeUnlink(oldFilePath)
         }
 
         const uploadDir = `uploads/pasos_contrato/${paso.contratoId}`
@@ -236,28 +301,28 @@ export default class ContratoPasosController {
       } else if (clearArchivo) {
         if (paso.archivoUrl) {
           const oldFilePath = path.join(app.publicPath(), paso.archivoUrl.replace(/^\//, ''))
-          try {
-            await fs.unlink(oldFilePath)
-          } catch (unlinkError: any) {
-            if (unlinkError.code !== 'ENOENT') {
-              console.error('Error al eliminar archivo anterior del paso (clear):', unlinkError)
-            }
-          }
+          await safeUnlink(oldFilePath)
         }
         archivoUrl = null
       }
 
+      // Si llega actorId (por auth/body/header), actualizar usuarioId; si no llega, mantener el existente
+      const maybeActorId = resolveActorId(ctx)
+      const usuarioId = maybeActorId ?? paso.usuarioId ?? null
+
       paso.merge({
-        fase: fase ?? paso.fase,
+        fase: isValidPhase(fase as any) ? (fase as FasePaso) : paso.fase,
         nombrePaso: nombrePaso ?? paso.nombrePaso,
         observacion: body.observacion ?? paso.observacion,
         orden: orden ?? paso.orden,
         fecha: fechaISO ? DateTime.fromISO(fechaISO) : paso.fecha,
         completado: completado ?? paso.completado,
         archivoUrl: archivoUrl as any, // string | null
+        usuarioId, // nunca undefined
       })
 
       await paso.save()
+      await paso.load('usuario', (q) => q.select(USER_SELECT)) // responder con preload
       return response.ok(paso)
     } catch (error: any) {
       console.error('Error al actualizar paso de contrato:', error)
@@ -281,13 +346,7 @@ export default class ContratoPasosController {
 
       if (paso.archivoUrl) {
         const filePath = path.join(app.publicPath(), paso.archivoUrl.replace(/^\//, ''))
-        try {
-          await fs.unlink(filePath)
-        } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') {
-            console.error('Error al eliminar archivo del paso:', unlinkError)
-          }
-        }
+        await safeUnlink(filePath)
       }
 
       await paso.delete()
