@@ -123,7 +123,7 @@ export default class ContratosController {
     }
   }
 
-  // === NUEVO: normalización y validación de 'terminoContrato' por tipo ===
+  // === Normalización / validación de término ===
   private normTerm = (v?: string | null) => (v === 'obra_o_labor' ? 'obra_o_labor_determinada' : v ?? null)
 
   private allowedTerminosByTipo: Record<TipoContrato, string[]> = {
@@ -430,7 +430,7 @@ export default class ContratosController {
 
       const aliasFechaTerm = fechaTermInput ?? fechaFin ?? fechaFinalizacion ?? null
 
-      // === término normalizado y validado por tipo ===
+      // término normalizado / validado por tipo
       const terminoNorm = this.normTerm(contratoDataNorm.terminoContrato)
       let terminoEff: string | null = terminoNorm
       if (!terminoEff && tipo === 'laboral') {
@@ -464,7 +464,7 @@ export default class ContratosController {
         {
           contratoId: contrato.id,
           salarioBasico: Number(salarioBasico) || baseNum,
-          bonoSalarial: Number(bonoSalarial) || 0,
+        bonoSalarial: Number(bonoSalarial) || 0,
           auxilioTransporte: Number(auxilioTransporte) || 0,
           auxilioNoSalarial: Number(auxilioNoSalarial) || 0,
           fechaEfectiva: DateTime.now(),
@@ -498,7 +498,7 @@ export default class ContratosController {
       }
       if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
 
-      // 🔴 Historial: usar actorId (no contrato.usuarioId)
+      // Historial: creación
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
@@ -541,7 +541,7 @@ export default class ContratosController {
       const actorId = this.getActorId(ctx)
       const contratoId = request.input('contratoId')
 
-      // Helpers locales para validar PDF por MIME y tamaño
+      // Helpers locales para validar PDF
       const getContentType = (file: any): string => {
         return file?.type && file?.subtype ? `${file.type}/${file.subtype}` : (file?.headers?.['content-type'] as string) || ''
       }
@@ -564,10 +564,7 @@ export default class ContratosController {
         // ====== MODO A: anexar a contrato existente ======
         const contrato = await Contrato.findOrFail(contratoId)
 
-        // CONTRATO (PDF) -> acepta 'archivo' o 'archivoContrato'
         const archivoContrato = request.file('archivo') || request.file('archivoContrato')
-
-        // Validación por MIME y tamaño (10 MB — empata con frontend)
         ensurePdfOrThrow(archivoContrato, 10 * 1024 * 1024)
 
         const razonSocialId = request.input('razonSocialId')
@@ -575,7 +572,6 @@ export default class ContratosController {
 
         const oldMeta = this.fileMetaFromRelPath(contrato.rutaArchivoContratoFisico)
 
-        // borrar anterior contrato físico si existía
         if (contrato.rutaArchivoContratoFisico) {
           try {
             await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoContratoFisico.replace(/^\//, '')))
@@ -593,16 +589,13 @@ export default class ContratosController {
         contrato.nombreArchivoContratoFisico = fileName
         contrato.rutaArchivoContratoFisico = `/${uploadDir}/${fileName}`
 
-        // Observación opcional para el cambio del archivo físico
         const observacionArchivo = String(request.input('observacionArchivo') ?? '').trim()
-
         await contrato.save({ client: trx })
 
-        // Log del cambio del archivo físico
         await this.logContratoFisicoCambio(contrato, oldMeta, { nombre: fileName, url: `/${uploadDir}/${fileName}` }, actorId)
         await this.logContratoFisicoObservacion(contrato, observacionArchivo, actorId)
 
-        // RECOMENDACIÓN MÉDICA (opcional) -> SOLO 'archivoRecomendacionMedica'
+        // Recomendación médica (opcional)
         const tieneRecRaw = request.input('tieneRecomendacionesMedicas')
         const tieneRec = tieneRecRaw === true || String(tieneRecRaw).toLowerCase() === 'true'
 
@@ -616,7 +609,6 @@ export default class ContratosController {
             throw new Error(archivoRec?.errors?.[0]?.message || 'Archivo de recomendación médica inválido o no adjunto.')
           }
 
-          // meta anterior (si existía)
           const oldMetaRec = this.fileMetaFromRelPath(contrato.rutaArchivoRecomendacionMedica)
 
           const recDir = 'uploads/recomendaciones_medicas'
@@ -628,7 +620,6 @@ export default class ContratosController {
           contrato.tieneRecomendacionesMedicas = true
           contrato.rutaArchivoRecomendacionMedica = `/${recDir}/${recName}`
 
-          // log
           if (oldMetaRec) {
             await this.logArchivoReemplazado(contrato, oldMetaRec, { nombre: recName, url: `/${recDir}/${recName}` }, actorId)
           } else {
@@ -681,7 +672,6 @@ export default class ContratosController {
         return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
       }
 
-      // término normalizado y validado por tipo
       const terminoNorm = this.normTerm(contratoData.terminoContrato)
       let terminoEff: string | null = terminoNorm
       if (!terminoEff && tipo === 'laboral') {
@@ -696,9 +686,7 @@ export default class ContratosController {
 
       const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
 
-      // CONTRATO (obligatorio) -> acepta 'archivo' o 'archivoContrato'
       const archivoContratoLegacy = request.file('archivo') || request.file('archivoContrato')
-      // Validación por MIME y tamaño (10 MB)
       const contentType =
         (archivoContratoLegacy?.type && archivoContratoLegacy?.subtype)
           ? `${archivoContratoLegacy.type}/${archivoContratoLegacy.subtype}`
@@ -715,7 +703,6 @@ export default class ContratosController {
       await (archivoContratoLegacy as any).move(destinationDir, { name: fileName })
       const publicUrl = `/${uploadDir}/${fileName}`
 
-      // crear contrato
       const contrato = await Contrato.create(
         {
           ...contratoData,
@@ -745,11 +732,9 @@ export default class ContratosController {
         { client: trx }
       )
 
-      // log: archivo físico subido + observación si vino
       await this.logContratoFisicoCambio(contrato, null, { nombre: fileName, url: publicUrl }, actorId)
       await this.logContratoFisicoObservacion(contrato, String(observacionArchivo ?? ''), actorId)
 
-      // RECOMENDACIÓN (opcional) -> SOLO 'archivoRecomendacionMedica'
       const tieneRecRaw = tieneRecomendacionesMedicas
       const tieneRec = tieneRecRaw === true || String(tieneRecRaw).toLowerCase() === 'true'
       if (tieneRec) {
@@ -774,33 +759,7 @@ export default class ContratosController {
         await contrato.save({ client: trx })
       }
 
-      // pasos
-      let pasosRecibidos: any[] = []
-      if (Array.isArray(pasos)) pasosRecibidos = pasos
-      else if (typeof pasos === 'string' && pasos.trim()) {
-        try {
-          pasosRecibidos = JSON.parse(pasos)
-        } catch {}
-      }
-
-      const pasosParaGuardar: any[] = []
-      if (Array.isArray(pasosRecibidos)) {
-        for (const pasoData of pasosRecibidos) {
-          pasosParaGuardar.push({
-            contratoId: contrato.id,
-            fase: pasoData.fase,
-            nombrePaso: pasoData.nombrePaso,
-            fecha: pasoData.fecha ? DateTime.fromISO(pasoData.fecha) : null,
-            observacion: pasoData.observacion,
-            orden: pasoData.orden,
-            completado: !!pasoData.completado,
-            archivoUrl: pasoData.archivoUrl || null,
-          })
-        }
-      }
-      if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
-
-      // 🔴 Historial: usar actorId (no contrato.usuarioId)
+      // Historial: creación
       await ContratoHistorialEstado.create(
         {
           contratoId: contrato.id,
@@ -910,7 +869,7 @@ export default class ContratosController {
       const tipoEff: TipoContrato = (payload.tipoContrato as TipoContrato) ?? (contrato.tipoContrato as TipoContrato)
       this.assertTipoContrato(tipoEff)
 
-      // --- término normalizado por tipo + default de laboral ---
+      // término
       const incomingTerm = this.normTerm(payload.terminoContrato ?? (contrato as any).terminoContrato)
       let terminoEff: string | null = incomingTerm
       if (!terminoEff && tipoEff === 'laboral') {
@@ -938,13 +897,13 @@ export default class ContratosController {
 
       const { salarioBasico, bonoSalarial, auxilioTransporte, auxilioNoSalarial, ...contratoPayload } = payload
 
-      // Aseguramos persistir el término validado
+      // persistir término validado
       ;(contratoPayload as any).terminoContrato = terminoEff
 
       contrato.merge(contratoPayload)
       await contrato.save({ client: trx })
 
-      // ===== Recomendación médica en UPDATE: manejo robusto =====
+      // Recomendación médica en UPDATE
       const reqQuiereEliminarRec = String((raw.eliminarRecomendacionMedica ?? '')).toLowerCase() === 'true'
       if (reqQuiereEliminarRec && contrato.rutaArchivoRecomendacionMedica) {
         try {
@@ -956,14 +915,12 @@ export default class ContratosController {
         ;(contrato as any).tieneRecomendacionesMedicas = false
         await contrato.save({ client: trx })
       }
-
-      // Si no pidieron eliminar y existe archivo, forzar booleano a true
       if (!reqQuiereEliminarRec && contrato.rutaArchivoRecomendacionMedica) {
         ;(contrato as any).tieneRecomendacionesMedicas = true
         await contrato.save({ client: trx })
       }
 
-      // ===== Procesar salarios si alguno vino en payload =====
+      // Salarios
       const sbRaw = salarioBasico
       const bsRaw = bonoSalarial
       const atRaw = auxilioTransporte
@@ -1026,9 +983,11 @@ export default class ContratosController {
         }
       }
 
+      // ======= Historial de estado (única entrada para terminación) =======
+      let estadoCambioAInactivo = false
       if (oldEstado !== contrato.estado) {
+        estadoCambioAInactivo = contrato.estado === 'inactivo'
         const fechaInicioHist = this.toDateTime(contrato.fechaInicio)
-        // 🔴 Historial: usar actorId (no contrato.usuarioId)
         await ContratoHistorialEstado.create(
           {
             contratoId: contrato.id,
@@ -1037,13 +996,14 @@ export default class ContratosController {
             newEstado: contrato.estado,
             fechaCambio: DateTime.now(),
             fechaInicioContrato: fechaInicioHist ?? null,
-            motivo: contrato.estado === 'inactivo' ? contrato.motivoFinalizacion : null,
+            // Guardamos el motivo SOLO aquí si pasó a inactivo
+            motivo: estadoCambioAInactivo ? contrato.motivoFinalizacion : null,
           },
           { client: trx }
         )
       }
 
-      // Cambios
+      // Cambios (evitar duplicado de "Motivo de Finalización" si hubo terminación en esta misma petición)
       const after = {
         razonSocialId: contrato.razonSocialId,
         sedeId: contrato.sedeId,
@@ -1120,22 +1080,33 @@ export default class ContratosController {
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
-      for (const campo of camposTrackeables) {
-        if (!vinoEnPayloadFor(String(campo))) continue
-        let oldV = (before as any)[campo]
-        let newV = (after as any)[campo]
-        if (campo === 'tieneRecomendacionesMedicas') {
-          oldV = this.toBoolOrNull(oldV)
-          newV = this.toBoolOrNull(newV)
-        }
-        if ((oldV ?? null) === (newV ?? null)) continue
+     // --- justo antes del for (después de calcular oldEstado, after y before) ---
+const estadoSeVolvioInactivo =
+  oldEstado !== contrato.estado && contrato.estado === 'inactivo'
 
-        const oldWrapped = await this.wrapValueWithName(String(campo), oldV)
-        const newWrapped = await this.wrapValueWithName(String(campo), newV)
+// --- dentro del for (primera línea del bucle) ---
+for (const campo of camposTrackeables) {
+  // Evitar doble registro: si en este request pasamos a INACTIVO,
+  // no crear ContratoCambio para fechaTerminacion ni motivoFinalizacion.
+  if (estadoSeVolvioInactivo && (campo === 'fechaTerminacion' || campo === 'motivoFinalizacion')) {
+    continue
+  }
 
-        cambios.push({
-          contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
+  if (!vinoEnPayloadFor(String(campo))) continue
+  let oldV = (before as any)[campo]
+  let newV = (after as any)[campo]
+  if (campo === 'tieneRecomendacionesMedicas') {
+    oldV = this.toBoolOrNull(oldV)
+    newV = this.toBoolOrNull(newV)
+  }
+  if ((oldV ?? null) === (newV ?? null)) continue
+
+  const oldWrapped = await this.wrapValueWithName(String(campo), oldV)
+  const newWrapped = await this.wrapValueWithName(String(campo), newV)
+
+  cambios.push({
+    contratoId: contrato.id,
+    usuarioId: contrato.usuarioId,
           campo: String(campo),
           oldValue: this.json(oldWrapped),
           newValue: this.json(newWrapped),
@@ -1156,7 +1127,6 @@ export default class ContratosController {
     }
   }
   /* (continúa en el Bloque 2/2) */
-
   /* =========================
      Actualizar SOLO archivo de recomendación (reemplazo)
   ========================= */
