@@ -1,3 +1,4 @@
+// database/migrations/xxxx_create_contratos.ts
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
@@ -79,6 +80,11 @@ export default class extends BaseSchema {
       table.integer('afp_id').unsigned().nullable()
       table.integer('afc_id').unsigned().nullable()
       table.integer('ccf_id').unsigned().nullable()
+
+      // ✅ NUEVO: quién creó/actualizó (auditoría ligera)
+      table.integer('actor_id').unsigned().nullable().index()
+      // Si luego quieres FK real, puedes cambiar por:
+      // table.integer('actor_id').unsigned().references('id').inTable('usuarios').onDelete('SET NULL').nullable().index()
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

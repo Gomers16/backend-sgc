@@ -118,15 +118,22 @@ export default class Contrato extends BaseModel {
   @column({ columnName: 'ruta_archivo_recomendacion_medica' })
   declare rutaArchivoRecomendacionMedica?: string | null
 
+  // ======= NUEVO: auditoría ligera (quién crea/actualiza) =======
+  @column({ columnName: 'actor_id' })
+  declare actorId?: number | null
+
+  @belongsTo(() => Usuario, { foreignKey: 'actorId' })
+  declare actor: BelongsTo<typeof Usuario>
+
   // ======= NUEVO: archivos por afiliación (se guardan en el controller) =======
   // EPS
-  @column({ columnName: 'eps_doc_path' })   declare epsDocPath?: string | null
+  @column({ columnName: 'eps_doc_path' }) declare epsDocPath?: string | null
   @column({ columnName: 'eps_doc_nombre' }) declare epsDocNombre?: string | null
   @column({ columnName: 'eps_doc_mime' })   declare epsDocMime?: string | null
   @column({ columnName: 'eps_doc_size' })   declare epsDocSize?: number | null
 
   // ARL
-  @column({ columnName: 'arl_doc_path' }) declare arlDocPath?: string | null
+  @column({ columnName: 'arl_doc_path' })   declare arlDocPath?: string | null
   @column({ columnName: 'arl_doc_nombre' }) declare arlDocNombre?: string | null
   @column({ columnName: 'arl_doc_mime' })   declare arlDocMime?: string | null
   @column({ columnName: 'arl_doc_size' })   declare arlDocSize?: number | null
