@@ -464,7 +464,7 @@ export default class ContratosController {
         {
           contratoId: contrato.id,
           salarioBasico: Number(salarioBasico) || baseNum,
-        bonoSalarial: Number(bonoSalarial) || 0,
+          bonoSalarial: Number(bonoSalarial) || 0,
           auxilioTransporte: Number(auxilioTransporte) || 0,
           auxilioNoSalarial: Number(auxilioNoSalarial) || 0,
           fechaEfectiva: DateTime.now(),
@@ -619,6 +619,9 @@ export default class ContratosController {
 
           contrato.tieneRecomendacionesMedicas = true
           contrato.rutaArchivoRecomendacionMedica = `/${recDir}/${recName}`
+
+          // ⬅️ FIX: guardar el cambio del archivo de recomendación en Modo A
+          await contrato.save({ client: trx })
 
           if (oldMetaRec) {
             await this.logArchivoReemplazado(contrato, oldMetaRec, { nombre: recName, url: `/${recDir}/${recName}` }, actorId)
@@ -794,7 +797,6 @@ export default class ContratosController {
       return response.badRequest({ message: error.message || 'Error al crear y anexar contrato físico' })
     }
   }
-
   public async update(ctx: HttpContext) {
     const { params, request, response } = ctx
     const trx = await db.transaction()
@@ -1080,33 +1082,29 @@ export default class ContratosController {
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
-     // --- justo antes del for (después de calcular oldEstado, after y before) ---
-const estadoSeVolvioInactivo =
-  oldEstado !== contrato.estado && contrato.estado === 'inactivo'
+      // Evitar doble registro de terminación si en esta petición pasó a INACTIVO
+      const estadoSeVolvioInactivo = oldEstado !== contrato.estado && contrato.estado === 'inactivo'
 
-// --- dentro del for (primera línea del bucle) ---
-for (const campo of camposTrackeables) {
-  // Evitar doble registro: si en este request pasamos a INACTIVO,
-  // no crear ContratoCambio para fechaTerminacion ni motivoFinalizacion.
-  if (estadoSeVolvioInactivo && (campo === 'fechaTerminacion' || campo === 'motivoFinalizacion')) {
-    continue
-  }
+      for (const campo of camposTrackeables) {
+        if (estadoSeVolvioInactivo && (campo === 'fechaTerminacion' || campo === 'motivoFinalizacion')) {
+          continue
+        }
 
-  if (!vinoEnPayloadFor(String(campo))) continue
-  let oldV = (before as any)[campo]
-  let newV = (after as any)[campo]
-  if (campo === 'tieneRecomendacionesMedicas') {
-    oldV = this.toBoolOrNull(oldV)
-    newV = this.toBoolOrNull(newV)
-  }
-  if ((oldV ?? null) === (newV ?? null)) continue
+        if (!vinoEnPayloadFor(String(campo))) continue
+        let oldV = (before as any)[campo]
+        let newV = (after as any)[campo]
+        if (campo === 'tieneRecomendacionesMedicas') {
+          oldV = this.toBoolOrNull(oldV)
+          newV = this.toBoolOrNull(newV)
+        }
+        if ((oldV ?? null) === (newV ?? null)) continue
 
-  const oldWrapped = await this.wrapValueWithName(String(campo), oldV)
-  const newWrapped = await this.wrapValueWithName(String(campo), newV)
+        const oldWrapped = await this.wrapValueWithName(String(campo), oldV)
+        const newWrapped = await this.wrapValueWithName(String(campo), newV)
 
-  cambios.push({
-    contratoId: contrato.id,
-    usuarioId: contrato.usuarioId,
+        cambios.push({
+          contratoId: contrato.id,
+          usuarioId: contrato.usuarioId,
           campo: String(campo),
           oldValue: this.json(oldWrapped),
           newValue: this.json(newWrapped),
@@ -1126,7 +1124,7 @@ for (const campo of camposTrackeables) {
       return response.internalServerError({ message: 'Error al actualizar contrato', error: error.message })
     }
   }
-  /* (continúa en el Bloque 2/2) */
+
   /* =========================
      Actualizar SOLO archivo de recomendación (reemplazo)
   ========================= */
