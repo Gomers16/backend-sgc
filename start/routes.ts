@@ -1,30 +1,30 @@
 // start/routes.ts
 import router from '@adonisjs/core/services/router'
 
-// Ruta raíz
+// Ruta raíz (salud)
 router.get('/', async () => {
   return { message: 'Bienvenido a la API de Turnos RTM' }
 })
 
-// --- RUTAS DE AUTENTICACIÓN ---
-router.post('/api/login', async (ctx) => {
-  const { default: AuthController } = await import('#controllers/auth_controller')
-  return new AuthController().login(ctx)
-})
-
-router.post('/api/forgot-password', async (ctx) => {
-  const { default: AuthController } = await import('#controllers/auth_controller')
-  return new AuthController().forgotPassword(ctx)
-})
-
-router.post('/api/reset-password', async (ctx) => {
-  const { default: AuthController } = await import('#controllers/auth_controller')
-  return new AuthController().resetPassword(ctx)
-})
-
-// --- RUTAS API ---
+// --- TODAS LAS RUTAS API ---
 router
   .group(() => {
+    // --- AUTENTICACIÓN ---
+    router.post('/login', async (ctx) => {
+      const { default: AuthController } = await import('#controllers/auth_controller')
+      return new AuthController().login(ctx)
+    })
+
+    router.post('/forgot-password', async (ctx) => {
+      const { default: AuthController } = await import('#controllers/auth_controller')
+      return new AuthController().forgotPassword(ctx)
+    })
+
+    router.post('/reset-password', async (ctx) => {
+      const { default: AuthController } = await import('#controllers/auth_controller')
+      return new AuthController().resetPassword(ctx)
+    })
+
     // === TURNOS RTM ===
     router.get('/turnos-rtm', async (ctx) => {
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
@@ -113,8 +113,7 @@ router
       { path: 'razones-sociales', controller: '#controllers/razones_sociales_controller' },
       { path: 'sedes', controller: '#controllers/sedes_controller' },
       { path: 'cargos', controller: '#controllers/cargos_controller' },
-      // Listado de entidades de salud (PLURAL)
-      { path: 'entidades-saluds', controller: '#controllers/entidades_saluds_controller' },
+      { path: 'entidades-saluds', controller: '#controllers/entidades_saluds_controller' }, // plural
     ]
 
     for (const { path, controller } of selectors) {
@@ -129,7 +128,7 @@ router
       return new Ctrl().usuarios(ctx)
     })
 
-    // === ENTIDADES DE SALUD: DETALLE (singular) ===
+    // === ENTIDADES DE SALUD DETALLE ===
     router.get('/entidades-salud/:id', async (ctx) => {
       const { default: EntidadesSaludsController } = await import(
         '#controllers/entidades_saluds_controller'
@@ -143,7 +142,6 @@ router
       return new ContratosController().index(ctx)
     })
 
-    // (sin exigir auth)
     router.get('/usuarios/:usuarioId/contratos', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getContratosUsuario(ctx)
@@ -154,7 +152,6 @@ router
       return new ContratosController().store(ctx)
     })
 
-    // Dual mode: crear+anexar (legacy) o anexar a existente si llega contratoId
     router.post('/contratos/anexar-fisico', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().anexarFisico(ctx)
@@ -180,23 +177,22 @@ router
       return new ContratosController().destroy(ctx)
     })
 
-    // Descarga de archivo del contrato
     router.get('/contratos/:id/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().descargarArchivo(ctx)
     })
-    // Meta del archivo del contrato
+
     router.get('/contratos/:id/archivo/meta', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getArchivoContratoMeta(ctx)
     })
-    // Eliminar SOLO el archivo del contrato (no el contrato)
+
     router.delete('/contratos/:id/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().eliminarArchivoContrato(ctx)
     })
 
-    // --- Recomendación médica por contrato (archivo) ---
+    // --- Recomendación médica ---
     router.get('/contratos/:id/recomendacion/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getRecomendacionMedicaMeta(ctx)
@@ -217,15 +213,17 @@ router
       return new ContratosController().descargarRecomendacionMedica(ctx)
     })
 
-    // --- Archivos por afiliación (EPS/ARL/AFP/AFC/CCF) por CONTRATO ---
+    // --- Archivos afiliación ---
     router.get('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getAfiliacionArchivo(ctx)
     })
+
     router.post('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().subirAfiliacionArchivo(ctx)
     })
+
     router.delete('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().eliminarAfiliacionArchivo(ctx)
@@ -234,7 +232,6 @@ router
     // === CONTRATO PASOS ===
     router
       .group(() => {
-        // Listar pasos del contrato (admite ?fase=...)
         router.get('/', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -242,7 +239,6 @@ router
           return new ContratoPasosController().index(ctx)
         })
 
-        // Crear paso (con archivo opcional en campo 'archivo')
         router.post('/', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -250,7 +246,6 @@ router
           return new ContratoPasosController().store(ctx)
         })
 
-        // Obtener un paso puntual por ID
         router.get('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -258,7 +253,6 @@ router
           return new ContratoPasosController().show(ctx)
         })
 
-        // Actualizar paso (reemplaza/borrar archivo con 'archivo' o 'clearArchivo=true')
         router.put('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -266,15 +260,12 @@ router
           return new ContratoPasosController().update(ctx)
         })
 
-        // Eliminar paso (borra también el archivo si existe)
         router.delete('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
           )
           return new ContratoPasosController().destroy(ctx)
         })
-
-        // (Eliminada la ruta confusa de recomendación por paso)
       })
       .prefix('/contratos/:contratoId/pasos')
 
@@ -335,7 +326,7 @@ router
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().storeSalario(ctx)
     })
-    // (opcional, por si quieres listar el histórico)
+
     router.get('/contratos/:contratoId/salarios', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().listSalarios(ctx)

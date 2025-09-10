@@ -3,8 +3,7 @@
 | HTTP kernel file
 |--------------------------------------------------------------------------
 |
-| The HTTP kernel file is used to register the middleware with the server
-| or the router.
+| El archivo HTTP kernel registra los middleware globales y de rutas.
 |
 */
 
@@ -12,29 +11,23 @@ import router from '@adonisjs/core/services/router'
 import server from '@adonisjs/core/services/server'
 
 /**
- * The error handler is used to convert an exception
- * to a HTTP response.
+ * El error handler convierte excepciones en respuestas HTTP.
  */
 server.errorHandler(() => import('#exceptions/handler'))
 
 /**
- * The server middleware stack runs middleware on all the HTTP
- * requests, even if there is no route registered for
- * the request URL.
+ * Middleware global: se ejecutan en TODAS las peticiones,
+ * incluso si no existe una ruta registrada.
  */
 server.use([
   () => import('#middleware/container_bindings_middleware'),
   () => import('#middleware/force_json_response_middleware'),
-  () => import('@adonisjs/cors/cors_middleware'),
+  () => import('@adonisjs/cors/cors_middleware'), // ✅ este sí usa config/cors.ts
   () => import('@adonisjs/static/static_middleware'),
 ])
 
 /**
- * The router middleware stack runs middleware on all the HTTP
- * requests with a registered route.
- *
- * ¡IMPORTANTE! Hemos eliminado 'initialize_auth_middleware' de aquí.
- * Ahora solo se aplicará donde se especifique explícitamente en las rutas.
+ * Middleware de rutas: se ejecutan solo en rutas registradas.
  */
 router.use([
   () => import('@adonisjs/core/bodyparser_middleware'),
@@ -42,11 +35,7 @@ router.use([
 ])
 
 /**
- * Named middleware collection must be explicitly assigned to
- * the routes or the routes group.
- *
- * NOTA: 'initialize_auth_middleware' ahora se usará junto con 'auth'
- * en las rutas específicas que lo necesiten.
+ * Middleware nombrados: se asignan explícitamente en rutas/grupos.
  */
 export const middleware = router.named({
   guest: () => import('#middleware/guest_middleware'),

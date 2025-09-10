@@ -1,17 +1,36 @@
 import { defineConfig } from '@adonisjs/cors'
 
 /**
- * Configuration options to tweak the CORS policy. The following
- * options are documented on the official documentation website.
+ * Configuración de CORS dependiente del entorno
  *
- * https://docs.adonisjs.com/guides/security/cors
+ * - development → solo localhost
+ * - test        → permite todo (origin: true)
+ * - production  → solo tu dominio real
  */
 const corsConfig = defineConfig({
   enabled: true,
-  origin: true,
-  methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE'],
+
+  origin: (() => {
+    switch (process.env.NODE_ENV) {
+      case 'development':
+        return ['http://localhost:5173'] // solo front local
+
+      case 'test':
+        return true // acepta cualquier origen (ideal para Cloudflare túnel)
+
+      case 'production':
+        return [
+          'https://mi-dominio.com', // cámbialo por el dominio real del front
+        ]
+
+      default:
+        return ['http://localhost:5173']
+    }
+  })(),
+
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
   headers: true,
-  exposeHeaders: [],
+  exposeHeaders: ['content-type', 'content-disposition'],
   credentials: true,
   maxAge: 90,
 })
