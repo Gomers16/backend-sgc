@@ -6,7 +6,6 @@ import { withAuthFinder } from '@adonisjs/auth/mixins/lucid'
 import { DbAccessTokensProvider } from '@adonisjs/auth/access_tokens'
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 
-// Modelos relacionados
 import Rol from '#models/rol'
 import RazonSocial from '#models/razon_social'
 import EntidadSalud from '#models/entidad_salud'
@@ -14,7 +13,6 @@ import Contrato from '#models/contrato'
 import Sede from '#models/sede'
 import Cargo from '#models/cargo'
 
-// Auth by email
 const AuthFinder = withAuthFinder(() => Hash.use('scrypt'), {
   uids: ['correo'],
   passwordColumnName: 'password',
@@ -26,16 +24,17 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column({ isPrimary: true })
   declare id: number
 
-  @column()
+  // === Mapea FKs a snake_case si tu migración las creó así ===
+  @column({ columnName: 'razon_social_id' })
   declare razonSocialId: number
 
-  @column()
+  @column({ columnName: 'rol_id' })
   declare rolId: number
 
-  @column()
+  @column({ columnName: 'cargo_id' })
   declare cargoId: number
 
-  @column()
+  @column({ columnName: 'sede_id' })
   declare sedeId: number
 
   @column()
@@ -71,24 +70,21 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare recomendaciones: boolean
 
-  // FKs a entidades_salud (uno por tipo)
-  @column()
+  // Entidades de salud (mapea si están en snake_case)
+  @column({ columnName: 'eps_id' })
   declare epsId: number
 
-  @column()
+  @column({ columnName: 'arl_id' })
   declare arlId: number
 
-  @column()
+  @column({ columnName: 'afp_id' })
   declare afpId: number
 
-  @column()
+  @column({ columnName: 'afc_id' })
   declare afcId: number
 
-  @column()
+  @column({ columnName: 'ccf_id' })
   declare ccfId: number
-
-  // ⛔️ Eliminado: campos de archivos por afiliación (epsDoc*, arlDoc*, afpDoc*, afcDoc*, ccfDoc*)
-  // ⛔️ Eliminado: recomendación médica y su archivo (recomendacionMedica, recoMedDoc*)
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
@@ -96,20 +92,20 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
-  @column.dateTime()
+  @column.dateTime({ columnName: 'deleted_at' })
   declare deletedAt: DateTime | null
 
-  // Relaciones (BelongsTo)
-  @belongsTo(() => RazonSocial)
+  // Relaciones
+  @belongsTo(() => RazonSocial, { foreignKey: 'razonSocialId' })
   declare razonSocial: BelongsTo<typeof RazonSocial>
 
-  @belongsTo(() => Rol)
+  @belongsTo(() => Rol, { foreignKey: 'rolId' })
   declare rol: BelongsTo<typeof Rol>
 
-  @belongsTo(() => Sede)
+  @belongsTo(() => Sede, { foreignKey: 'sedeId' })
   declare sede: BelongsTo<typeof Sede>
 
-  @belongsTo(() => Cargo)
+  @belongsTo(() => Cargo, { foreignKey: 'cargoId' })
   declare cargo: BelongsTo<typeof Cargo>
 
   @belongsTo(() => EntidadSalud, { foreignKey: 'epsId' })
@@ -127,11 +123,9 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @belongsTo(() => EntidadSalud, { foreignKey: 'ccfId' })
   declare ccf: BelongsTo<typeof EntidadSalud>
 
-  // Relación (HasMany)
   @hasMany(() => Contrato, { foreignKey: 'usuarioId' })
   declare contratos: HasMany<typeof Contrato>
 
-  // Tokens
   static accessTokens = DbAccessTokensProvider.forModel(Usuario, {
     expiresIn: '30 days',
     prefix: 'oat_',

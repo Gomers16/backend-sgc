@@ -12,6 +12,12 @@ export default class RazonSocial extends BaseModel {
   @column()
   declare nombre: string
 
+  @column()
+  declare nit: string
+
+  @column()
+  declare activo: boolean
+
   @hasMany(() => Usuario)
   declare usuarios: HasMany<typeof Usuario>
 

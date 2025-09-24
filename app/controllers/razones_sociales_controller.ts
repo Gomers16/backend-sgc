@@ -6,17 +6,20 @@ import Usuario from '#models/usuario'
 export default class RazonesSocialesController {
   /**
    * Obtener lista de razones sociales.
+   * Soporta filtro por nombre (?name=) y devuelve: id, nombre, nit, activo.
    */
   public async index({ response, request }: HttpContext) {
     try {
       const { name } = request.qs()
-      let query = RazonSocial.query().select('id', 'nombre').orderBy('nombre', 'asc')
+      let query = RazonSocial.query()
+        .select('id', 'nombre', 'nit', 'activo')
+        .orderBy('nombre', 'asc')
 
       if (name) {
         query = query.where('nombre', 'like', `%${name}%`)
       }
 
-      const razonesSociales = await query.exec()
+      const razonesSociales = await query
 
       return response.ok({
         message: 'Lista de razones sociales obtenida exitosamente.',
@@ -33,13 +36,14 @@ export default class RazonesSocialesController {
 
   /**
    * Obtener una razón social por su ID.
+   * Devuelve: id, nombre, nit, activo.
    */
   public async show({ params, response }: HttpContext) {
     try {
       const { id } = params
       const razonSocial = await RazonSocial.query()
         .where('id', id)
-        .select('id', 'nombre')
+        .select('id', 'nombre', 'nit', 'activo')
         .firstOrFail()
 
       return response.ok({
@@ -70,13 +74,13 @@ export default class RazonesSocialesController {
 
       const usuarios = await Usuario.query()
         .where('razon_social_id', razonSocialId)
-        .preload('cargo') // cargo del usuario (fallback)
+        .preload('cargo')
         .preload('rol')
         .preload('contratos', (contratoQuery) => {
           contratoQuery
-            .preload('cargo') // 👈 traer cargo del contrato
-            .preload('pasos') // usado en la vista
-            .preload('eventos') // usado en la vista
+            .preload('cargo') // cargo registrado en el contrato
+            .preload('pasos') // pasos del contrato (vista)
+            .preload('eventos') // eventos del contrato (vista)
             .orderBy('fecha_inicio', 'desc')
         })
 

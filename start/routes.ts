@@ -25,15 +25,27 @@ router
       return new AuthController().resetPassword(ctx)
     })
 
+    // === BÚSQUEDA UNIFICADA ===
+    router.get('/buscar', async (ctx) => {
+      const { default: BusquedasController } = await import('#controllers/busquedas_controller')
+      return new BusquedasController().unificada(ctx)
+    })
+
     // === TURNOS RTM ===
     router.get('/turnos-rtm', async (ctx) => {
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
       return new TurnosRtmController().index(ctx)
     })
 
-    router.get('/turnos-rtm/siguiente-turno', async (ctx) => {
+    // ✅ Rutas específicas ANTES de :id
+    router.get(
+      '/turnos-rtm/siguiente-turno',
+      [() => import('#controllers/turnos_rtms_controller'), 'siguienteTurno']
+    )
+
+    router.get('/turnos-rtm/reporte/excel', async (ctx) => {
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().siguienteTurno(ctx)
+      return new TurnosRtmController().exportExcel(ctx)
     })
 
     router.post('/turnos-rtm', async (ctx) => {
@@ -41,40 +53,48 @@ router
       return new TurnosRtmController().store(ctx)
     })
 
-    router.get('/turnos-rtm/:id', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().show(ctx)
-    })
+    // 👇 Rutas con :id restringidas a numérico para evitar colisiones
+    router
+      .get('/turnos-rtm/:id', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    router.put('/turnos-rtm/:id', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().update(ctx)
-    })
+    router
+      .put('/turnos-rtm/:id', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    router.put('/turnos-rtm/:id/salida', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().registrarSalida(ctx)
-    })
+    router
+      .put('/turnos-rtm/:id/salida', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().registrarSalida(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    router.patch('/turnos-rtm/:id/activar', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().activar(ctx)
-    })
+    router
+      .patch('/turnos-rtm/:id/activar', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().activar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    router.patch('/turnos-rtm/:id/cancelar', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().cancelar(ctx)
-    })
+    router
+      .patch('/turnos-rtm/:id/cancelar', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().cancelar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    router.patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().destroy(ctx)
-    })
-
-    router.get('/turnos-rtm/reporte/excel', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().exportExcel(ctx)
-    })
+    router
+      .patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
     // === USUARIOS ===
     router.get('/usuarios', async (ctx) => {
@@ -114,6 +134,10 @@ router
       { path: 'sedes', controller: '#controllers/sedes_controller' },
       { path: 'cargos', controller: '#controllers/cargos_controller' },
       { path: 'entidades-saluds', controller: '#controllers/entidades_saluds_controller' }, // plural
+      // 👇 Servicios para el select del front
+      { path: 'servicios', controller: '#controllers/servicios_controller' },
+      // 👇 Ciudades para el select del front
+      { path: 'ciudades', controller: '#controllers/ciudades_controller' },
     ]
 
     for (const { path, controller } of selectors) {
@@ -165,11 +189,6 @@ router
     router.patch('/contratos/:id', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().update(ctx)
-    })
-
-    router.patch('/contratos/:id/recomendacion-medica', async (ctx) => {
-      const { default: ContratosController } = await import('#controllers/contratos_controller')
-      return new ContratosController().updateRecomendacionMedica(ctx)
     })
 
     router.delete('/contratos/:id', async (ctx) => {
@@ -330,6 +349,156 @@ router
     router.get('/contratos/:contratoId/salarios', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().listSalarios(ctx)
+    })
+
+    // === CIUDADES DETALLE ===
+    router.get('/ciudades/:id', async (ctx) => {
+      const { default: CiudadesController } = await import('#controllers/ciudades_controller')
+      return new CiudadesController().show(ctx)
+    })
+
+    // =============================
+    // === NUEVOS ENDPOINTS MVP ===
+    // =============================
+
+    // === CLASES DE VEHÍCULO ===
+    router.get('/clases-vehiculo', async (ctx) => {
+      const { default: ClasesVehiculosController } = await import(
+        '#controllers/clases_vehiculos_controller'
+      )
+      return new ClasesVehiculosController().index(ctx)
+    })
+    router.get('/clases-vehiculo/:id', async (ctx) => {
+      const { default: ClasesVehiculosController } = await import(
+        '#controllers/clases_vehiculos_controller'
+      )
+      return new ClasesVehiculosController().show(ctx)
+    })
+    router.post('/clases-vehiculo', async (ctx) => {
+      const { default: ClasesVehiculosController } = await import(
+        '#controllers/clases_vehiculos_controller'
+      )
+      return new ClasesVehiculosController().store(ctx)
+    })
+    router.put('/clases-vehiculo/:id', async (ctx) => {
+      const { default: ClasesVehiculosController } = await import(
+        '#controllers/clases_vehiculos_controller'
+      )
+      return new ClasesVehiculosController().update(ctx)
+    })
+    router.delete('/clases-vehiculo/:id', async (ctx) => {
+      const { default: ClasesVehiculosController } = await import(
+        '#controllers/clases_vehiculos_controller'
+      )
+      return new ClasesVehiculosController().destroy(ctx)
+    })
+
+    // === CLIENTES ===
+    router.get('/clientes', async (ctx) => {
+      const { default: ClientesController } = await import('#controllers/clientes_controller')
+      return new ClientesController().index(ctx)
+    })
+    router.get('/clientes/:id', async (ctx) => {
+      const { default: ClientesController } = await import('#controllers/clientes_controller')
+      return new ClientesController().show(ctx)
+    })
+    router.post('/clientes', async (ctx) => {
+      const { default: ClientesController } = await import('#controllers/clientes_controller')
+      return new ClientesController().store(ctx)
+    })
+    router.put('/clientes/:id', async (ctx) => {
+      const { default: ClientesController } = await import('#controllers/clientes_controller')
+      return new ClientesController().update(ctx)
+    })
+    router.delete('/clientes/:id', async (ctx) => {
+      const { default: ClientesController } = await import('#controllers/clientes_controller')
+      return new ClientesController().destroy(ctx)
+    })
+
+    // === VEHÍCULOS ===
+    router.get('/vehiculos', async (ctx) => {
+      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+      return new VehiculosController().index(ctx)
+    })
+    router.get('/vehiculos/:id', async (ctx) => {
+      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+      return new VehiculosController().show(ctx)
+    })
+    router.post('/vehiculos', async (ctx) => {
+      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+      return new VehiculosController().store(ctx)
+    })
+    router.put('/vehiculos/:id', async (ctx) => {
+      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+      return new VehiculosController().update(ctx)
+    })
+    router.delete('/vehiculos/:id', async (ctx) => {
+      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+      return new VehiculosController().destroy(ctx)
+    })
+
+    // === AGENTES DE CAPTACIÓN ===
+    router.get('/agentes-captacion', async (ctx) => {
+      const { default: AgentesCaptacionController } = await import(
+        '#controllers/agentes_captacion_controller'
+      )
+      return new AgentesCaptacionController().index(ctx)
+    })
+    router.get('/agentes-captacion/:id', async (ctx) => {
+      const { default: AgentesCaptacionController } = await import(
+        '#controllers/agentes_captacion_controller'
+      )
+      return new AgentesCaptacionController().show(ctx)
+    })
+    router.post('/agentes-captacion', async (ctx) => {
+      const { default: AgentesCaptacionController } = await import(
+        '#controllers/agentes_captacion_controller'
+      )
+      return new AgentesCaptacionController().store(ctx)
+    })
+    router.put('/agentes-captacion/:id', async (ctx) => {
+      const { default: AgentesCaptacionController } = await import(
+        '#controllers/agentes_captacion_controller'
+      )
+      return new AgentesCaptacionController().update(ctx)
+    })
+    router.delete('/agentes-captacion/:id', async (ctx) => {
+      const { default: AgentesCaptacionController } = await import(
+        '#controllers/agentes_captacion_controller'
+      )
+      return new AgentesCaptacionController().destroy(ctx)
+    })
+
+    // === CAPTACIÓN DATEOS ===
+    router.get('/captacion-dateos', async (ctx) => {
+      const { default: CaptacionDateosController } = await import(
+        '#controllers/captacion_dateos_controller'
+      )
+      return new CaptacionDateosController().index(ctx)
+    })
+    router.get('/captacion-dateos/:id', async (ctx) => {
+      const { default: CaptacionDateosController } = await import(
+        '#controllers/captacion_dateos_controller'
+      )
+      return new CaptacionDateosController().show(ctx)
+    })
+    router.post('/captacion-dateos', async (ctx) => {
+      const { default: CaptacionDateosController } = await import(
+        '#controllers/captacion_dateos_controller'
+      )
+      return new CaptacionDateosController().store(ctx)
+    })
+    router.put('/captacion-dateos/:id', async (ctx) => {
+      const { default: CaptacionDateosController } = await import(
+        '#controllers/captacion_dateos_controller'
+      )
+      return new CaptacionDateosController().update(ctx)
+    })
+    router.delete('/captacion-dateos/:id', async (ctx) => {
+      const { default: CaptacionDateosController } = await import(
+        '#controllers/captacion_dateos_controller'
+      )
+      return new CaptacionDateosController().destroy(ctx)
     })
   })
   .prefix('/api')
