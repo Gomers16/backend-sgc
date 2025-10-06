@@ -1,4 +1,3 @@
-// database/seeders/captacion_dateos_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import CaptacionDateo from '#models/captacion_dateo'
 import AgenteCaptacion from '#models/agente_captacion'
@@ -8,12 +7,10 @@ const BASE_URL =
 
 export default class CaptacionDateosSeeder extends BaseSeeder {
   public async run() {
-    // Preferencias por nombre (si existen del seeder anterior)
-    const ana = await AgenteCaptacion.findBy('nombre', 'Ana Morales') // ASESOR_INTERNO
-    const pedro = await AgenteCaptacion.findBy('nombre', 'Pedro Rojas') // ASESOR_INTERNO
-    const tallerAndes = await AgenteCaptacion.findBy('nombre', 'Taller Los Andes SAS') // ASESOR_EXTERNO
+    const ana = await AgenteCaptacion.findBy('nombre', 'Ana Morales')
+    const pedro = await AgenteCaptacion.findBy('nombre', 'Pedro Rojas')
+    const tallerAndes = await AgenteCaptacion.findBy('nombre', 'Taller Los Andes SAS')
 
-    // Fallbacks por tipo
     const internoA = ana ?? (await AgenteCaptacion.query().where('tipo', 'ASESOR_INTERNO').first())
     const internoB =
       pedro ??
@@ -31,17 +28,7 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
         .whereNot('id', externoA?.id ?? 0)
         .first()) ?? externoA
 
-    // 10 registros: todos canal = 'ASESOR' y con placa (sin teléfonos obligatorios).
-    // Evitamos placas usadas en otros seeders de ejemplo: ABC123, PQR234, VWX890, QWE123
-    const rows: Array<{
-      canal: 'ASESOR'
-      agenteId: number | null
-      placa: string
-      telefono: string | null
-      origen: 'UI' | 'WHATSAPP' | 'IMPORT'
-      observacion: string | null
-      imagenUrl: string | null
-    }> = [
+    const rows = [
       {
         canal: 'ASESOR',
         agenteId: internoA?.id ?? null,
@@ -84,7 +71,7 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
         placa: 'WER963',
         telefono: '3023334455',
         origen: 'UI',
-        observacion: 'Pedido de cita coordinado por asesor',
+        observacion: 'Pedido de cita coordinado',
         imagenUrl: null,
       },
       {
@@ -132,19 +119,13 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
         observacion: 'Envía contacto y placa el taller',
         imagenUrl: `${BASE_URL}/uploads/dateos/CVB680.jpg`,
       },
-    ]
+    ] as const
 
-    // Inserción
     for (const r of rows) {
-      await CaptacionDateo.create({
-        canal: r.canal, // 'ASESOR'
-        agenteId: r.agenteId, // interno/externo
-        placa: r.placa.toUpperCase(), // por placa (obligatorio aquí)
-        telefono: r.telefono, // opcional
-        origen: r.origen,
-        observacion: r.observacion,
-        imagenUrl: r.imagenUrl, // opcional
-      })
+      await CaptacionDateo.updateOrCreate(
+        { placa: r.placa },
+        { ...r, placa: r.placa.toUpperCase() }
+      )
     }
   }
 }

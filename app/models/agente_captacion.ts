@@ -1,17 +1,24 @@
 // app/models/agente_captacion.ts
+import { BaseModel, column, hasMany, manyToMany, belongsTo } from '@adonisjs/lucid/orm'
+import type { HasMany, ManyToMany, BelongsTo } from '@adonisjs/lucid/types/relations'
 import { DateTime } from 'luxon'
-import { BaseModel, column, hasMany } from '@adonisjs/lucid/orm'
-import type { HasMany } from '@adonisjs/lucid/types/relations'
+import Usuario from '#models/usuario'
 import CaptacionDateo from '#models/captacion_dateo'
+import CaptacionCanal from '#models/captacion_canal'
+
+export type TipoAsesor = 'ASESOR_INTERNO' | 'ASESOR_EXTERNO' | 'TELEMERCADEO'
 
 export default class AgenteCaptacion extends BaseModel {
-  public static table = 'agentes_captacion' // asegúrate que la migración use exactamente este nombre
+  public static table = 'agentes_captacions'
 
   @column({ isPrimary: true })
   declare id: number
 
+  @column({ columnName: 'usuario_id' })
+  declare usuarioId: number | null
+
   @column()
-  declare tipo: 'ASESOR_INTERNO' | 'ASESOR_EXTERNO' | 'TELEMERCADEO'
+  declare tipo: TipoAsesor
 
   @column()
   declare nombre: string
@@ -34,7 +41,16 @@ export default class AgenteCaptacion extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
-  // 1 Agente -> N Dateos (FK: captacion_dateos.agente_id)
+  @belongsTo(() => Usuario, { foreignKey: 'usuarioId' })
+  declare usuario: BelongsTo<typeof Usuario>
+
   @hasMany(() => CaptacionDateo, { foreignKey: 'agenteId' })
   declare dateos: HasMany<typeof CaptacionDateo>
+
+  @manyToMany(() => CaptacionCanal, {
+    pivotTable: 'agente_canal_membresias',
+    pivotColumns: ['is_default', 'activo'],
+    pivotTimestamps: true,
+  })
+  declare canales: ManyToMany<typeof CaptacionCanal>
 }

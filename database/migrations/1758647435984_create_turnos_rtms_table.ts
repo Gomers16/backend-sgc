@@ -63,7 +63,7 @@ export default class TurnosRtms extends BaseSchema {
         .unsigned()
         .nullable()
         .references('id')
-        .inTable('agentes_captacion')
+        .inTable('agentes_captacions')
         .onDelete('SET NULL')
 
       // SIN FK (solo integer) para evitar ciclo con captacion_dateos

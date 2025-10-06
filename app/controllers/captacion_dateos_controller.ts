@@ -5,6 +5,8 @@ import AgenteCaptacion from '#models/agente_captacion'
 
 const CANALES: Canal[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
 const ORIGENES: Origen[] = ['UI', 'WHATSAPP', 'IMPORT']
+const RESULTADOS = ['PENDIENTE', 'EXITOSO', 'NO_EXITOSO'] as const
+type Resultado = typeof RESULTADOS[number]
 
 function normalizePlaca(v?: string) {
   return v ? v.replace(/[\s-]/g, '').toUpperCase() : v
@@ -22,7 +24,6 @@ function ttlPostConsumo(): number {
 
 /** Calcula si un dateo está vigente (reserva activa) según TTL y consumo */
 function buildReserva(d: CaptacionDateo) {
-  const created = d.createdAt
   const consumed = d.consumidoAt
   const now = new Date()
 
@@ -31,13 +32,12 @@ function buildReserva(d: CaptacionDateo) {
   let titular: string | undefined
 
   if (d.consumidoTurnoId && consumed) {
-    // Reserva larga tras consumo
     const hasta = new Date(consumed.toJSDate().getTime())
     hasta.setDate(hasta.getDate() + ttlPostConsumo())
     vigente = now < hasta
     bloqueaHasta = hasta
   } else {
-    // Reserva corta sin consumo
+    const created = d.createdAt
     const hasta = new Date(created.toJSDate().getTime())
     hasta.setDate(hasta.getDate() + ttlSinConsumir())
     vigente = now < hasta
@@ -54,11 +54,9 @@ function buildReserva(d: CaptacionDateo) {
 export default class CaptacionDateosController {
   /**
    * GET /captacion-dateos
-   * Filtros:
-   *  - placa, telefono, canal, agente_id
-   *  - vigente=true|false (calcula por TTL)
-   *  - consumido=true|false
-   *  - page, perPage
+   * Query:
+   *  page, perPage, placa, telefono, canal, agente_id|agenteId, resultado, consumido, desde, hasta
+   *  sortBy (id|placa|telefono|created_at|resultado|consumido_turno_id), order (asc|desc)
    */
   public async index({ request }: HttpContext) {
     const page = Number(request.input('page', 1))
@@ -67,82 +65,67 @@ export default class CaptacionDateosController {
     const placa = normalizePlaca(request.input('placa'))
     const telefono = normalizePhone(request.input('telefono'))
     const canal = request.input('canal') as Canal | undefined
-    const agenteId = request.input('agente_id') ? Number(request.input('agente_id')) : undefined
-    const vigente = request.input('vigente') // 'true' | 'false' | undefined
-    const consumido = request.input('consumido') // 'true' | 'false' | undefined
+    const agenteId =
+      request.input('agente_id') ? Number(request.input('agente_id')) :
+      request.input('agenteId') ? Number(request.input('agenteId')) : undefined
+    const resultado = request.input('resultado') as Resultado | undefined
+    const consumido = request.input('consumido') as 'true' | 'false' | undefined
+    const desde = request.input('desde') as string | undefined // YYYY-MM-DD
+    const hasta = request.input('hasta') as string | undefined // YYYY-MM-DD
+    const sortBy = String(request.input('sortBy', 'id'))
+    const order = String(request.input('order', 'desc')).toLowerCase() === 'asc' ? 'asc' : 'desc'
 
-    const query = CaptacionDateo.query().preload('agente').orderBy('created_at', 'desc')
+    const SORT_WHITELIST: Record<string, string> = {
+      id: 'id',
+      placa: 'placa',
+      telefono: 'telefono',
+      created_at: 'created_at',
+      resultado: 'resultado',
+      consumido_turno_id: 'consumido_turno_id',
+    }
+    const sortCol = SORT_WHITELIST[sortBy] || 'created_at'
 
-    if (placa) query.andWhere('placa', placa)
-    if (telefono) query.andWhere('telefono', telefono)
-    if (canal && CANALES.includes(canal)) query.andWhere('canal', canal)
-    if (agenteId) query.andWhere('agente_id', agenteId)
+    const q = CaptacionDateo.query().preload('agente')
 
-    // Filtro por consumido (simple)
-    if (consumido === 'true') query.andWhereNotNull('consumido_turno_id')
-    if (consumido === 'false') query.andWhereNull('consumido_turno_id')
+    if (placa) q.andWhere('placa', placa)
+    if (telefono) q.andWhere('telefono', telefono)
+    if (canal && CANALES.includes(canal)) q.andWhere('canal', canal)
+    if (agenteId) q.andWhere('agente_id', agenteId)
+    if (resultado && (RESULTADOS as readonly string[]).includes(resultado)) q.andWhere('resultado', resultado)
+    if (consumido === 'true') q.andWhereNotNull('consumido_turno_id')
+    if (consumido === 'false') q.andWhereNull('consumido_turno_id')
+    if (desde) q.andWhere('created_at', '>=', `${desde} 00:00:00`)
+    if (hasta) q.andWhere('created_at', '<=', `${hasta} 23:59:59`)
 
-    const result = await query.paginate(page, perPage)
+    q.orderBy(sortCol, order as 'asc' | 'desc')
 
-    // Enriquecer con 'reserva' (vigencia) si se solicitó 'vigente'
+    const result = await q.paginate(page, perPage)
     const serialized = result.serialize()
-    if (vigente === undefined) return serialized
 
-    const want = String(vigente).toLowerCase() === 'true'
-    serialized.data = serialized.data.filter((row) => {
-      const d = new CaptacionDateo()
-      Object.assign(d, {
-        id: row.id,
-        canal: row.canal,
-        agenteId: row.agente_id ?? row.agenteId,
-        placa: row.placa,
-        telefono: row.telefono,
-        origen: row.origen,
-        createdAt: row.created_at
-          ? typeof row.created_at === 'string'
-            ? row.created_at
-            : row.created_at
-          : undefined,
-        consumidoTurnoId: row.consumido_turno_id ?? row.consumidoTurnoId,
-        consumidoAt: row.consumido_at
-          ? typeof row.consumido_at === 'string'
-            ? row.consumido_at
-            : row.consumido_at
-          : undefined,
-      })
-      // Reconstruir DateTime de Luxon desde ISO si es string
-      // (Si tu app ya devuelve DateTime correctamente, esto no hace falta)
-      if (typeof d.createdAt === 'string') d.createdAt = (d as any).$createDateTime(d.createdAt)
-      if (typeof d.consumidoAt === 'string')
-        d.consumidoAt = (d as any).$createDateTime(d.consumidoAt)
-
-      const r = buildReserva(d)
-      return r.vigente === want
-    })
-
-    return serialized
+    // normalizamos para el front
+    return {
+      data: serialized.data,
+      total: result.total,
+      page: result.currentPage,
+      perPage: result.perPage,
+    }
   }
 
   /** GET /captacion-dateos/:id */
   public async show({ params, response }: HttpContext) {
     const item = await CaptacionDateo.query().where('id', params.id).preload('agente').first()
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
-
     const reserva = buildReserva(item)
     return { ...item.serialize(), reserva }
   }
 
   /**
    * POST /captacion-dateos
-   * body: { canal, agente_id?, placa?, telefono?, origen, observacion?, imagen_url? ... }
-   * Reglas:
-   *  - canal requerido y válido
-   *  - si canal = ASESOR o TELE -> agente_id requerido
-   *  - al menos UNO: placa o telefono
+   * body: { canal, agente_id?, placa?, telefono?, origen, observacion?, imagen_*? }
    */
   public async store({ request, response }: HttpContext) {
     const canal = request.input('canal') as Canal
-    const agenteId = request.input('agente_id') ? Number(request.input('agente_id')) : null
+    const agenteId = request.input('agente_id') ? Number(request.input('agete_id')) : Number(request.input('agente_id')) || null
     const placa = normalizePlaca(request.input('placa'))
     const telefono = normalizePhone(request.input('telefono'))
     const origen = request.input('origen') as Origen
@@ -179,6 +162,8 @@ export default class CaptacionDateosController {
       telefono: telefono ?? null,
       origen,
       observacion,
+      // por si tu migración no trae default:
+      resultado: 'PENDIENTE',
       imagenUrl: imagen_url,
       imagenMime: imagen_mime,
       imagenTamanoBytes: imagen_tamano_bytes ? Number(imagen_tamano_bytes) : null,
@@ -192,7 +177,7 @@ export default class CaptacionDateosController {
 
   /**
    * PUT /captacion-dateos/:id
-   * Permite actualizar observacion, imagen_* y (opcional) marcar consumo: consumido_turno_id
+   * Permite actualizar: observacion, imagen_*, consumido_turno_id y resultado
    */
   public async update({ params, request, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
@@ -205,8 +190,17 @@ export default class CaptacionDateosController {
     const imagen_hash = request.input('imagen_hash')
     const imagen_origen_id = request.input('imagen_origen_id')
     const imagen_subida_por = request.input('imagen_subida_por')
-
     const consumido_turno_id = request.input('consumido_turno_id')
+
+    const resultado = request.input('resultado') as Resultado | undefined
+    if (resultado !== undefined) {
+      if (!(RESULTADOS as readonly string[]).includes(resultado)) {
+        return response.badRequest({
+          message: 'resultado inválido (PENDIENTE | EXITOSO | NO_EXITOSO)',
+        })
+      }
+      item.resultado = resultado
+    }
 
     if (observacion !== undefined) item.observacion = observacion ?? null
     if (imagen_url !== undefined) item.imagenUrl = imagen_url ?? null
@@ -231,7 +225,7 @@ export default class CaptacionDateosController {
     return { ...item.serialize(), reserva }
   }
 
-  /** DELETE /captacion-dateos/:id (permitido; es histórico, pero por si hay errores de carga) */
+  /** DELETE /captacion-dateos/:id */
   public async destroy({ params, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })

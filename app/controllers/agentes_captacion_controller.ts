@@ -1,7 +1,12 @@
 // app/Controllers/Http/agentes_captacion_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
+import { DateTime } from 'luxon'
+
 import AgenteCaptacion from '#models/agente_captacion'
+import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
+import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
+import Prospecto from '#models/prospecto'
 
 function normalizePhone(value?: string) {
   return value ? value.replace(/\D/g, '') : value
@@ -161,13 +166,13 @@ export default class AgentesCaptacionController {
 
   /**
    * DELETE /agentes-captacion/:id
-   * Bloquea si existen dateos que lo referencien (aplicará desde la migración 5).
+   * Bloquea si existen dateos que lo referencien
    */
   public async destroy({ params, response }: HttpContext) {
     const item = await AgenteCaptacion.find(params.id)
     if (!item) return response.notFound({ message: 'Agente no encontrado' })
 
-    // Este check funcionará una vez exista la tabla 'captacion_dateos'
+    // Check suave (si la tabla no existe, no rompe)
     const [{ total }] = await db
       .from('captacion_dateos')
       .where('agente_id', params.id)
@@ -182,5 +187,87 @@ export default class AgentesCaptacionController {
 
     await item.delete()
     return response.noContent()
+  }
+
+  /** GET /agentes-captacion/:id/resumen
+   *  Conteos de convenios y prospectos del asesor.
+   */
+  public async resumen({ params }: HttpContext) {
+    const asesorId = Number(params.id)
+
+    // Convenios
+    const [{ 'count(*)': convTotStr }] = await AsesorConvenioAsignacion.query()
+      .where('asesor_id', asesorId)
+      .count('*')
+
+    const [{ 'count(*)': convVigStr }] = await AsesorConvenioAsignacion.query()
+      .where('asesor_id', asesorId)
+      .where('activo', true)
+      .whereNull('fecha_fin')
+      .count('*')
+
+    // Prospectos
+    const hoyIni = DateTime.now().startOf('day').toJSDate()
+    const hoyFin = DateTime.now().endOf('day').toJSDate()
+    const mesIni = DateTime.now().startOf('month').toJSDate()
+    const mesFin = DateTime.now().endOf('month').toJSDate()
+
+    const [{ 'count(*)': prosVigStr }] = await AsesorProspectoAsignacion.query()
+      .where('asesor_id', asesorId)
+      .where('activo', true)
+      .whereNull('fecha_fin')
+      .count('*')
+
+    const [{ 'count(*)': prosHoyStr }] = await AsesorProspectoAsignacion.query()
+      .where('asesor_id', asesorId)
+      .whereBetween('fecha_asignacion', [hoyIni, hoyFin])
+      .count('*')
+
+    const [{ 'count(*)': prosMesStr }] = await AsesorProspectoAsignacion.query()
+      .where('asesor_id', asesorId)
+      .whereBetween('fecha_asignacion', [mesIni, mesFin])
+      .count('*')
+
+    return {
+      convenios: {
+        total: Number(convTotStr ?? 0),
+        vigentes: Number(convVigStr ?? 0),
+      },
+      prospectos: {
+        total: Number(prosVigStr ?? 0), // si quieres total histórico, cambia la consulta
+        vigentes: Number(prosVigStr ?? 0),
+        hoy: Number(prosHoyStr ?? 0),
+        mes: Number(prosMesStr ?? 0),
+      },
+    }
+  }
+
+  /** GET /agentes-captacion/:id/prospectos?vigente=1&q=… */
+  public async prospectos({ params, request }: HttpContext) {
+    const asesorId = Number(params.id)
+    const vigente = String(request.input('vigente', '1')) === '1'
+    const q = String(request.input('q', '') || '').trim()
+
+    const query = Prospecto.query()
+      .join('asesor_prospecto_asignaciones as apa', 'apa.prospecto_id', 'prospectos.id')
+      .where('apa.asesor_id', asesorId)
+      .select('prospectos.*')
+      .orderBy('prospectos.updated_at', 'desc')
+
+    if (vigente) {
+      query.where('apa.activo', true).whereNull('apa.fecha_fin')
+    }
+
+    if (q) {
+      const like = `%${q.toUpperCase()}%`
+      query.where((sub) => {
+        sub
+          .whereRaw('UPPER(prospectos.placa) LIKE ?', [like])
+          .orWhereRaw('UPPER(prospectos.nombre) LIKE ?', [like])
+          .orWhere('prospectos.telefono', 'like', `%${q.replace(/\D+/g, '')}%`)
+      })
+    }
+
+    return query.exec()
   }
 }
