@@ -7,7 +7,7 @@ import Prospecto from '#models/prospecto'
 import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
 
-export type Canal = 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
+export type Canal = 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES'
 export type Origen = 'UI' | 'WHATSAPP' | 'IMPORT'
 export type ResultadoDateo = 'PENDIENTE' | 'ATENDIDO' | 'EXITOSO' | 'NO_EXITOSO'
 

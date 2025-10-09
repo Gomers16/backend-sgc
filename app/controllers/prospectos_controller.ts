@@ -1,10 +1,16 @@
 // app/controllers/prospectos_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
+import { DateTime } from 'luxon'
+import db from '@adonisjs/lucid/services/db'
+
 import Prospecto from '#models/prospecto'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
-import { DateTime } from 'luxon'
+import AgenteCaptacion from '#models/agente_captacion'
 
+/* ========================
+   Helpers
+======================== */
 function normPlaca(raw?: string | null): string | null {
   if (!raw) return null
   return raw.toUpperCase().replace(/[\s-]+/g, '')
@@ -14,9 +20,125 @@ function normTel(raw?: string | null): string | null {
   return raw.replace(/\D+/g, '')
 }
 
+function userDisplayName(u: {
+  nombres?: string | null
+  apellidos?: string | null
+  nombre?: string | null
+  correo?: string | null
+  email?: string | null
+  id?: number | null
+}): string {
+  const nCompleto = [u?.nombres, u?.apellidos].filter(Boolean).join(' ').trim()
+  return nCompleto || u?.nombre || u?.correo || u?.email || (u?.id ? `Usuario #${u.id}` : '—')
+}
+
+type DocResumen = {
+  estado: 'sin_datos' | 'vigente' | 'vencido'
+  vencimiento: string | null
+  dias_restantes: number | null
+}
+function docStatus(venc?: DateTime | null): DocResumen {
+  const hoy = DateTime.now().startOf('day')
+  if (!venc || !venc.isValid) {
+    return { estado: 'sin_datos', vencimiento: null, dias_restantes: null }
+  }
+  const diff = Math.ceil(venc.diff(hoy, 'days').days)
+  return {
+    estado: diff >= 0 ? 'vigente' : 'vencido',
+    vencimiento: venc.toISODate()!,
+    dias_restantes: diff,
+  }
+}
+
+/* ========================
+   Controller
+======================== */
 export default class ProspectosController {
-  /** Crear prospecto (mínimos: placa, telefono, nombre) */
-  public async store({ request, response, auth }: HttpContext) {
+  /** GET /api/prospectos/:id */
+  public async show(ctx: HttpContext) {
+    const { params, response } = ctx
+    const id = Number(params.id)
+    if (!Number.isFinite(id)) return response.badRequest({ message: 'ID inválido' })
+
+    const p = await Prospecto.query()
+      .where('id', id)
+      .preload('creador')
+      .preload('convenio')
+      .preload('asignaciones', (q) =>
+        q.where('activo', true).whereNull('fecha_fin').orderBy('fecha_asignacion', 'desc').preload('asesor')
+      )
+      .first()
+
+    if (!p) return response.notFound({ message: 'Prospecto no encontrado', id })
+
+    const data = p.serialize()
+
+    // “creador” solo nombre (sin etiqueta)
+    type CreadorOut = {
+      id: number | null
+      nombre: string
+      tipo: string | null
+      fuente: 'USUARIO' | 'SISTEMA' | 'ASESOR' | null
+    } | null
+    let creadorOut: CreadorOut = null
+
+    const creadorModel = (p as unknown as { creador?: Parameters<typeof userDisplayName>[0] | null }).creador
+    if (creadorModel) {
+      creadorOut = { id: creadorModel.id ?? null, nombre: userDisplayName(creadorModel), tipo: null, fuente: null }
+    } else if (p.origen === 'IMPORT') {
+      creadorOut = { id: null, nombre: 'Importación', tipo: null, fuente: null }
+    } else if (p.asignaciones?.length) {
+      const a = p.asignaciones[0]?.asesor as { id?: number | null; nombre?: string | null } | undefined
+      if (a) {
+        creadorOut = { id: a.id ?? null, nombre: a.nombre ?? '—', tipo: null, fuente: null }
+      }
+    }
+
+    // Resumen de vigencias
+    const soat = docStatus(p.soatVencimiento)
+    const rtm = docStatus(p.tecnoVencimiento)
+    const hoy = DateTime.now().startOf('day')
+
+    const preventiva: DocResumen = !p.preventivaVencimiento
+      ? { estado: p.preventivaVigente ? 'vigente' : 'sin_datos', vencimiento: null, dias_restantes: null }
+      : {
+          estado: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days) >= 0 ? 'vigente' : 'vencido',
+          vencimiento: p.preventivaVencimiento.toISODate()!,
+          dias_restantes: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days),
+        }
+
+    const peritaje = p.peritajeUltimaFecha
+      ? { estado: 'registrado', fecha: p.peritajeUltimaFecha.toISODate() }
+      : { estado: 'sin_datos', fecha: null as string | null }
+
+    // Asignación activa + fecha lista para la vista
+    const activa = (p.asignaciones || []).find((a) => a.activo && !a.fechaFin) || null
+    const asignacionOut = activa
+      ? {
+          ...activa.serialize(),
+          fecha_asignacion: activa.fechaAsignacion?.toISO() ?? p.createdAt?.toISO() ?? null,
+        }
+      : null
+
+    return {
+      ...data,
+      creador: creadorOut,
+      soat_vigente: p.soatVigente ?? null,
+      soat_vencimiento: p.soatVencimiento?.toISODate() ?? null,
+      tecno_vigente: p.tecnoVigente ?? null,
+      tecno_vencimiento: p.tecnoVencimiento?.toISODate() ?? null,
+      dias_soat_restantes: p.diasSoatRestantes ?? null,
+      dias_tecno_restantes: p.diasTecnoRestantes ?? null,
+      created_at: p.createdAt?.toISO() ?? null,
+      updated_at: p.updatedAt?.toISO() ?? null,
+      asignacion_activa: asignacionOut,
+      resumenVigencias: { soat, rtm, preventiva, peritaje },
+    }
+  }
+
+  /** POST /api/prospectos */
+  public async store(ctx: HttpContext) {
+    const { request, response, auth } = ctx
     const body = request.only([
       'placa',
       'telefono',
@@ -27,7 +149,17 @@ export default class ProspectosController {
       'soatVencimiento',
       'tecnoVigente',
       'tecnoVencimiento',
+      // 👇 añadidos para guardar Preventiva y Peritaje
+      'preventivaVigente',
+      'preventivaVencimiento',
+      'peritajeUltimaFecha',
+      // meta
       'observaciones',
+      'creadoPor',
+      'creado_por',
+      'asesorId',
+      'asesor_id',
+      'asesor_agente_id',
     ])
 
     const placa = normPlaca(body.placa)
@@ -42,26 +174,86 @@ export default class ProspectosController {
 
     const soatVenc = body.soatVencimiento ? DateTime.fromISO(body.soatVencimiento) : null
     const tecnoVenc = body.tecnoVencimiento ? DateTime.fromISO(body.tecnoVencimiento) : null
+    const prevVenc = body.preventivaVencimiento ? DateTime.fromISO(body.preventivaVencimiento) : null
+    const periUlt = body.peritajeUltimaFecha ? DateTime.fromISO(body.peritajeUltimaFecha) : null
 
-    const prospecto = await Prospecto.create({
-      convenioId: body.convenioId ?? null,
-      placa,
-      telefono,
-      nombre,
-      origen: (body.origen as Prospecto['origen']) ?? 'OTRO',
-      creadoPor: auth?.user?.id ?? null,
-      soatVigente: !!body.soatVigente,
-      soatVencimiento: soatVenc && soatVenc.isValid ? soatVenc : null,
-      tecnoVigente: !!body.tecnoVigente,
-      tecnoVencimiento: tecnoVenc && tecnoVenc.isValid ? tecnoVenc : null,
-      observaciones: body.observaciones ?? null,
-    })
+    const creadorIdNum = Number(auth?.user?.id ?? body.creadoPor ?? body.creado_por)
+    const creadoPor = Number.isFinite(creadorIdNum) ? creadorIdNum : null
 
-    return response.created(prospecto)
+    // Asesor (AgenteCaptacion.id) — explícito → auth.user → creador
+    let asesorAgenteId: number | null = null
+    const directAgente = Number(body.asesor_agente_id) || Number(body.asesorId) || Number(body.asesor_id)
+    if (Number.isFinite(directAgente)) {
+      asesorAgenteId = Number(directAgente)
+    } else if (auth?.user?.id) {
+      const agente = await AgenteCaptacion.query().where('usuario_id', auth.user.id).where('activo', true).first()
+      if (agente) asesorAgenteId = agente.id
+    } else if (creadoPor) {
+      const agenteCreador = await AgenteCaptacion.query().where('usuario_id', creadoPor).where('activo', true).first()
+      if (agenteCreador) asesorAgenteId = agenteCreador.id
+    }
+
+    const trx = await db.transaction()
+    try {
+      // Crear prospecto
+      const prospecto = await Prospecto.create(
+        {
+          convenioId: body.convenioId ?? null,
+          placa,
+          telefono,
+          nombre,
+          origen: (body.origen as Prospecto['origen']) ?? 'OTRO',
+          creadoPor,
+          soatVigente: !!body.soatVigente,
+          soatVencimiento: soatVenc && soatVenc.isValid ? soatVenc : null,
+          tecnoVigente: !!body.tecnoVigente,
+          tecnoVencimiento: tecnoVenc && tecnoVenc.isValid ? tecnoVenc : null,
+          // 👇 Guardar Preventiva / Peritaje
+          preventivaVigente: !!body.preventivaVigente,
+          preventivaVencimiento: prevVenc && prevVenc.isValid ? prevVenc : null,
+          peritajeUltimaFecha: periUlt && periUlt.isValid ? periUlt : null,
+          observaciones: body.observaciones ?? null,
+        },
+        { client: trx }
+      )
+
+      // Crear asignación activa si tenemos agente
+      if (Number.isFinite(asesorAgenteId)) {
+        await AsesorProspectoAsignacion.create(
+          {
+            asesorId: Number(asesorAgenteId),
+            prospectoId: prospecto.id,
+            asignadoPor: auth?.user?.id ?? creadoPor ?? null,
+            fechaAsignacion: DateTime.now(),
+            fechaFin: null,
+            motivoFin: null,
+            activo: true,
+          } as any, // (si tu modelo tiene tipos, puedes quitar el "as any")
+          { client: trx }
+        )
+      }
+
+      await trx.commit()
+
+      // Devolver con preload
+      const full = await Prospecto.query()
+        .where('id', prospecto.id)
+        .preload('creador')
+        .preload('asignaciones', (q) =>
+          q.where('activo', true).whereNull('fecha_fin').orderBy('fecha_asignacion', 'desc').preload('asesor')
+        )
+        .first()
+
+      return response.created(full ?? prospecto)
+    } catch (e) {
+      await trx.rollback()
+      return response.internalServerError({ message: 'Error creando prospecto', error: String(e) })
+    }
   }
 
-  /** Editar prospecto */
-  public async update({ request, params, response }: HttpContext) {
+  /** PATCH /api/prospectos/:id */
+  public async update(ctx: HttpContext) {
+    const { request, params, response } = ctx
     const id = Number(params.id)
     const prospecto = await Prospecto.find(id)
     if (!prospecto) return response.notFound({ message: 'Prospecto no encontrado' })
@@ -77,6 +269,9 @@ export default class ProspectosController {
       'tecnoVigente',
       'tecnoVencimiento',
       'observaciones',
+      'preventivaVigente',
+      'preventivaVencimiento',
+      'peritajeUltimaFecha',
     ])
 
     if (body.placa !== undefined) prospecto.placa = normPlaca(body.placa)
@@ -97,24 +292,52 @@ export default class ProspectosController {
     }
     if (body.observaciones !== undefined) prospecto.observaciones = body.observaciones ?? null
 
+    if (body.preventivaVigente !== undefined) prospecto.preventivaVigente = !!body.preventivaVigente
+    if (body.preventivaVencimiento !== undefined) {
+      const d = body.preventivaVencimiento ? DateTime.fromISO(body.preventivaVencimiento) : null
+      prospecto.preventivaVencimiento = d && d.isValid ? d : null
+    }
+    if (body.peritajeUltimaFecha !== undefined) {
+      const d = body.peritajeUltimaFecha ? DateTime.fromISO(body.peritajeUltimaFecha) : null
+      prospecto.peritajeUltimaFecha = d && d.isValid ? d : null
+    }
+
     await prospecto.save()
     return prospecto
   }
 
-  /** Listado con filtros simples */
-  public async index({ request }: HttpContext) {
-    const { convenioId, vencenEnDias, soat, tecno, q, creadoPor } = request.qs()
+  /** GET /api/prospectos */
+  public async index(ctx: HttpContext) {
+    const { request } = ctx
+    const q = request.qs()
+
+    const convenioId = q.convenioId ?? q.convenio_id
+    const creadoPor = q.creadoPor ?? q.creado_por
+    const vencenEnDias = Number(q.vencenEnDias)
+    const soat = String(q.soat ?? '').toLowerCase() === 'true'
+    const tecno = String(q.tecno ?? '').toLowerCase() === 'true'
+    const term = String(q.q ?? '').trim()
+
+    const page = Number(q.page ?? 1)
+    const perPage = Math.min(Number(q.perPage ?? 20), 200)
+    const sortBy = String(q.sortBy ?? 'updated_at')
+    const order: 'asc' | 'desc' = String(q.order ?? 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc'
+
+    const asesorId = q.asesorId ?? q.asesor_id
+    const vigenteRaw = q.vigente ?? q.vigente_num
+    const vigente = vigenteRaw === undefined ? undefined : String(vigenteRaw) === 'true' || String(vigenteRaw) === '1'
+
+    const hoy = DateTime.now().startOf('day')
+    const hasta = !Number.isNaN(vencenEnDias) && vencenEnDias > 0 ? hoy.plus({ days: vencenEnDias }) : null
+
     const query = Prospecto.query()
 
     if (convenioId) query.where('convenio_id', Number(convenioId))
     if (creadoPor) query.where('creado_por', Number(creadoPor))
 
-    const dias = Number(vencenEnDias)
-    if (!Number.isNaN(dias) && dias > 0 && (soat === 'true' || tecno === 'true')) {
-      const hoy = DateTime.now().startOf('day')
-      const hasta = hoy.plus({ days: dias })
+    if (hasta && (soat || tecno)) {
       query.where((grp) => {
-        if (soat === 'true') {
+        if (soat) {
           grp.where((sub) => {
             sub
               .where('soat_vigente', true)
@@ -122,7 +345,7 @@ export default class ProspectosController {
               .whereBetween('soat_vencimiento', [hoy.toISODate()!, hasta.toISODate()!])
           })
         }
-        if (tecno === 'true') {
+        if (tecno) {
           grp.orWhere((sub) => {
             sub
               .where('tecno_vigente', true)
@@ -133,70 +356,100 @@ export default class ProspectosController {
       })
     }
 
-    if (q) {
-      const like = `%${String(q).trim().toUpperCase()}%`
+    if (term) {
+      const like = `%${term.toUpperCase()}%`
       query.where((sub) => {
         sub
           .whereRaw('UPPER(placa) LIKE ?', [like])
           .orWhereRaw('UPPER(nombre) LIKE ?', [like])
-          .orWhere('telefono', 'like', `%${String(q).replace(/\D+/g, '')}%`)
+          .orWhere('telefono', 'like', `%${term.replace(/\D+/g, '')}%`)
       })
     }
 
-    query.orderBy('updated_at', 'desc').limit(200)
-    return query.exec()
+    if (vigente !== undefined) {
+      if (vigente) {
+        query.whereExists((sub) => {
+          sub
+            .from('asesor_prospecto_asignaciones')
+            .whereColumn('asesor_prospecto_asignaciones.prospecto_id', 'prospectos.id')
+            .where('activo', true)
+            .whereNull('fecha_fin')
+        })
+      } else {
+        query.whereNotExists((sub) => {
+          sub
+            .from('asesor_prospecto_asignaciones')
+            .whereColumn('asesor_prospecto_asignaciones.prospecto_id', 'prospectos.id')
+            .where('activo', true)
+            .whereNull('fecha_fin')
+        })
+      }
+    }
+
+    if (asesorId) {
+      query.whereExists((sub) => {
+        sub
+          .from('asesor_prospecto_asignaciones')
+          .whereColumn('asesor_prospecto_asignaciones.prospecto_id', 'prospectos.id')
+          .where('asesor_id', Number(asesorId))
+          .where('activo', true)
+          .whereNull('fecha_fin')
+      })
+    }
+
+    query.orderBy(sortBy, order)
+
+    const paginator = await query.paginate(page, perPage)
+    return {
+      data: paginator.all().map((p) => p.serialize()),
+      total: paginator.total,
+      page: paginator.currentPage,
+      perPage: paginator.perPage,
+    }
   }
 
-  /** Resumen por asesor (convenios + conteo de prospectos asignados activos) */
-  public async resumenByAsesor({ params }: HttpContext) {
+  /** GET /api/asesores/:id/resumen (legacy) */
+  public async resumenByAsesor(ctx: HttpContext) {
+    const { params } = ctx
     const asesorId = Number(params.id)
 
-    const [{ 'count(*)': asignTotStr }] = await AsesorConvenioAsignacion.query()
-      .where('asesor_id', asesorId)
-      .count('*')
+    const r1 = await AsesorConvenioAsignacion.query().where('asesor_id', asesorId).count('*')
+    const asignTotStr = Number((r1[0] as any)['count(*)'] ?? 0)
 
-    const [{ 'count(*)': vigStr }] = await AsesorConvenioAsignacion.query()
+    const r2 = await AsesorConvenioAsignacion.query()
       .where('asesor_id', asesorId)
       .where('activo', true)
       .whereNull('fecha_fin')
       .count('*')
+    const vigStr = Number((r2[0] as any)['count(*)'] ?? 0)
 
     const hoyIni = DateTime.now().startOf('day')
     const hoyFin = DateTime.now().endOf('day')
     const mesIni = DateTime.now().startOf('month')
     const mesFin = DateTime.now().endOf('month')
 
-    // Sólo asignaciones activas cuentan
     const base = AsesorProspectoAsignacion.query().where('asesor_id', asesorId).where('activo', true)
 
-    const [{ 'count(*)': totStr }] = await base.clone().count('*')
-    const [{ 'count(*)': hoyStr }] = await base
-      .clone()
-      .whereBetween('fecha_asignacion', [hoyIni.toJSDate(), hoyFin.toJSDate()])
-      .count('*')
-    const [{ 'count(*)': mesStr }] = await base
-      .clone()
-      .whereBetween('fecha_asignacion', [mesIni.toJSDate(), mesFin.toJSDate()])
-      .count('*')
+    const rTot = await base.clone().count('*')
+    const totStr = Number((rTot[0] as any)['count(*)'] ?? 0)
+
+    const rHoy = await base.clone().whereBetween('fecha_asignacion', [hoyIni.toJSDate(), hoyFin.toJSDate()]).count('*')
+    const hoyStr = Number((rHoy[0] as any)['count(*)'] ?? 0)
+
+    const rMes = await base.clone().whereBetween('fecha_asignacion', [mesIni.toJSDate(), mesFin.toJSDate()]).count('*')
+    const mesStr = Number((rMes[0] as any)['count(*)'] ?? 0)
 
     return {
-      convenios: {
-        vigentes: Number(vigStr ?? 0),
-        asignaciones: Number(asignTotStr ?? 0),
-        total: Number(asignTotStr ?? 0),
-      },
-      prospectos: {
-        total: Number(totStr ?? 0),
-        hoy: Number(hoyStr ?? 0),
-        mes: Number(mesStr ?? 0),
-      },
+      convenios: { vigentes: vigStr, asignaciones: asignTotStr, total: asignTotStr },
+      prospectos: { total: totStr, hoy: hoyStr, mes: mesStr },
     }
   }
 
-  /** 👉 Listar prospectos de un asesor (usado por el modal) */
-  public async listByAsesor({ params, request }: HttpContext) {
+  /** GET /api/prospectos/asesor/:id/list */
+  public async listByAsesor(ctx: HttpContext) {
+    const { params, request } = ctx
     const asesorId = Number(params.id)
-    const vigente = String(request.input('vigente', '1')) // 1 = sólo asignaciones activas
+    const vigente = String(request.input('vigente', '1'))
     const q = Prospecto.query()
       .join('asesor_prospecto_asignaciones as apa', 'apa.prospecto_id', 'prospectos.id')
       .where('apa.asesor_id', asesorId)
@@ -207,5 +460,58 @@ export default class ProspectosController {
     if (vigente === '1') q.andWhere('apa.activo', true).andWhereNull('apa.fecha_fin')
 
     return await q
+  }
+
+  /** POST /api/prospectos/:id/asignar */
+  public async asignar(ctx: HttpContext) {
+    const { params, request, auth, response } = ctx
+    const prospectoId = Number(params.id)
+    const asesorId = Number(request.input('asesor_id') ?? request.input('asesorId'))
+    const motivoFin = request.input('motivo_fin') as string | undefined
+    if (!prospectoId || !asesorId) return response.badRequest({ message: 'prospecto_id y asesor_id son requeridos' })
+
+    const trx = await db.transaction()
+    try {
+      const activa = await AsesorProspectoAsignacion.query({ client: trx })
+        .where('prospecto_id', prospectoId)
+        .where('activo', true)
+        .whereNull('fecha_fin')
+        .first()
+
+      if (activa) {
+        activa.merge({ activo: false, fechaFin: DateTime.now(), motivoFin: motivoFin ?? 'Reasignación' } as any)
+        await activa.save()
+      }
+
+      const nueva = await AsesorProspectoAsignacion.create(
+        { prospectoId, asesorId, asignadoPor: auth?.user?.id ?? null, fechaAsignacion: DateTime.now(), activo: true } as any,
+        { client: trx }
+      )
+
+      await trx.commit()
+      return response.created({ message: 'Asignación creada', id: nueva.id })
+    } catch (e) {
+      await trx.rollback()
+      return response.internalServerError({ message: 'Error al asignar', error: String(e) })
+    }
+  }
+
+  /** POST /api/prospectos/:id/retirar */
+  public async retirar(ctx: HttpContext) {
+    const { params, request, response } = ctx
+    const prospectoId = Number(params.id)
+    const motivo = request.input('motivo') as string | undefined
+
+    const activa = await AsesorProspectoAsignacion.query()
+      .where('prospecto_id', prospectoId)
+      .where('activo', true)
+      .whereNull('fecha_fin')
+      .first()
+
+    if (!activa) return response.badRequest({ message: 'No existe asignación activa' })
+
+    activa.merge({ activo: false, fechaFin: DateTime.now(), motivoFin: motivo ?? 'Retiro manual' } as any)
+    await activa.save()
+    return { message: 'Asignación cerrada' }
   }
 }

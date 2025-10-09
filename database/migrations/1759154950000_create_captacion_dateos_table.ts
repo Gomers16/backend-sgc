@@ -5,13 +5,15 @@ export default class CaptacionDateos extends BaseSchema {
   protected tableName = 'captacion_dateos'
 
   public async up() {
+    // En dev, tu up ya elimina la tabla si existe
     await this.schema.dropTableIfExists(this.tableName)
 
     await this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
 
+      // ✅ Enum de canal actualizado (antes: 'FACHADA','ASESOR','TELE','REDES')
       table
-        .enu('canal', ['FACHADA', 'ASESOR', 'TELE', 'REDES'], {
+        .enu('canal', ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'], {
           useNative: true,
           enumName: 'captacion_canal_enum',
         })
@@ -37,6 +39,7 @@ export default class CaptacionDateos extends BaseSchema {
 
       table.string('observacion', 255).nullable()
 
+      // Imagen (opcional)
       table.string('imagen_url', 512).nullable()
       table.string('imagen_mime', 100).nullable()
       table.integer('imagen_tamano_bytes').unsigned().nullable()
@@ -44,6 +47,7 @@ export default class CaptacionDateos extends BaseSchema {
       table.string('imagen_origen_id', 128).nullable()
       table.integer('imagen_subida_por').unsigned().nullable()
 
+      // Consumo
       table
         .integer('consumido_turno_id')
         .unsigned()
@@ -55,6 +59,7 @@ export default class CaptacionDateos extends BaseSchema {
       table.dateTime('consumido_at', { precision: 0 }).nullable()
       table.string('payload_hash', 128).nullable().unique()
 
+      // Vínculos comerciales
       table
         .integer('convenio_id')
         .unsigned()
@@ -87,6 +92,7 @@ export default class CaptacionDateos extends BaseSchema {
         .inTable('clientes')
         .onDelete('SET NULL')
 
+      // Resultado del dateo
       table
         .enu('resultado', ['PENDIENTE', 'ATENDIDO', 'EXITOSO', 'NO_EXITOSO'], {
           useNative: true,
@@ -100,6 +106,7 @@ export default class CaptacionDateos extends BaseSchema {
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
       table.dateTime('updated_at', { precision: 0 }).notNullable().defaultTo(this.now())
 
+      // Índices
       table.index(['placa', 'created_at'])
       table.index(['telefono', 'created_at'])
       table.index(['canal', 'agente_id', 'created_at'])

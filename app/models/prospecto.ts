@@ -1,8 +1,10 @@
+// app/models/prospecto.ts
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo, hasMany, computed } from '@adonisjs/lucid/orm'
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 
 import Convenio from '#models/convenio'
+import Usuario from '#models/usuario' // ⬅️ si tu “asesor creador” es otro modelo, cámbialo aquí
 import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
 import CaptacionDateo from '#models/captacion_dateo'
 
@@ -22,44 +24,45 @@ export default class Prospecto extends BaseModel {
   declare convenio: BelongsTo<typeof Convenio>
 
   // 📇 Datos base
-  @column()
-  declare placa: string | null
-
-  @column()
-  declare telefono: string | null
-
-  @column()
-  declare nombre: string | null
+  @column() declare placa: string | null
+  @column() declare telefono: string | null
+  @column() declare nombre: string | null
 
   // 📝 Observaciones
-  @column()
-  declare observaciones: string | null
+  @column() declare observaciones: string | null
 
-  // 🧾 Estado documentos
+  // 🧾 Estado documentos principales
   @column({ columnName: 'soat_vigente' })
   declare soatVigente: boolean | null
 
-  @column.date({
-    columnName: 'soat_vencimiento',
-    serialize: (value?: DateTime | null) => (value ? value.toISODate() : null),
-  })
+  @column.date({ columnName: 'soat_vencimiento', serialize: (v) => v?.toISODate() ?? null })
   declare soatVencimiento: DateTime | null
 
   @column({ columnName: 'tecno_vigente' })
   declare tecnoVigente: boolean | null
 
-  @column.date({
-    columnName: 'tecno_vencimiento',
-    serialize: (value?: DateTime | null) => (value ? value.toISODate() : null),
-  })
+  @column.date({ columnName: 'tecno_vencimiento', serialize: (v) => v?.toISODate() ?? null })
   declare tecnoVencimiento: DateTime | null
 
+  // 🧪 Servicios adicionales
+  @column({ columnName: 'preventiva_vigente' })
+  declare preventivaVigente: boolean | null
+
+  @column.date({ columnName: 'preventiva_vencimiento', serialize: (v) => v?.toISODate() ?? null })
+  declare preventivaVencimiento: DateTime | null
+
+  @column.date({ columnName: 'peritaje_ultima_fecha', serialize: (v) => v?.toISODate() ?? null })
+  declare peritajeUltimaFecha: DateTime | null
+
   // 🔎 Trazabilidad mínima
-  @column()
-  declare origen: ProspectoOrigen
+  @column() declare origen: ProspectoOrigen
 
   @column({ columnName: 'creado_por' })
   declare creadoPor: number | null
+
+  // 👤 Creador (Usuario/Asesor que lo creó)
+  @belongsTo(() => Usuario, { foreignKey: 'creadoPor' })
+  declare creador: BelongsTo<typeof Usuario>
 
   // ⏱️ Timestamps
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })
@@ -79,16 +82,18 @@ export default class Prospecto extends BaseModel {
   @computed()
   public get diasSoatRestantes(): number | null {
     if (!this.soatVencimiento) return null
-    const hoy = DateTime.now().startOf('day')
-    const fin = this.soatVencimiento.startOf('day')
-    return Math.floor(fin.diff(hoy, 'days').days)
+    return Math.floor(this.soatVencimiento.startOf('day').diffNow('days').days)
   }
 
   @computed()
   public get diasTecnoRestantes(): number | null {
     if (!this.tecnoVencimiento) return null
-    const hoy = DateTime.now().startOf('day')
-    const fin = this.tecnoVencimiento.startOf('day')
-    return Math.floor(fin.diff(hoy, 'days').days)
+    return Math.floor(this.tecnoVencimiento.startOf('day').diffNow('days').days)
+  }
+
+  @computed()
+  public get diasPreventivaRestantes(): number | null {
+    if (!this.preventivaVencimiento) return null
+    return Math.floor(this.preventivaVencimiento.startOf('day').diffNow('days').days)
   }
 }

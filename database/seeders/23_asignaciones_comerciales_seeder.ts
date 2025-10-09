@@ -14,9 +14,10 @@ export default class AsignacionesComercialesSeeder extends BaseSeeder {
   public async run() {
     const trx = await Database.transaction()
     try {
-      // Toma hasta 6 asesores activos para repartir (o crea los que falten)
+      // Buscar hasta 6 asesores comerciales activos
       let asesores = await AgenteCaptacion.query({ client: trx })
         .where('activo', true)
+        .where('tipo', 'ASESOR_COMERCIAL')
         .orderBy('id', 'asc')
         .limit(6)
 
@@ -26,8 +27,8 @@ export default class AsignacionesComercialesSeeder extends BaseSeeder {
         for (let i = 0; i < faltan; i++) {
           const a = await AgenteCaptacion.create(
             {
-              tipo: 'ASESOR_INTERNO', // 👈 obligatorio
-              nombre: `Asesor Demo ${i + 1}`,
+              tipo: 'ASESOR_COMERCIAL', // ✅ corregido
+              nombre: `Asesor Comercial Demo ${i + 1}`,
               telefono: `30000000${i + 1}`,
               activo: true,
             },
@@ -46,7 +47,7 @@ export default class AsignacionesComercialesSeeder extends BaseSeeder {
         const ya = await AsesorConvenioAsignacion.query({ client: trx })
           .where('convenio_id', conv.id)
           .where('activo', true)
-          .whereNull('fecha_fin') // 👈 asegura “vigente”
+          .whereNull('fecha_fin')
           .first()
 
         if (!ya) {
@@ -55,7 +56,7 @@ export default class AsignacionesComercialesSeeder extends BaseSeeder {
               convenioId: conv.id,
               asesorId: pick(idx).id,
               asignadoPor: usuarioAsignador?.id ?? null,
-              fechaAsignacion: DateTime.now(), // Luxon OK con Lucid
+              fechaAsignacion: DateTime.now(),
               fechaFin: null,
               motivoFin: null,
               activo: true,
@@ -71,7 +72,7 @@ export default class AsignacionesComercialesSeeder extends BaseSeeder {
         const activo = await AsesorProspectoAsignacion.query({ client: trx })
           .where('prospecto_id', pros.id)
           .where('activo', true)
-          .whereNull('fecha_fin') // 👈 asegura “vigente”
+          .whereNull('fecha_fin')
           .first()
 
         if (!activo) {

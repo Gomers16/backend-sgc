@@ -5,17 +5,20 @@ export default class CreateAgentesCaptacions extends BaseSchema {
   protected tableName = 'agentes_captacions'
 
   public async up() {
-    this.schema.createTable(this.tableName, (table) => {
+    await this.schema.dropTableIfExists(this.tableName)
+
+    await this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
 
+      // 🎯 Nuevo enum con los 3 tipos reales alineados a cargos
       table
-        .enu('tipo', ['ASESOR_INTERNO', 'ASESOR_EXTERNO', 'TELEMERCADEO'], {
+        .enu('tipo', ['ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'ASESOR_TELEMERCADEO'], {
           useNative: true,
           enumName: 'agente_tipo_enum',
         })
         .notNullable()
 
-      // 🔗 Usuario (solo cuando es interno; puede ser NULL en externos)
+      // 🔗 Usuario (solo cuando es comercial o telemercadeo; puede ser NULL en convenios)
       table
         .integer('usuario_id')
         .unsigned()
@@ -41,15 +44,15 @@ export default class CreateAgentesCaptacions extends BaseSchema {
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
       table.dateTime('updated_at', { precision: 0 }).notNullable().defaultTo(this.now())
 
-      // Índices
+      // Índices y restricciones
       table.unique(['doc_tipo', 'doc_numero']) // permite ambos NULL
-      table.unique(['usuario_id'])             // permite múltiples NULL
+      table.unique(['usuario_id']) // permite múltiples NULL
       table.index(['telefono'])
       table.index(['tipo', 'activo'])
     })
   }
 
   public async down() {
-    this.schema.dropTable(this.tableName)
+    this.schema.dropTableIfExists(this.tableName)
   }
 }

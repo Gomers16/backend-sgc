@@ -1,4 +1,3 @@
-// database/migrations/1759154774320_create_prospectos_table.ts
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class CreateProspectosTable extends BaseSchema {
@@ -23,11 +22,20 @@ export default class CreateProspectosTable extends BaseSchema {
       table.string('nombre', 120).nullable()
       table.string('observaciones', 255).nullable()
 
+      // 🛞 SOAT
       table.boolean('soat_vigente').notNullable().defaultTo(false)
       table.date('soat_vencimiento').nullable()
 
+      // 🧪 RTM (tecnomecánica)
       table.boolean('tecno_vigente').notNullable().defaultTo(false)
       table.date('tecno_vencimiento').nullable()
+
+      // 🧰 Preventiva (cada 2 meses)
+      table.boolean('preventiva_vigente').notNullable().defaultTo(false)
+      table.date('preventiva_vencimiento').nullable()
+
+      // 🔍 Peritaje (última fecha conocida, no tiene vigencia fija)
+      table.date('peritaje_ultima_fecha').nullable()
 
       table
         .enu('origen', ['IMPORT', 'CAMPO', 'EVENTO', 'OTRO'], {
@@ -53,6 +61,7 @@ export default class CreateProspectosTable extends BaseSchema {
       table.index(['telefono'])
       table.index(['soat_vigente', 'soat_vencimiento'])
       table.index(['tecno_vigente', 'tecno_vencimiento'])
+      table.index(['preventiva_vigente', 'preventiva_vencimiento'])
       table.index(['origen'])
     })
   }

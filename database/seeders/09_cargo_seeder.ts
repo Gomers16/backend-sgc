@@ -4,25 +4,23 @@ import Cargo from '#models/cargo' // Importación usando alias
 export default class CargoSeeder extends BaseSeeder {
   async run() {
     const cargos = [
-      { nombre: 'ADMINISTRAD@R' },
-      { nombre: 'COORDINADOR TALENTO HUMANO' },
+      { nombre: 'DIRECCION FINANCIERA' },
+      { nombre: 'DIRECCION DE CALIDAD Y AUDITORÍA' },
+      { nombre: 'DIRECCION ADMINSITRATIVA Y COMERCIAL' },
+      { nombre: 'TALENTO HUMANO' },
       { nombre: 'CONTADOR' },
-      { nombre: 'AUX CONTABLE SENIOR' },
-      { nombre: 'AUX CONTABLE JUNIOR' },
-      { nombre: 'DIR. TECNICO' },
-      { nombre: 'DIR. TECNICO SUPLENTE' },
+      { nombre: 'AUXILIAR CONTABLE JUNIOR' },
+      { nombre: 'AUXILIAR CONTABLE SENIOR' },
+      { nombre: 'LIDER DE SERVICIO AL CLIENTE' },
+      { nombre: 'ASESOR COMERCIAL' }, // <- actualizado
+      { nombre: 'ASESOR CONVENIO' }, // <- agregado
+      { nombre: 'ASESOR - REGISTRO' },
+      { nombre: 'ASESOR - CAJA' },
+      { nombre: 'ASESOR - PUERTA' },
+      { nombre: 'ASESOR - TELEMERCADEO' },
+      { nombre: 'DIRECTOR TECNICO' },
+      { nombre: 'DIRECTOR TECNICO SUPLENTE' },
       { nombre: 'INSPECTOR' },
-      { nombre: 'LIDER DE AREA' },
-      { nombre: 'ASESOR DE SERVICIO AL CLIENTE Y VENTAS' }, // Primera aparición
-      { nombre: 'RECEPCIONISTA MOVILIZADOR' },
-      { nombre: 'GERENCIA' },
-      { nombre: 'GERENCIA FINANCIERA' },
-      { nombre: 'DIR CALIDAD Y LIDER SEDE IBG ENCARGADA' },
-      { nombre: 'LIDER OPERATIVO' },
-      { nombre: 'DIR. ADMINISTRATIVA Y COMERCIAL' },
-      { nombre: 'LIDER SEDE BOGOTA' },
-      { nombre: 'AUXILIAR ADMINISTRATIVA' },
-      // La segunda aparición de 'ASESOR DE SERVICIO AL CLIENTE Y VENTAS' ha sido eliminada
     ]
 
     // Filtra para cargos únicos por nombre antes de crearlos

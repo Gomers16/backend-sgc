@@ -14,12 +14,10 @@ router
       const { default: AuthController } = await import('#controllers/auth_controller')
       return new AuthController().login(ctx)
     })
-
     router.post('/forgot-password', async (ctx) => {
       const { default: AuthController } = await import('#controllers/auth_controller')
       return new AuthController().forgotPassword(ctx)
     })
-
     router.post('/reset-password', async (ctx) => {
       const { default: AuthController } = await import('#controllers/auth_controller')
       return new AuthController().resetPassword(ctx)
@@ -42,12 +40,10 @@ router
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
       return new TurnosRtmController().siguienteTurno(ctx)
     })
-
     router.get('/turnos-rtm/reporte/excel', async (ctx) => {
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
       return new TurnosRtmController().exportExcel(ctx)
     })
-
     router.post('/turnos-rtm', async (ctx) => {
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
       return new TurnosRtmController().store(ctx)
@@ -70,35 +66,30 @@ router
         return new TurnosRtmController().show(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .put('/turnos-rtm/:id', async (ctx) => {
         const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
         return new TurnosRtmController().update(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .put('/turnos-rtm/:id/salida', async (ctx) => {
         const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
         return new TurnosRtmController().registrarSalida(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .patch('/turnos-rtm/:id/activar', async (ctx) => {
         const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
         return new TurnosRtmController().activar(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .patch('/turnos-rtm/:id/cancelar', async (ctx) => {
         const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
         return new TurnosRtmController().cancelar(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
         const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
@@ -111,27 +102,22 @@ router
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().index(ctx)
     })
-
     router.post('/usuarios', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().store(ctx)
     })
-
     router.get('/usuarios/:id', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().show(ctx)
     })
-
     router.put('/usuarios/:id', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().update(ctx)
     })
-
     router.delete('/usuarios/:id', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().destroy(ctx)
     })
-
     router.post('/usuarios/:id/upload-photo', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
       return new UsuariosController().uploadProfilePicture(ctx)
@@ -142,19 +128,16 @@ router
       { path: 'roles', controller: '#controllers/roles_controller' },
       { path: 'razones-sociales', controller: '#controllers/razones_sociales_controller' },
       { path: 'sedes', controller: '#controllers/sedes_controller' },
-      { path: 'cargos', controller: '#controllers/cargos_controller' },
       { path: 'entidades-saluds', controller: '#controllers/entidades_saluds_controller' },
       { path: 'servicios', controller: '#controllers/servicios_controller' },
       { path: 'ciudades', controller: '#controllers/ciudades_controller' },
     ]
-
     for (const { path, controller } of selectors) {
       router.get(`/${path}`, async (ctx) => {
         const { default: Ctrl } = await import(controller)
         return new Ctrl().index(ctx)
       })
     }
-
     router.get('/razones-sociales/:id/usuarios', async (ctx) => {
       const { default: Ctrl } = await import('#controllers/razones_sociales_controller')
       return new Ctrl().usuarios(ctx)
@@ -173,47 +156,38 @@ router
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().index(ctx)
     })
-
     router.get('/usuarios/:usuarioId/contratos', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getContratosUsuario(ctx)
     })
-
     router.post('/contratos', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().store(ctx)
     })
-
     router.post('/contratos/anexar-fisico', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().anexarFisico(ctx)
     })
-
     router.get('/contratos/:id', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().show(ctx)
     })
-
     router.patch('/contratos/:id', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().update(ctx)
     })
-
     router.delete('/contratos/:id', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().destroy(ctx)
     })
-
     router.get('/contratos/:id/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().descargarArchivo(ctx)
     })
-
     router.get('/contratos/:id/archivo/meta', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getArchivoContratoMeta(ctx)
     })
-
     router.delete('/contratos/:id/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().eliminarArchivoContrato(ctx)
@@ -224,17 +198,14 @@ router
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getRecomendacionMedicaMeta(ctx)
     })
-
     router.post('/contratos/:id/recomendacion/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().subirRecomendacionMedica(ctx)
     })
-
     router.delete('/contratos/:id/recomendacion/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().eliminarRecomendacionMedica(ctx)
     })
-
     router.get('/contratos/:id/recomendacion/descargar', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().descargarRecomendacionMedica(ctx)
@@ -245,12 +216,10 @@ router
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().getAfiliacionArchivo(ctx)
     })
-
     router.post('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().subirAfiliacionArchivo(ctx)
     })
-
     router.delete('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().eliminarAfiliacionArchivo(ctx)
@@ -265,28 +234,24 @@ router
           )
           return new ContratoPasosController().index(ctx)
         })
-
         router.post('/', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
           )
           return new ContratoPasosController().store(ctx)
         })
-
         router.get('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
           )
           return new ContratoPasosController().show(ctx)
         })
-
         router.put('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
           )
           return new ContratoPasosController().update(ctx)
         })
-
         router.delete('/:id', async (ctx) => {
           const { default: ContratoPasosController } = await import(
             '#controllers/contrato_pasos_controller'
@@ -305,21 +270,18 @@ router
           )
           return new ContratoEventoController().index(ctx)
         })
-
         router.post('/', async (ctx) => {
           const { default: ContratoEventoController } = await import(
             '#controllers/contrato_evento_controller'
           )
           return new ContratoEventoController().store(ctx)
         })
-
         router.put('/:id', async (ctx) => {
           const { default: ContratoEventoController } = await import(
             '#controllers/contrato_evento_controller'
           )
           return new ContratoEventoController().update(ctx)
         })
-
         router.delete('/:id', async (ctx) => {
           const { default: ContratoEventoController } = await import(
             '#controllers/contrato_evento_controller'
@@ -338,7 +300,6 @@ router
           )
           return new ContratoCambiosController().index(ctx)
         })
-
         router.post('/', async (ctx) => {
           const { default: ContratoCambiosController } = await import(
             '#controllers/contrato_cambios_controller'
@@ -353,7 +314,6 @@ router
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().storeSalario(ctx)
     })
-
     router.get('/contratos/:contratoId/salarios', async (ctx) => {
       const { default: ContratosController } = await import('#controllers/contratos_controller')
       return new ContratosController().listSalarios(ctx)
@@ -364,10 +324,6 @@ router
       const { default: CiudadesController } = await import('#controllers/ciudades_controller')
       return new CiudadesController().show(ctx)
     })
-
-    // =============================
-    // === NUEVOS ENDPOINTS MVP ===
-    // =============================
 
     // === CLASES DE VEHÍCULO ===
     router.get('/clases-vehiculo', async (ctx) => {
@@ -452,32 +408,50 @@ router
       )
       return new AgentesCaptacionController().index(ctx)
     })
-    router.get('/agentes-captacion/:id', async (ctx) => {
+    router.get('/agentes-captacion/light', async (ctx) => {
       const { default: AgentesCaptacionController } = await import(
         '#controllers/agentes_captacion_controller'
       )
-      return new AgentesCaptacionController().show(ctx)
+      return new AgentesCaptacionController().light(ctx)
     })
+    router.get('/agentes-captacion/me', async (ctx) => {
+      const { default: AgentesCaptacionController } = await import(
+        '#controllers/agentes_captacion_controller'
+      )
+      return new AgentesCaptacionController().me(ctx)
+    })
+    router
+      .get('/agentes-captacion/:id', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
     router.post('/agentes-captacion', async (ctx) => {
       const { default: AgentesCaptacionController } = await import(
         '#controllers/agentes_captacion_controller'
       )
       return new AgentesCaptacionController().store(ctx)
     })
-    router.put('/agentes-captacion/:id', async (ctx) => {
-      const { default: AgentesCaptacionController } = await import(
-        '#controllers/agentes_captacion_controller'
-      )
-      return new AgentesCaptacionController().update(ctx)
-    })
-    router.delete('/agentes-captacion/:id', async (ctx) => {
-      const { default: AgentesCaptacionController } = await import(
-        '#controllers/agentes_captacion_controller'
-      )
-      return new AgentesCaptacionController().destroy(ctx)
-    })
+    router
+      .put('/agentes-captacion/:id', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    router
+      .delete('/agentes-captacion/:id', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    // 🔰 NUEVOS: resumen y prospectos del asesor (vía pivot)
+    // 🔰 Resumen y prospectos del asesor (vía pivot)
     router
       .get('/agentes-captacion/:id/resumen', async (ctx) => {
         const { default: AgentesCaptacionController } = await import(
@@ -486,7 +460,6 @@ router
         return new AgentesCaptacionController().resumen(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .get('/agentes-captacion/:id/prospectos', async (ctx) => {
         const { default: AgentesCaptacionController } = await import(
@@ -496,17 +469,17 @@ router
       })
       .where('id', /^[0-9]+$/)
 
-    // 🔰 Alias opcional para compatibilidad (/asesores/:id/prospectos)
+    // 🔰 Obtener agente por usuario (SIN auth)
     router
-      .get('/asesores/:id/prospectos', async (ctx) => {
+      .get('/agentes-captacion/by-user/:userId', async (ctx) => {
         const { default: AgentesCaptacionController } = await import(
           '#controllers/agentes_captacion_controller'
         )
-        return new AgentesCaptacionController().prospectos(ctx)
+        return new AgentesCaptacionController().byUser(ctx)
       })
-      .where('id', /^[0-9]+$/)
+      .where('userId', /^[0-9]+$/)
 
-    // 🔰 Convenios del asesor (para vistas filtradas por asesor)
+    // ✅ Convenios del agente (controlador canónico)
     router
       .get('/agentes-captacion/:id/convenios', async (ctx) => {
         const { default: AgentesConveniosController } = await import(
@@ -516,7 +489,7 @@ router
       })
       .where('id', /^[0-9]+$/)
 
-    // === CAPTACIÓN: Canales y membresías Agente⇄Canal
+    // === CAPTACIÓN: Canales/membresías
     router
       .get('/agentes-captacion/:agenteId/canales', async (ctx) => {
         const { default: AgenteCanalMembresiasController } = await import(
@@ -525,7 +498,6 @@ router
         return new AgenteCanalMembresiasController().listByAgente(ctx)
       })
       .where('agenteId', /^[0-9]+$/)
-
     router
       .get('/captacion-canales/:canalId/agentes', async (ctx) => {
         const { default: AgenteCanalMembresiasController } = await import(
@@ -534,7 +506,6 @@ router
         return new AgenteCanalMembresiasController().listByCanal(ctx)
       })
       .where('canalId', /^[0-9]+$/)
-
     router
       .post('/agentes-captacion/:agenteId/canales', async (ctx) => {
         const { default: AgenteCanalMembresiasController } = await import(
@@ -543,7 +514,6 @@ router
         return new AgenteCanalMembresiasController().attach(ctx)
       })
       .where('agenteId', /^[0-9]+$/)
-
     router
       .put('/agentes-captacion/:agenteId/canales/:canalId', async (ctx) => {
         const { default: AgenteCanalMembresiasController } = await import(
@@ -553,7 +523,6 @@ router
       })
       .where('agenteId', /^[0-9]+$/)
       .where('canalId', /^[0-9]+$/)
-
     router
       .delete('/agentes-captacion/:agenteId/canales/:canalId', async (ctx) => {
         const { default: AgenteCanalMembresiasController } = await import(
@@ -571,32 +540,38 @@ router
       )
       return new CaptacionDateosController().index(ctx)
     })
-    router.get('/captacion-dateos/:id', async (ctx) => {
-      const { default: CaptacionDateosController } = await import(
-        '#controllers/captacion_dateos_controller'
-      )
-      return new CaptacionDateosController().show(ctx)
-    })
+    router
+      .get('/captacion-dateos/:id', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
     router.post('/captacion-dateos', async (ctx) => {
       const { default: CaptacionDateosController } = await import(
         '#controllers/captacion_dateos_controller'
       )
       return new CaptacionDateosController().store(ctx)
     })
-    router.put('/captacion-dateos/:id', async (ctx) => {
-      const { default: CaptacionDateosController } = await import(
-        '#controllers/captacion_dateos_controller'
-      )
-      return new CaptacionDateosController().update(ctx)
-    })
-    router.delete('/captacion-dateos/:id', async (ctx) => {
-      const { default: CaptacionDateosController } = await import(
-        '#controllers/captacion_dateos_controller'
-      )
-      return new CaptacionDateosController().destroy(ctx)
-    })
+    router
+      .put('/captacion-dateos/:id', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    router
+      .delete('/captacion-dateos/:id', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
 
-    // === CAPTACIÓN UTIL (auto desde convenio) ===
+    // === CAPTACIÓN UTIL (auto desde convenio)
     router.post('/captacion-dateos/auto-convenio', async (ctx) => {
       const { default: CaptacionUtilController } = await import(
         '#controllers/captacion_util_controller'
@@ -614,9 +589,35 @@ router
       return new ProspectosController().store(ctx)
     })
     router
+      .get('/prospectos/:id', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    router
+      .put('/prospectos/:id', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    router
       .patch('/prospectos/:id', async (ctx) => {
         const { default: ProspectosController } = await import('#controllers/prospectos_controller')
         return new ProspectosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
+    // Asignaciones de prospectos
+    router
+      .post('/prospectos/:id/asignar', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().asignar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    router
+      .post('/prospectos/:id/retirar', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().retirar(ctx)
       })
       .where('id', /^[0-9]+$/)
 
@@ -625,25 +626,6 @@ router
       .get('/asesores/:id/resumen', async (ctx) => {
         const { default: ProspectosController } = await import('#controllers/prospectos_controller')
         return new ProspectosController().resumenByAsesor(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-
-    // Asignaciones de prospectos
-    router
-      .post('/prospectos/:id/asignar', async (ctx) => {
-        const { default: AsignacionesProspectosController } = await import(
-          '../app/controllers/asignaciones_prospectos_controller.js'
-        )
-        return new AsignacionesProspectosController().asignar(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-
-    router
-      .post('/prospectos/:id/retirar', async (ctx) => {
-        const { default: AsignacionesProspectosController } = await import(
-          '../app/controllers/asignaciones_prospectos_controller.js'
-        )
-        return new AsignacionesProspectosController().retirar(ctx)
       })
       .where('id', /^[0-9]+$/)
 
@@ -662,21 +644,18 @@ router
         return new ConveniosController().update(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .get('/convenios/:id/asesor-activo', async (ctx) => {
         const { default: ConveniosController } = await import('#controllers/convenios_controller')
         return new ConveniosController().asesorActivo(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .post('/convenios/:id/asignar', async (ctx) => {
         const { default: ConveniosController } = await import('#controllers/convenios_controller')
         return new ConveniosController().asignarAsesor(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .post('/convenios/:id/retirar', async (ctx) => {
         const { default: ConveniosController } = await import('#controllers/convenios_controller')
@@ -695,28 +674,24 @@ router
         return new ComisionesController().show(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .patch('/comisiones/:id/valores', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().actualizarValores(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .post('/comisiones/:id/aprobar', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().aprobar(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .post('/comisiones/:id/pagar', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().pagar(ctx)
       })
       .where('id', /^[0-9]+$/)
-
     router
       .post('/comisiones/:id/anular', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')

@@ -1,4 +1,3 @@
-// app/controllers/convenios_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import Database from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -10,14 +9,17 @@ import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 export default class ConveniosController {
   /** Listado con filtros básicos */
   public async index({ request }: HttpContext) {
-    const q = String(request.input('q') || '').trim().toUpperCase()
+    const q = String(request.input('q') || '')
+      .trim()
+      .toUpperCase()
     const activo = request.input('activo')
     const query = Convenio.query().orderBy('id', 'desc')
 
     if (q) {
       query.where((qb) => {
-        qb.whereRaw('UPPER(nombre) LIKE ?', [`%${q}%`])
-          .orWhereRaw('UPPER(codigo) LIKE ?', [`%${q}%`]) // si tu tabla no tiene 'codigo', elimina esta línea
+        qb.whereRaw('UPPER(nombre) LIKE ?', [`%${q}%`]).orWhereRaw('UPPER(codigo) LIKE ?', [
+          `%${q}%`,
+        ]) // si tu tabla no tiene 'codigo', elimina esta línea
       })
     }
 
@@ -141,17 +143,17 @@ export default class ConveniosController {
         return { ok: true, asignacionId: yaActiva.id, noop: true }
       }
 
-      // Cerrar la asignación vigente (si la hay) — usar JS Date para evitar offset en MySQL DATETIME
+      // Cerrar la asignación vigente (si la hay)
       await AsesorConvenioAsignacion.query({ client: trx })
         .where('convenio_id', conv.id)
         .where('activo', true)
         .update({
           activo: false,
-          fecha_fin: DateTime.now().toJSDate(), // <- sin offset, compatible con DATETIME
+          fecha_fin: DateTime.now().toJSDate(),
           motivo_fin: 'Reasignación',
         })
 
-      // Crear la nueva asignación activa — modelos requieren Luxon DateTime
+      // Crear la nueva asignación activa
       const nueva = await AsesorConvenioAsignacion.create(
         {
           convenioId: conv.id,
@@ -184,11 +186,29 @@ export default class ConveniosController {
 
     asign.merge({
       activo: false,
-      fechaFin: DateTime.now(),              // Luxon DateTime para modelos
+      fechaFin: DateTime.now(),
       motivoFin: motivo ?? 'Retiro manual',
     } as any)
 
     await asign.save()
     return { ok: true }
+  }
+
+  /** GET /convenios/light?activo=1&select=id,nombre&perPage=100 */
+  public async light({ request, response }: HttpContext) {
+    const activo = String(request.input('activo', '1')) === '1'
+    const selectRaw = String(request.input('select', 'id,nombre'))
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const cols = selectRaw.length ? selectRaw : ['id', 'nombre']
+    const perPage = Number(request.input('perPage', 100))
+
+    const rows = await Database.from('convenios')
+      .select(cols)
+      .if(activo, (qb) => qb.where('activo', true))
+      .limit(perPage)
+
+    return response.ok({ data: rows })
   }
 }

@@ -1,4 +1,3 @@
-// app/models/agente_captacion.ts
 import { BaseModel, column, hasMany, manyToMany, belongsTo } from '@adonisjs/lucid/orm'
 import type { HasMany, ManyToMany, BelongsTo } from '@adonisjs/lucid/types/relations'
 import { DateTime } from 'luxon'
@@ -6,7 +5,8 @@ import Usuario from '#models/usuario'
 import CaptacionDateo from '#models/captacion_dateo'
 import CaptacionCanal from '#models/captacion_canal'
 
-export type TipoAsesor = 'ASESOR_INTERNO' | 'ASESOR_EXTERNO' | 'TELEMERCADEO'
+// 🎯 Tipos de agentes coherentes con cargos y canales
+export type TipoAsesor = 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'ASESOR_TELEMERCADEO'
 
 export default class AgenteCaptacion extends BaseModel {
   public static table = 'agentes_captacions'
@@ -41,6 +41,7 @@ export default class AgenteCaptacion extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
+  // Relaciones
   @belongsTo(() => Usuario, { foreignKey: 'usuarioId' })
   declare usuario: BelongsTo<typeof Usuario>
 
