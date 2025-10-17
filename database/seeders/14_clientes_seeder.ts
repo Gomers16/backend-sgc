@@ -2,10 +2,20 @@
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import Cliente from '#models/cliente'
 
+type PersonaDoc = 'CC' | 'CE' | 'PAS'
+type EmpresaDoc = 'NIT'
+
 export default class ClientesSeeder extends BaseSeeder {
   public async run() {
-    const rows = [
-      // Personas (CC, CE, PAS)
+    // 1) Semilla fija (legible para pruebas manuales)
+    const base: Array<{
+      nombre: string | null
+      docTipo: PersonaDoc | EmpresaDoc | null
+      docNumero: string | null
+      telefono: string
+      email: string | null
+      ciudadId: number | null
+    }> = [
       {
         nombre: 'Andrés Pérez',
         docTipo: 'CC',
@@ -47,7 +57,6 @@ export default class ClientesSeeder extends BaseSeeder {
         ciudadId: null,
       },
 
-      // Empresas (NIT)
       {
         nombre: 'Transporte Gómez SAS',
         docTipo: 'NIT',
@@ -81,7 +90,7 @@ export default class ClientesSeeder extends BaseSeeder {
         ciudadId: null,
       },
 
-      // Registro mínimo (solo teléfono) para probar enriquecimiento posterior
+      // Registro mínimo (solo teléfono)
       {
         nombre: null,
         docTipo: null,
@@ -92,8 +101,86 @@ export default class ClientesSeeder extends BaseSeeder {
       },
     ]
 
-    // Idempotente por teléfono (UNIQUE): crea o actualiza cada cliente
-    for (const row of rows) {
+    // 2) Generar extra hasta llegar a ~50 clientes (idempotente por teléfono)
+    const N_TOTAL = 50
+    const nombres = [
+      'Ana',
+      'Luis',
+      'Carlos',
+      'María',
+      'Andrés',
+      'Camila',
+      'Sofía',
+      'Julián',
+      'Pedro',
+      'Laura',
+      'Paula',
+      'Felipe',
+      'Daniela',
+      'Mateo',
+      'Valentina',
+    ] as const
+    const apellidos = [
+      'Gómez',
+      'Pérez',
+      'Rodríguez',
+      'López',
+      'Martínez',
+      'Hernández',
+      'Rojas',
+      'Ruiz',
+      'Castro',
+      'Ortiz',
+    ] as const
+
+    const usedPhones = new Set(base.map((r) => r.telefono))
+    const pick = <T>(arr: readonly T[]) => arr[Math.floor(Math.random() * arr.length)]
+    const phone = (): string => {
+      // Evitar colisiones con los base
+      let t = ''
+      do {
+        t = '3' + String(100000000 + Math.floor(Math.random() * 900000000))
+      } while (usedPhones.has(t))
+      usedPhones.add(t)
+      return t
+    }
+
+    while (base.length < N_TOTAL) {
+      const isEmpresa = Math.random() < 0.2 // 20% empresas
+      if (isEmpresa) {
+        const nit = String(900000000 + Math.floor(Math.random() * 99999))
+        const tel = phone()
+        base.push({
+          nombre: `Empresa ${nit.slice(-4)}`,
+          docTipo: 'NIT',
+          docNumero: nit,
+          telefono: tel,
+          email: Math.random() < 0.5 ? `contacto${nit.slice(-3)}@empresa.com` : null,
+          ciudadId: null,
+        })
+      } else {
+        const nombre = `${pick(nombres)} ${pick(apellidos)}`
+        const tel = phone()
+        const docTipo: PersonaDoc = Math.random() < 0.85 ? 'CC' : Math.random() < 0.5 ? 'CE' : 'PAS'
+        const docNumero =
+          docTipo === 'CC'
+            ? String(1000000000 + Math.floor(Math.random() * 900000000))
+            : docTipo === 'CE'
+              ? `E${100000 + Math.floor(Math.random() * 900000)}`
+              : `P${1000000 + Math.floor(Math.random() * 9000000)}`
+        base.push({
+          nombre,
+          docTipo,
+          docNumero,
+          telefono: tel,
+          email:
+            Math.random() < 0.4 ? `${nombre.toLowerCase().replace(/\s+/g, '.')}@mail.com` : null,
+          ciudadId: null,
+        })
+      }
+    }
+
+    for (const row of base) {
       await Cliente.updateOrCreate(
         { telefono: row.telefono },
         {

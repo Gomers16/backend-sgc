@@ -1,3 +1,4 @@
+// app/Controllers/Http/convenios_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import Database from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -7,76 +8,173 @@ import AgenteCaptacion from '#models/agente_captacion'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 
 export default class ConveniosController {
-  /** Listado con filtros básicos */
+  /**
+   * GET /convenios
+   * Query params:
+   *  - page=1
+   *  - perPage=10
+   *  - q=texto
+   *  - activo=true|false|1|0
+   *  - tipo=TALLER|PERSONA
+   *  - sortBy=id|nombre|docNumero|activo|createdAt
+   *  - order=asc|desc
+   */
   public async index({ request }: HttpContext) {
-    const q = String(request.input('q') || '')
-      .trim()
-      .toUpperCase()
-    const activo = request.input('activo')
-    const query = Convenio.query().orderBy('id', 'desc')
+    const page = Number(request.input('page', 1))
+    const perPage = Math.min(Number(request.input('perPage', 10)), 100)
+
+    const q = String(request.input('q') || '').trim()
+    const activoParam = request.input('activo')
+    const tipo = request.input('tipo') // 'TALLER' | 'PERSONA' | undefined
+
+    const sortByRaw = String(request.input('sortBy', 'id'))
+    const orderRaw = String(request.input('order', 'desc')).toLowerCase()
+
+    // whitelist para evitar inyección en order by
+    const ALLOWED_SORT = new Set(['id', 'nombre', 'docNumero', 'activo', 'createdAt'])
+    const sortBy = ALLOWED_SORT.has(sortByRaw) ? sortByRaw : 'id'
+    const order: 'asc' | 'desc' = orderRaw === 'asc' ? 'asc' : 'desc'
+
+    const query = Convenio.query().orderBy(sortBy, order)
 
     if (q) {
+      const qUpper = q.toUpperCase()
       query.where((qb) => {
-        qb.whereRaw('UPPER(nombre) LIKE ?', [`%${q}%`]).orWhereRaw('UPPER(codigo) LIKE ?', [
-          `%${q}%`,
-        ]) // si tu tabla no tiene 'codigo', elimina esta línea
+        qb.whereRaw('UPPER(nombre) LIKE ?', [`%${qUpper}%`])
+          .orWhereRaw('UPPER(doc_numero) LIKE ?', [`%${qUpper}%`])
+          .orWhereRaw('UPPER(email) LIKE ?', [`%${qUpper}%`])
       })
     }
 
-    if (activo !== undefined) query.where('activo', String(activo) === 'true')
-    return query.exec()
+    if (tipo) {
+      query.where('tipo', String(tipo).toUpperCase())
+    }
+
+    if (activoParam !== undefined) {
+      const bool =
+        activoParam === true || String(activoParam) === 'true' || String(activoParam) === '1'
+      query.where('activo', bool)
+    }
+
+    // 👇 Paginación real
+    return await query.paginate(page, perPage)
   }
 
-  /** Obtener un convenio por ID */
+  /** GET /convenios/:id */
   public async show({ params, response }: HttpContext) {
     const conv = await Convenio.find(params.id)
     if (!conv) return response.notFound({ message: 'Convenio no encontrado' })
     return conv
   }
 
-  /** Crear convenio */
+  /** POST /convenios */
   public async store({ request, response }: HttpContext) {
-    const { codigo, nombre, activo } = request.only(['codigo', 'nombre', 'activo'])
-    const tipo = request.input('tipo') ?? 'PERSONA'
+    const {
+      nombre,
+      tipo = 'PERSONA',
+      activo = true,
+      doc_tipo: docTipo,
+      doc_numero: docNumero,
+      telefono,
+      whatsapp,
+      email,
+      ciudad_id: ciudadId,
+      direccion,
+      notas,
+    } = request.only([
+      'nombre',
+      'tipo',
+      'activo',
+      'doc_tipo',
+      'doc_numero',
+      'telefono',
+      'whatsapp',
+      'email',
+      'ciudad_id',
+      'direccion',
+      'notas',
+    ])
 
-    if (!nombre) {
-      return response.badRequest({ message: 'nombre es requerido' })
-    }
+    if (!nombre) return response.badRequest({ message: 'nombre es requerido' })
 
-    // Validar unicidad de 'codigo' sólo si lo usas en tu tabla
-    if (codigo) {
-      const exists = await Convenio.query().where('codigo', codigo).first()
-      if (exists) return response.conflict({ message: 'El código de convenio ya existe' })
+    // Unicidad por documento si viene
+    if (docTipo && docNumero) {
+      const exists = await Convenio.query()
+        .where('doc_tipo', docTipo)
+        .andWhere('doc_numero', docNumero)
+        .first()
+      if (exists) return response.conflict({ message: 'Documento ya existe en otro convenio' })
     }
 
     const conv = await Convenio.create({
-      codigo: codigo ?? null,
       nombre,
       tipo,
-      activo: activo ?? true,
+      activo: !!activo,
+      docTipo: docTipo ?? null,
+      docNumero: docNumero ?? null,
+      telefono: telefono ?? null,
+      whatsapp: whatsapp ?? null,
+      email: email ?? null,
+      ciudadId: ciudadId ?? null,
+      direccion: direccion ?? null,
+      notas: notas ?? null,
     } as any)
 
     return response.created(conv)
   }
 
-  /** Actualizar convenio */
+  /** PUT /convenios/:id */
   public async update({ params, request, response }: HttpContext) {
     const c = await Convenio.find(params.id)
     if (!c) return response.notFound({ message: 'Convenio no encontrado' })
 
-    const { nombre, activo, codigo } = request.only(['nombre', 'activo', 'codigo'])
-    const tipo = request.input('tipo')
+    const payload = request.only([
+      'nombre',
+      'tipo',
+      'activo',
+      'doc_tipo',
+      'doc_numero',
+      'telefono',
+      'whatsapp',
+      'email',
+      'ciudad_id',
+      'direccion',
+      'notas',
+    ])
 
-    if (nombre !== undefined) c.nombre = nombre
-    if (activo !== undefined) c.activo = !!activo
-    if (tipo !== undefined) c.tipo = tipo
-    if (codigo !== undefined) c.codigo = codigo
+    if (payload.doc_tipo !== undefined || payload.doc_numero !== undefined) {
+      const newTipo = payload.doc_tipo ?? c.docTipo
+      const newNum = (payload.doc_numero ?? c.docNumero) || null
+      if (newTipo && newNum) {
+        const exists = await Convenio.query()
+          .where('doc_tipo', newTipo)
+          .andWhere('doc_numero', newNum)
+          .whereNot('id', c.id)
+          .first()
+        if (exists) return response.conflict({ message: 'Documento ya está en uso' })
+        c.docTipo = newTipo
+        c.docNumero = newNum
+      } else {
+        c.docTipo = newTipo || null
+        c.docNumero = newNum || null
+      }
+    }
+
+    if (payload.nombre !== undefined) c.nombre = payload.nombre
+    if (payload.tipo !== undefined) c.tipo = payload.tipo
+    if (payload.activo !== undefined) c.activo = !!payload.activo
+    if (payload.telefono !== undefined) c.telefono = payload.telefono ?? null
+    if (payload.whatsapp !== undefined) c.whatsapp = payload.whatsapp ?? null
+    if (payload.email !== undefined) c.email = payload.email ?? null
+    if (payload.ciudad_id !== undefined) c.ciudadId = payload.ciudad_id ?? null
+    if (payload.direccion !== undefined) c.direccion = payload.direccion ?? null
+    if (payload.notas !== undefined) c.notas = payload.notas ?? null
 
     await c.save()
     return c
   }
 
-  /** Asesor activo del convenio (basado en activo = true) */
+  /** GET /convenios/:id/asesor-activo */
   public async asesorActivo({ params, response }: HttpContext) {
     const conv = await Convenio.find(params.id)
     if (!conv) return response.notFound({ message: 'Convenio no encontrado' })
@@ -102,8 +200,8 @@ export default class ConveniosController {
   }
 
   /**
-   * Asignar asesor al convenio.
-   * Cierra la asignación vigente (si existe) y crea una nueva con activo = true.
+   * POST /convenios/:id/asignar-asesor
+   * body: { asesorId | asesor_id | agente_captacion_id }
    */
   public async asignarAsesor({ params, request, response, auth }: HttpContext) {
     const trx = await Database.transaction()
@@ -114,7 +212,6 @@ export default class ConveniosController {
         return response.notFound({ message: 'Convenio no encontrado' })
       }
 
-      // Aceptamos varias keys por compatibilidad con el front
       const asesorId = Number(
         request.input('asesor_id') ??
           request.input('asesorId') ??
@@ -131,19 +228,18 @@ export default class ConveniosController {
         return response.badRequest({ message: 'asesorId no existe' })
       }
 
-      // Si ya está ese asesor asignado y activo, no hacemos nada
+      // Si ya está activo con ese asesor, noop
       const yaActiva = await AsesorConvenioAsignacion.query({ client: trx })
         .where('convenio_id', conv.id)
         .where('asesor_id', asesor.id)
         .where('activo', true)
         .first()
-
       if (yaActiva) {
         await trx.commit()
         return { ok: true, asignacionId: yaActiva.id, noop: true }
       }
 
-      // Cerrar la asignación vigente (si la hay)
+      // Cerrar la vigente
       await AsesorConvenioAsignacion.query({ client: trx })
         .where('convenio_id', conv.id)
         .where('activo', true)
@@ -153,7 +249,7 @@ export default class ConveniosController {
           motivo_fin: 'Reasignación',
         })
 
-      // Crear la nueva asignación activa
+      // Crear nueva activa
       const nueva = await AsesorConvenioAsignacion.create(
         {
           convenioId: conv.id,
@@ -168,12 +264,12 @@ export default class ConveniosController {
       await trx.commit()
       return { ok: true, asignacionId: nueva.id }
     } catch (e) {
-      await trx.rollback()
+      await Database.rollbackGlobalTransaction()
       throw e
     }
   }
 
-  /** Retirar asesor (cierra la asignación activa del convenio) */
+  /** POST /convenios/:id/retirar-asesor  body: { motivo? } */
   public async retirarAsesor({ params, request, response }: HttpContext) {
     const { motivo } = request.only(['motivo'])
 
@@ -194,21 +290,29 @@ export default class ConveniosController {
     return { ok: true }
   }
 
-  /** GET /convenios/light?activo=1&select=id,nombre&perPage=100 */
+  /**
+   * GET /convenios/light?activo=1&select=id,nombre&perPage=100
+   * Respuesta: { data: [{ id, nombre, ...}] }
+   */
   public async light({ request, response }: HttpContext) {
-    const activo = String(request.input('activo', '1')) === '1'
+    const activoParam = request.input('activo')
+    const onlyActive =
+      activoParam === undefined
+        ? true
+        : activoParam === true || String(activoParam) === '1' || String(activoParam) === 'true'
+
     const selectRaw = String(request.input('select', 'id,nombre'))
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
+
     const cols = selectRaw.length ? selectRaw : ['id', 'nombre']
-    const perPage = Number(request.input('perPage', 100))
+    const perPage = Math.min(Number(request.input('perPage', 100)), 500)
 
-    const rows = await Database.from('convenios')
-      .select(cols)
-      .if(activo, (qb) => qb.where('activo', true))
-      .limit(perPage)
+    const qb = Database.from('convenios').select(cols).limit(perPage)
+    if (onlyActive) qb.where('activo', true)
 
+    const rows = await qb
     return response.ok({ data: rows })
   }
 }

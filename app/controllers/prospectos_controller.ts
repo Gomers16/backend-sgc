@@ -8,9 +8,6 @@ import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
 import AgenteCaptacion from '#models/agente_captacion'
 
-/* ========================
-   Helpers
-======================== */
 function normPlaca(raw?: string | null): string | null {
   if (!raw) return null
   return raw.toUpperCase().replace(/[\s-]+/g, '')
@@ -50,13 +47,9 @@ function docStatus(venc?: DateTime | null): DocResumen {
   }
 }
 
-/* ========================
-   Controller
-======================== */
 export default class ProspectosController {
   /** GET /api/prospectos/:id */
-  public async show(ctx: HttpContext) {
-    const { params, response } = ctx
+  public async show({ params, response }: HttpContext) {
     const id = Number(params.id)
     if (!Number.isFinite(id)) return response.badRequest({ message: 'ID inválido' })
 
@@ -65,7 +58,11 @@ export default class ProspectosController {
       .preload('creador')
       .preload('convenio')
       .preload('asignaciones', (q) =>
-        q.where('activo', true).whereNull('fecha_fin').orderBy('fecha_asignacion', 'desc').preload('asesor')
+        q
+          .where('activo', true)
+          .whereNull('fecha_fin')
+          .orderBy('fecha_asignacion', 'desc')
+          .preload('asesor')
       )
       .first()
 
@@ -73,36 +70,42 @@ export default class ProspectosController {
 
     const data = p.serialize()
 
-    // “creador” solo nombre (sin etiqueta)
-    type CreadorOut = {
+    let creadorOut: {
       id: number | null
       nombre: string
       tipo: string | null
       fuente: 'USUARIO' | 'SISTEMA' | 'ASESOR' | null
-    } | null
-    let creadorOut: CreadorOut = null
-
-    const creadorModel = (p as unknown as { creador?: Parameters<typeof userDisplayName>[0] | null }).creador
+    } | null = null
+    const creadorModel = (p as any).creador as Parameters<typeof userDisplayName>[0] | undefined
     if (creadorModel) {
-      creadorOut = { id: creadorModel.id ?? null, nombre: userDisplayName(creadorModel), tipo: null, fuente: null }
+      creadorOut = {
+        id: creadorModel.id ?? null,
+        nombre: userDisplayName(creadorModel),
+        tipo: null,
+        fuente: null,
+      }
     } else if (p.origen === 'IMPORT') {
       creadorOut = { id: null, nombre: 'Importación', tipo: null, fuente: null }
     } else if (p.asignaciones?.length) {
-      const a = p.asignaciones[0]?.asesor as { id?: number | null; nombre?: string | null } | undefined
-      if (a) {
-        creadorOut = { id: a.id ?? null, nombre: a.nombre ?? '—', tipo: null, fuente: null }
-      }
+      const a = p.asignaciones[0]?.asesor as
+        | { id?: number | null; nombre?: string | null }
+        | undefined
+      if (a) creadorOut = { id: a.id ?? null, nombre: a.nombre ?? '—', tipo: null, fuente: null }
     }
 
-    // Resumen de vigencias
     const soat = docStatus(p.soatVencimiento)
     const rtm = docStatus(p.tecnoVencimiento)
     const hoy = DateTime.now().startOf('day')
 
     const preventiva: DocResumen = !p.preventivaVencimiento
-      ? { estado: p.preventivaVigente ? 'vigente' : 'sin_datos', vencimiento: null, dias_restantes: null }
+      ? {
+          estado: p.preventivaVigente ? 'vigente' : 'sin_datos',
+          vencimiento: null,
+          dias_restantes: null,
+        }
       : {
-          estado: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days) >= 0 ? 'vigente' : 'vencido',
+          estado:
+            Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days) >= 0 ? 'vigente' : 'vencido',
           vencimiento: p.preventivaVencimiento.toISODate()!,
           dias_restantes: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days),
         }
@@ -111,7 +114,6 @@ export default class ProspectosController {
       ? { estado: 'registrado', fecha: p.peritajeUltimaFecha.toISODate() }
       : { estado: 'sin_datos', fecha: null as string | null }
 
-    // Asignación activa + fecha lista para la vista
     const activa = (p.asignaciones || []).find((a) => a.activo && !a.fechaFin) || null
     const asignacionOut = activa
       ? {
@@ -136,9 +138,8 @@ export default class ProspectosController {
     }
   }
 
-  /** POST /api/prospectos */
-  public async store(ctx: HttpContext) {
-    const { request, response, auth } = ctx
+  /** POST /api/prospectos  (placa requerida) */
+  public async store({ request, response, auth }: HttpContext) {
     const body = request.only([
       'placa',
       'telefono',
@@ -149,11 +150,9 @@ export default class ProspectosController {
       'soatVencimiento',
       'tecnoVigente',
       'tecnoVencimiento',
-      // 👇 añadidos para guardar Preventiva y Peritaje
       'preventivaVigente',
       'preventivaVencimiento',
       'peritajeUltimaFecha',
-      // meta
       'observaciones',
       'creadoPor',
       'creado_por',
@@ -165,6 +164,8 @@ export default class ProspectosController {
     const placa = normPlaca(body.placa)
     const telefono = normTel(body.telefono)
     const nombre = (body.nombre ?? '').trim()
+
+    // 🔒 Placa obligatoria (y también tel + nombre)
     if (!placa || !telefono || !nombre) {
       return response.badRequest({
         message: 'placa, telefono y nombre son obligatorios',
@@ -174,28 +175,36 @@ export default class ProspectosController {
 
     const soatVenc = body.soatVencimiento ? DateTime.fromISO(body.soatVencimiento) : null
     const tecnoVenc = body.tecnoVencimiento ? DateTime.fromISO(body.tecnoVencimiento) : null
-    const prevVenc = body.preventivaVencimiento ? DateTime.fromISO(body.preventivaVencimiento) : null
+    const prevVenc = body.preventivaVencimiento
+      ? DateTime.fromISO(body.preventivaVencimiento)
+      : null
     const periUlt = body.peritajeUltimaFecha ? DateTime.fromISO(body.peritajeUltimaFecha) : null
 
     const creadorIdNum = Number(auth?.user?.id ?? body.creadoPor ?? body.creado_por)
     const creadoPor = Number.isFinite(creadorIdNum) ? creadorIdNum : null
 
-    // Asesor (AgenteCaptacion.id) — explícito → auth.user → creador
+    // Resolver asesor
     let asesorAgenteId: number | null = null
-    const directAgente = Number(body.asesor_agente_id) || Number(body.asesorId) || Number(body.asesor_id)
+    const directAgente =
+      Number(body.asesor_agente_id) || Number(body.asesorId) || Number(body.asesor_id)
     if (Number.isFinite(directAgente)) {
       asesorAgenteId = Number(directAgente)
     } else if (auth?.user?.id) {
-      const agente = await AgenteCaptacion.query().where('usuario_id', auth.user.id).where('activo', true).first()
+      const agente = await AgenteCaptacion.query()
+        .where('usuario_id', auth.user.id)
+        .where('activo', true)
+        .first()
       if (agente) asesorAgenteId = agente.id
     } else if (creadoPor) {
-      const agenteCreador = await AgenteCaptacion.query().where('usuario_id', creadoPor).where('activo', true).first()
+      const agenteCreador = await AgenteCaptacion.query()
+        .where('usuario_id', creadoPor)
+        .where('activo', true)
+        .first()
       if (agenteCreador) asesorAgenteId = agenteCreador.id
     }
 
     const trx = await db.transaction()
     try {
-      // Crear prospecto
       const prospecto = await Prospecto.create(
         {
           convenioId: body.convenioId ?? null,
@@ -208,16 +217,14 @@ export default class ProspectosController {
           soatVencimiento: soatVenc && soatVenc.isValid ? soatVenc : null,
           tecnoVigente: !!body.tecnoVigente,
           tecnoVencimiento: tecnoVenc && tecnoVenc.isValid ? tecnoVenc : null,
-          // 👇 Guardar Preventiva / Peritaje
           preventivaVigente: !!body.preventivaVigente,
           preventivaVencimiento: prevVenc && prevVenc.isValid ? prevVenc : null,
           peritajeUltimaFecha: periUlt && periUlt.isValid ? periUlt : null,
           observaciones: body.observaciones ?? null,
-        },
+        } as any,
         { client: trx }
       )
 
-      // Crear asignación activa si tenemos agente
       if (Number.isFinite(asesorAgenteId)) {
         await AsesorProspectoAsignacion.create(
           {
@@ -228,19 +235,22 @@ export default class ProspectosController {
             fechaFin: null,
             motivoFin: null,
             activo: true,
-          } as any, // (si tu modelo tiene tipos, puedes quitar el "as any")
+          } as any,
           { client: trx }
         )
       }
 
       await trx.commit()
 
-      // Devolver con preload
       const full = await Prospecto.query()
         .where('id', prospecto.id)
         .preload('creador')
         .preload('asignaciones', (q) =>
-          q.where('activo', true).whereNull('fecha_fin').orderBy('fecha_asignacion', 'desc').preload('asesor')
+          q
+            .where('activo', true)
+            .whereNull('fecha_fin')
+            .orderBy('fecha_asignacion', 'desc')
+            .preload('asesor')
         )
         .first()
 
@@ -251,9 +261,8 @@ export default class ProspectosController {
     }
   }
 
-  /** PATCH /api/prospectos/:id */
-  public async update(ctx: HttpContext) {
-    const { request, params, response } = ctx
+  /** PATCH /api/prospectos/:id  (no permite vaciar la placa) */
+  public async update({ request, params, response }: HttpContext) {
     const id = Number(params.id)
     const prospecto = await Prospecto.find(id)
     if (!prospecto) return response.notFound({ message: 'Prospecto no encontrado' })
@@ -274,7 +283,15 @@ export default class ProspectosController {
       'peritajeUltimaFecha',
     ])
 
-    if (body.placa !== undefined) prospecto.placa = normPlaca(body.placa)
+    // 🔒 Si mandan placa, debe ser válida y no vacía
+    if (body.placa !== undefined) {
+      const nueva = normPlaca(body.placa)
+      if (!nueva) {
+        return response.badRequest({ message: 'placa es obligatoria y no puede ser vacía' })
+      }
+      prospecto.placa = nueva
+    }
+
     if (body.telefono !== undefined) prospecto.telefono = normTel(body.telefono)
     if (body.nombre !== undefined) prospecto.nombre = (body.nombre ?? null)?.trim() || null
     if (body.convenioId !== undefined) prospecto.convenioId = body.convenioId ?? null
@@ -307,8 +324,7 @@ export default class ProspectosController {
   }
 
   /** GET /api/prospectos */
-  public async index(ctx: HttpContext) {
-    const { request } = ctx
+  public async index({ request }: HttpContext) {
     const q = request.qs()
 
     const convenioId = q.convenioId ?? q.convenio_id
@@ -325,12 +341,19 @@ export default class ProspectosController {
 
     const asesorId = q.asesorId ?? q.asesor_id
     const vigenteRaw = q.vigente ?? q.vigente_num
-    const vigente = vigenteRaw === undefined ? undefined : String(vigenteRaw) === 'true' || String(vigenteRaw) === '1'
+    const vigente =
+      vigenteRaw === undefined
+        ? undefined
+        : String(vigenteRaw) === 'true' || String(vigenteRaw) === '1'
 
     const hoy = DateTime.now().startOf('day')
-    const hasta = !Number.isNaN(vencenEnDias) && vencenEnDias > 0 ? hoy.plus({ days: vencenEnDias }) : null
+    const hasta =
+      !Number.isNaN(vencenEnDias) && vencenEnDias > 0 ? hoy.plus({ days: vencenEnDias }) : null
 
     const query = Prospecto.query()
+
+    // (opcional) si quisieras filtrar sólo prospectos con placa válida:
+    // query.whereRaw("COALESCE(TRIM(placa),'') <> ''")
 
     if (convenioId) query.where('convenio_id', Number(convenioId))
     if (creadoPor) query.where('creado_por', Number(creadoPor))
@@ -409,8 +432,7 @@ export default class ProspectosController {
   }
 
   /** GET /api/asesores/:id/resumen (legacy) */
-  public async resumenByAsesor(ctx: HttpContext) {
-    const { params } = ctx
+  public async resumenByAsesor({ params }: HttpContext) {
     const asesorId = Number(params.id)
 
     const r1 = await AsesorConvenioAsignacion.query().where('asesor_id', asesorId).count('*')
@@ -428,15 +450,23 @@ export default class ProspectosController {
     const mesIni = DateTime.now().startOf('month')
     const mesFin = DateTime.now().endOf('month')
 
-    const base = AsesorProspectoAsignacion.query().where('asesor_id', asesorId).where('activo', true)
+    const base = AsesorProspectoAsignacion.query()
+      .where('asesor_id', asesorId)
+      .where('activo', true)
 
     const rTot = await base.clone().count('*')
     const totStr = Number((rTot[0] as any)['count(*)'] ?? 0)
 
-    const rHoy = await base.clone().whereBetween('fecha_asignacion', [hoyIni.toJSDate(), hoyFin.toJSDate()]).count('*')
+    const rHoy = await base
+      .clone()
+      .whereBetween('fecha_asignacion', [hoyIni.toJSDate(), hoyFin.toJSDate()])
+      .count('*')
     const hoyStr = Number((rHoy[0] as any)['count(*)'] ?? 0)
 
-    const rMes = await base.clone().whereBetween('fecha_asignacion', [mesIni.toJSDate(), mesFin.toJSDate()]).count('*')
+    const rMes = await base
+      .clone()
+      .whereBetween('fecha_asignacion', [mesIni.toJSDate(), mesFin.toJSDate()])
+      .count('*')
     const mesStr = Number((rMes[0] as any)['count(*)'] ?? 0)
 
     return {
@@ -446,8 +476,7 @@ export default class ProspectosController {
   }
 
   /** GET /api/prospectos/asesor/:id/list */
-  public async listByAsesor(ctx: HttpContext) {
-    const { params, request } = ctx
+  public async listByAsesor({ params, request }: HttpContext) {
     const asesorId = Number(params.id)
     const vigente = String(request.input('vigente', '1'))
     const q = Prospecto.query()
@@ -463,8 +492,7 @@ export default class ProspectosController {
   }
 
   /** POST /api/prospectos/:id/asignar */
-  public async asignar(ctx: HttpContext) {
-    const { params, request, auth, response } = ctx
+  public async asignar({ params, request, auth, response }: HttpContext) {
     const prospectoId = Number(params.id)
     const asesorId = Number(request.input('asesor_id') ?? request.input('asesorId'))
     const motivoFin = request.input('motivo_fin') as string | undefined
@@ -479,12 +507,22 @@ export default class ProspectosController {
         .first()
 
       if (activa) {
-        activa.merge({ activo: false, fechaFin: DateTime.now(), motivoFin: motivoFin ?? 'Reasignación' } as any)
+        activa.merge({
+          activo: false,
+          fechaFin: DateTime.now(),
+          motivoFin: motivoFin ?? 'Reasignación',
+        } as any)
         await activa.save()
       }
 
       const nueva = await AsesorProspectoAsignacion.create(
-        { prospectoId, asesorId, asignadoPor: auth?.user?.id ?? null, fechaAsignacion: DateTime.now(), activo: true } as any,
+        {
+          prospectoId,
+          asesorId,
+          asignadoPor: auth?.user?.id ?? null,
+          fechaAsignacion: DateTime.now(),
+          activo: true,
+        } as any,
         { client: trx }
       )
 
@@ -497,8 +535,7 @@ export default class ProspectosController {
   }
 
   /** POST /api/prospectos/:id/retirar */
-  public async retirar(ctx: HttpContext) {
-    const { params, request, response } = ctx
+  public async retirar({ params, request, response }: HttpContext) {
     const prospectoId = Number(params.id)
     const motivo = request.input('motivo') as string | undefined
 
@@ -510,7 +547,11 @@ export default class ProspectosController {
 
     if (!activa) return response.badRequest({ message: 'No existe asignación activa' })
 
-    activa.merge({ activo: false, fechaFin: DateTime.now(), motivoFin: motivo ?? 'Retiro manual' } as any)
+    activa.merge({
+      activo: false,
+      fechaFin: DateTime.now(),
+      motivoFin: motivo ?? 'Retiro manual',
+    } as any)
     await activa.save()
     return { message: 'Asignación cerrada' }
   }

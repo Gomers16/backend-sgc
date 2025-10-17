@@ -1,72 +1,54 @@
 // database/seeders/17_agentes_captacion_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
+import Database from '@adonisjs/lucid/services/db'
 import AgenteCaptacion from '#models/agente_captacion'
-import Usuario from '#models/usuario'
 import Cargo from '#models/cargo'
+import Usuario from '#models/usuario'
 
 export default class AgentesCaptacionSeeder extends BaseSeeder {
   public async run() {
-    // Buscar cargos principales
-    const cargoCom = await Cargo.findBy('nombre', 'ASESOR COMERCIAL')
-    const cargoConv = await Cargo.findBy('nombre', 'ASESOR CONVENIO')
-    const cargoTele = await Cargo.findBy('nombre', 'ASESOR - TELEMERCADEO')
-
-    if (!cargoCom && !cargoConv && !cargoTele) {
-      console.log('ℹ️ No hay cargos comerciales disponibles. Seeder sin cambios.')
+    // 1) Encontrar cargo ASESOR CONVENIO
+    const cargoConvenio = await Cargo.findBy('nombre', 'ASESOR CONVENIO')
+    if (!cargoConvenio) {
+      console.error('❌ Falta el cargo "ASESOR CONVENIO"')
       return
     }
 
-    // 🟢 1) Usuarios con cargo ASESOR COMERCIAL
-    if (cargoCom) {
-      const comerciales = await Usuario.query().where('cargo_id', cargoCom.id)
-      for (const u of comerciales) {
-        const nombre = [u.nombres, u.apellidos].filter(Boolean).join(' ') || u.correo
-        await AgenteCaptacion.updateOrCreate({ usuarioId: u.id }, {
-          usuarioId: u.id,
-          tipo: 'ASESOR_COMERCIAL',
-          nombre,
-          telefono: (u as any).celularCorporativo ?? (u as any).celularPersonal ?? null,
-          docTipo: null,
-          docNumero: null,
-          activo: true,
-        } as any)
-      }
+    // 2) Usuarios base (exactamente los que tienen ese cargo)
+    const usuariosConvenio = await Usuario.query().where('cargo_id', cargoConvenio.id)
+
+    const agentes = usuariosConvenio.map((u) => ({
+      usuarioId: u.id,
+      tipo: 'ASESOR_CONVENIO' as const,
+      nombre: `${u.nombres} ${u.apellidos}`.trim(),
+      activo: true,
+    }))
+
+    const usuarioIdsBase = agentes.map((a) => a.usuarioId)
+
+    // 3) Limpieza estricta
+    // 3.1) Borra cualquier agente que NO sea de tipo ASESOR_CONVENIO
+    await Database.from('agentes_captacions').whereNot('tipo', 'ASESOR_CONVENIO').delete()
+
+    // 3.2) Borra agentes de tipo ASESOR_CONVENIO cuyo usuario NO esté en la lista base
+    await Database.from('agentes_captacions')
+      .where('tipo', 'ASESOR_CONVENIO')
+      .whereNotIn('usuario_id', usuarioIdsBase.length ? usuarioIdsBase : [-1])
+      .delete()
+
+    // 4) Upsert 1:1 por usuarioId para los que sí deben existir
+    for (const a of agentes) {
+      await AgenteCaptacion.updateOrCreate(
+        { usuarioId: a.usuarioId }, // clave lógica 1:1
+        {
+          usuarioId: a.usuarioId,
+          tipo: a.tipo,
+          nombre: a.nombre,
+          activo: a.activo,
+        }
+      )
     }
 
-    // 🟣 2) Usuarios con cargo ASESOR CONVENIO
-    if (cargoConv) {
-      const convenios = await Usuario.query().where('cargo_id', cargoConv.id)
-      for (const u of convenios) {
-        const nombre = [u.nombres, u.apellidos].filter(Boolean).join(' ') || u.correo
-        await AgenteCaptacion.updateOrCreate({ usuarioId: u.id }, {
-          usuarioId: u.id,
-          tipo: 'ASESOR_CONVENIO',
-          nombre,
-          telefono: (u as any).celularCorporativo ?? (u as any).celularPersonal ?? null,
-          docTipo: null,
-          docNumero: null,
-          activo: true,
-        } as any)
-      }
-    }
-
-    // 🔵 3) Usuarios con cargo ASESOR - TELEMERCADEO
-    if (cargoTele) {
-      const telemercadeo = await Usuario.query().where('cargo_id', cargoTele.id)
-      for (const u of telemercadeo) {
-        const nombre = [u.nombres, u.apellidos].filter(Boolean).join(' ') || u.correo
-        await AgenteCaptacion.updateOrCreate({ usuarioId: u.id }, {
-          usuarioId: u.id,
-          tipo: 'ASESOR_TELEMERCADEO',
-          nombre,
-          telefono: (u as any).celularCorporativo ?? (u as any).celularPersonal ?? null,
-          docTipo: null,
-          docNumero: null,
-          activo: true,
-        } as any)
-      }
-    }
-
-    console.log('✅ Agentes de captación sincronizados correctamente con los nuevos tipos.')
+    console.log(`✅ Agentes de captación (SOLO CONVENIOS) listos: CONV=${agentes.length}`)
   }
 }

@@ -1,111 +1,129 @@
+// database/seeders/22_prospectos_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
+import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
-import Prospecto from '#models/prospecto'
-import Usuario from '#models/usuario'
+
+import Prospecto, { type ProspectoOrigen } from '#models/prospecto'
 import AgenteCaptacion from '#models/agente_captacion'
-import Convenio from '#models/convenio'
-import type { ProspectoOrigen } from '#models/prospecto'
+
+const ORIGENES: ProspectoOrigen[] = ['IMPORT', 'CAMPO', 'EVENTO', 'OTRO']
+
+/* ---------- helpers ---------- */
+function pick<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)]
+}
+function randInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min
+}
+function nombre(): string {
+  const n1 = [
+    'Ana',
+    'Luis',
+    'Carlos',
+    'María',
+    'Andrés',
+    'Camila',
+    'Sofía',
+    'Julián',
+    'Pedro',
+    'Laura',
+  ]
+  const n2 = ['Gómez', 'Pérez', 'Rodríguez', 'López', 'Martínez', 'Hernández']
+  return `${pick(n1)} ${pick(n2)}`
+}
+function phone(): string {
+  return '3' + String(randInt(100000000, 999999999))
+}
+
+/** Genera una placa colombiana AAA123 (sin O/Q), única frente a BD + set local */
+function makePlateFactory(existing: Set<string>) {
+  const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ' // sin O / Q
+  const L = () => letters[randInt(0, letters.length - 1)]
+  const N = () => String(randInt(0, 9))
+  return () => {
+    let p = ''
+    let guard = 0
+    do {
+      p = `${L()}${L()}${L()}${N()}${N()}${N()}`
+      guard++
+    } while (existing.has(p) && guard < 10000)
+    existing.add(p)
+    return p
+  }
+}
+
+/** 60% vigentes, 40% vencidos, con ventanas razonables */
+function genVigencia(hoy: DateTime): { vigente: boolean; vencimiento: DateTime | null } {
+  const vigente = Math.random() < 0.6
+  if (vigente) return { vigente, vencimiento: hoy.plus({ days: randInt(10, 320) }) }
+  return { vigente, vencimiento: hoy.minus({ days: randInt(5, 180) }) }
+}
 
 export default class ProspectosSeeder extends BaseSeeder {
   public async run() {
-    const hoy = DateTime.now().startOf('day')
+    const trx = await db.transaction()
+    try {
+      const tz = 'America/Bogota'
+      const hoy = DateTime.local().setZone(tz).startOf('day')
 
-    // 🧠 Buscar agentes comerciales y de convenio reales
-    const comercial = await AgenteCaptacion.query().where('tipo', 'ASESOR_COMERCIAL').first()
-    const convenioAgente = await AgenteCaptacion.query().where('tipo', 'ASESOR_CONVENIO').first()
+      // 1) Preparamos asesoría disponible
+      const agentes = await AgenteCaptacion.query({ client: trx }).whereIn('tipo', [
+        'ASESOR_COMERCIAL',
+        'ASESOR_CONVENIO',
+      ] as const)
 
-    const usuarioComercial = comercial?.usuarioId
-      ? await Usuario.find(comercial.usuarioId)
-      : await Usuario.findBy('correo', 'carlos.rodriguez@empresa.com')
+      // 2) Evitar colisiones de placa con lo que ya existe en prospectos
+      const ya = await trx.from('prospectos').select('placa').whereNotNull('placa')
+      const used = new Set<string>(ya.map((r: any) => String(r.placa).toUpperCase()))
+      const uniquePlate = makePlateFactory(used)
 
-    const usuarioConvenio = convenioAgente?.usuarioId
-      ? await Usuario.find(convenioAgente.usuarioId)
-      : await Usuario.findBy('correo', 'maria.sanchez@empresa.com')
+      // 3) Generamos
+      const TOTAL = 50
+      for (let i = 0; i < TOTAL; i++) {
+        const createdAt = hoy.minus({ days: randInt(0, 45) })
+        const tel = phone()
+        const agente = agentes.length ? pick(agentes) : null
+        const creadoPor = agente?.usuarioId ?? null
 
-    // 🧠 Convenios reales
-    const motorPlus = await Convenio.findBy('nombre', 'MotorPlus Taller')
-    const llantasFrenos = await Convenio.findBy('nombre', 'Llantas & Frenos SAS')
-    const lauraPerez = await Convenio.findBy('nombre', 'Laura Pérez')
+        const soat = genVigencia(hoy)
+        const tecno = genVigencia(hoy)
+        const prev = genVigencia(hoy)
+        const peritajeUltima = Math.random() < 0.7 ? hoy.minus({ days: randInt(10, 400) }) : null
 
-    const prospectos = [
-      { placa: 'AAA101', nombre: 'Juan Ramírez', telefono: '3000000010', convenioId: null },
-      { placa: 'BBB202', nombre: 'Sofía Morales', telefono: '3000000011', convenioId: null },
-      { placa: 'CCC303', nombre: 'Andrés Pérez', telefono: '3000000012', convenioId: null },
-      { placa: 'DDD404', nombre: 'Valentina Torres', telefono: '3000000013', convenioId: null },
-      { placa: 'EEE505', nombre: 'Felipe Gutiérrez', telefono: '3000000014', convenioId: null },
-      { placa: 'FFF606', nombre: 'Camila Rojas', telefono: '3000000015', convenioId: null },
-      { placa: 'GGG707', nombre: 'Esteban Díaz', telefono: '3000000016', convenioId: null },
-      { placa: 'HHH808', nombre: 'Laura Castillo', telefono: '3000000017', convenioId: null },
-      { placa: 'III909', nombre: 'Sebastián Romero', telefono: '3000000018', convenioId: null },
-      { placa: 'JJJ010', nombre: 'Mariana Sánchez', telefono: '3000000019', convenioId: null },
+        // 🔒 Siempre con PLACA (única)
+        const placa = uniquePlate()
 
-      // Convenio: MotorPlus
-      { placa: 'KAA111', nombre: 'Luis Pardo', telefono: '3000000020', convenioId: motorPlus?.id },
-      {
-        placa: 'LBB222',
-        nombre: 'Natalia Vargas',
-        telefono: '3000000021',
-        convenioId: motorPlus?.id,
-      },
-      {
-        placa: 'MCC333',
-        nombre: 'Carlos Jiménez',
-        telefono: '3000000022',
-        convenioId: motorPlus?.id,
-      },
+        await Prospecto.updateOrCreate(
+          { telefono: tel }, // idempotencia por teléfono
+          {
+            telefono: tel,
+            nombre: nombre(),
+            placa, // <-- nunca null
+            observaciones: Math.random() < 0.3 ? 'Prospecto demo' : null,
+            origen: pick(ORIGENES),
 
-      // Convenio: Llantas & Frenos
-      {
-        placa: 'NDD444',
-        nombre: 'Sara Medina',
-        telefono: '3000000023',
-        convenioId: llantasFrenos?.id,
-      },
-      { placa: 'OEE555', nombre: 'Mateo Torres', telefono: '3000000024', convenioId: llantasFrenos?.id },
-      { placa: 'PFF666', nombre: 'Juliana López', telefono: '3000000025', convenioId: llantasFrenos?.id },
+            // documentos / servicios
+            soatVigente: soat.vigente,
+            soatVencimiento: soat.vencimiento,
+            tecnoVigente: tecno.vigente,
+            tecnoVencimiento: tecno.vencimiento,
+            preventivaVigente: prev.vigente,
+            preventivaVencimiento: prev.vencimiento ?? null,
+            peritajeUltimaFecha: peritajeUltima,
 
-      // Convenio: Laura Pérez
-      { placa: 'QGG777', nombre: 'Miguel Ángel', telefono: '3000000026', convenioId: lauraPerez?.id },
-      { placa: 'RHH888', nombre: 'Diana Herrera', telefono: '3000000027', convenioId: lauraPerez?.id },
-      { placa: 'SII999', nombre: 'Andrés Cuéllar', telefono: '3000000028', convenioId: lauraPerez?.id },
-    ]
-
-    const payload = prospectos.map((p, index) => {
-      // 📅 Fechas realistas con mezcla de vigentes y vencidos
-      const createdAt = hoy.minus({ days: Math.floor(Math.random() * 90) })
-
-      // SOAT y RTM duran 1 año
-      const soatVenc = index % 2 === 0 ? hoy.plus({ months: 10 }) : hoy.minus({ months: 3 })
-      const tecnoVenc = index % 3 === 0 ? hoy.plus({ months: 11 }) : hoy.minus({ months: 5 })
-
-      // Preventiva dura 2 meses
-      const preventivaVenc = index % 4 === 0 ? hoy.plus({ months: 1 }) : hoy.minus({ months: 3 })
-
-      // Peritaje: última fecha de revisión técnica (sin vigencia)
-      const peritajeUltima = hoy.minus({ days: Math.floor(Math.random() * 180) })
-
-      return {
-        convenioId: p.convenioId ?? null,
-        placa: p.placa,
-        telefono: p.telefono,
-        nombre: p.nombre,
-        observaciones: 'Prospecto generado automáticamente',
-        soatVigente: soatVenc >= hoy,
-        soatVencimiento: soatVenc,
-        tecnoVigente: tecnoVenc >= hoy,
-        tecnoVencimiento: tecnoVenc,
-        preventivaVigente: preventivaVenc >= hoy,
-        preventivaVencimiento: preventivaVenc,
-        peritajeUltimaFecha: peritajeUltima,
-        origen: 'IMPORT' as ProspectoOrigen,
-        creadoPor: p.convenioId ? (usuarioConvenio?.id ?? null) : (usuarioComercial?.id ?? null),
-        createdAt,
-        updatedAt: createdAt,
+            // meta
+            creadoPor,
+            createdAt,
+            updatedAt: createdAt,
+          } as any,
+          { client: trx }
+        )
       }
-    })
 
-    await Prospecto.updateOrCreateMany('placa', payload)
-
-    console.log('✅ 20 prospectos creados correctamente con los 4 servicios, vigentes y vencidos.')
+      await trx.commit()
+    } catch (error) {
+      await trx.rollback()
+      throw error
+    }
   }
 }

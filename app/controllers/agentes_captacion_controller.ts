@@ -1,4 +1,3 @@
-// app/controllers/agentes_captacion_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -13,31 +12,35 @@ function normalizePhone(value?: string) {
   return value ? value.replace(/\D/g, '') : value
 }
 
-// ✅ ÚNICOS tipos válidos (alineados a tu enum de la migración)
 const TIPOS = new Set(['ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'ASESOR_TELEMERCADEO'])
 const DOC_TIPOS = new Set(['CC', 'NIT'])
 
-// Fragmento SQL que calcula "activo" en función del tipo:
-// - COMERCIAL o TELEMERCADEO ⟶ usuarios.estado === 'activo'
-// - CONVENIO               ⟶ agentes_captacions.activo
+/** ✅ Calcula activo:
+ *  - COMERCIAL / TELEMERCADEO → LOWER(usuarios.estado) = 'activo'
+ *  - CONVENIO → agentes_captacions.activo
+ *  Devuelve SIEMPRE 1/0 para evitar ambigüedad con boolean/ints.
+ */
 const ACTIVO_CALC_SQL = `
   CASE
     WHEN agentes_captacions.tipo IN ('ASESOR_COMERCIAL','ASESOR_TELEMERCADEO')
-      THEN (usuarios.estado = 'activo')
-    ELSE agentes_captacions.activo
+      THEN CASE WHEN LOWER(usuarios.estado) = 'activo' THEN 1 ELSE 0 END
+    ELSE CASE WHEN agentes_captacions.activo = TRUE THEN 1 ELSE 0 END
   END
 `
 
+function rowToPlainWithActivo(model: AgenteCaptacion) {
+  const base = model.serialize() as any
+  // 👇 usar $extras para el alias del raw
+  const extra = (model as any).$extras?.activo_calc
+  const activo = Number(extra) === 1
+  return { ...base, activo }
+}
+
 export default class AgentesCaptacionController {
-  /**
-   * GET /agentes-captacion/by-user/:userId
-   * Retorna el agente activo (calculado) asociado a un usuario específico (SIN usar auth).
-   */
+  /** GET /agentes-captacion/by-user/:userId */
   public async byUser({ params, response }: HttpContext) {
     const userId = Number(params.userId)
-    if (!Number.isFinite(userId)) {
-      return response.badRequest({ message: 'userId inválido' })
-    }
+    if (!Number.isFinite(userId)) return response.badRequest({ message: 'userId inválido' })
 
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.usuario_id', userId)
@@ -52,37 +55,40 @@ export default class AgentesCaptacionController {
       })
     }
 
-    const plain = row.serialize()
-    const activo =
-      plain.activo_calc === true || plain.activo_calc === 1 || plain.activo_calc === '1'
-    return { ...plain, activo }
+    return rowToPlainWithActivo(row)
   }
 
   /**
    * GET /agentes-captacion?page=1&perPage=20&q=juan&tipo=ASESOR_CONVENIO&activo=true
-   * Lista paginada con "activo" calculado.
    */
   public async index({ request }: HttpContext) {
     const page = Number(request.input('page', 1))
     const perPage = Math.min(Number(request.input('perPage', 20)), 100)
     const q = String(request.input('q', '') || '').trim()
     const tipo = String(request.input('tipo', '') || '').trim()
-    const activoParam = request.input('activo') // 'true' | 'false' | 1 | 0 | '' | undefined
+    const activoParam = request.input('activo')
 
-    // Ordenamiento opcional
-    const sortBy = String(request.input('sortBy', 'id')).trim()
+    const SORTABLE = new Set([
+      'id',
+      'nombre',
+      'tipo',
+      'telefono',
+      'doc_numero',
+      'created_at',
+      'updated_at',
+    ])
+    const sortByReq = String(request.input('sortBy', 'id')).trim()
+    const sortBy = SORTABLE.has(sortByReq) ? sortByReq : 'id'
     const orderRaw = String(request.input('order', 'asc')).toLowerCase()
     const order: 'asc' | 'desc' = orderRaw === 'desc' ? 'desc' : 'asc'
-    const SORTABLE = new Set(['id', 'nombre', 'tipo', 'telefono', 'doc_numero', 'created_at', 'updated_at'])
-    const sortCol = SORTABLE.has(sortBy) ? sortBy : 'id'
 
-    const query = AgenteCaptacion.query()
+    const qbuilder = AgenteCaptacion.query()
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
       .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
-      .orderBy(`agentes_captacions.${sortCol}`, order)
+      .orderBy(`agentes_captacions.${sortBy}`, order)
 
     if (q) {
-      query.where((qb) => {
+      qbuilder.where((qb) => {
         qb.where('agentes_captacions.nombre', 'like', `%${q}%`)
           .orWhere('agentes_captacions.telefono', 'like', `%${q}%`)
           .orWhere('agentes_captacions.doc_numero', 'like', `%${q}%`)
@@ -90,31 +96,28 @@ export default class AgentesCaptacionController {
     }
 
     if (TIPOS.has(tipo)) {
-      query.andWhere('agentes_captacions.tipo', tipo as any)
+      qbuilder.andWhere('agentes_captacions.tipo', tipo as any)
     }
 
-    // Filtro por activo sobre activo calculado
     if (activoParam !== undefined && activoParam !== '') {
       const val = String(activoParam).toLowerCase()
       if (['true', '1', 'activo'].includes(val)) {
-        query.andWhereRaw(`${ACTIVO_CALC_SQL} = TRUE`)
+        qbuilder.andWhereRaw(`${ACTIVO_CALC_SQL} = 1`)
       } else if (['false', '0', 'inactivo'].includes(val)) {
-        query.andWhereRaw(`${ACTIVO_CALC_SQL} = FALSE`)
+        qbuilder.andWhereRaw(`${ACTIVO_CALC_SQL} = 0`)
       }
     }
 
-    const pageResult = await query.paginate(page, perPage)
-    const serialized = pageResult.serialize()
+    const paginator = await qbuilder.paginate(page, perPage)
 
-    serialized.data = serialized.data.map((row: any) => {
-      const activo = row.activo_calc === true || row.activo_calc === 1 || row.activo_calc === '1'
-      return { ...row, activo }
-    })
+    // ⚠️ No usar serialize() directo; convertimos modelo→plain con $extras
+    const data = paginator.all().map(rowToPlainWithActivo)
+    const meta = paginator.getMeta()
 
-    return serialized
+    return { data, ...meta }
   }
 
-  /** GET /agentes-captacion/:id  (con activo calculado) */
+  /** GET /agentes-captacion/:id */
   public async show({ params, response }: HttpContext) {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.id', params.id)
@@ -123,16 +126,10 @@ export default class AgentesCaptacionController {
       .first()
 
     if (!row) return response.notFound({ message: 'Agente no encontrado' })
-
-    const plain = row.serialize()
-    const activo = plain.activo_calc === true || plain.activo_calc === 1 || plain.activo_calc === '1'
-    return { ...plain, activo }
+    return rowToPlainWithActivo(row)
   }
 
-  /**
-   * ⭐ GET /agentes-captacion/me
-   * Devuelve el agente vinculado al usuario autenticado, con activo calculado.
-   */
+  /** GET /agentes-captacion/me */
   public async me({ auth, response }: HttpContext) {
     if (!auth?.user?.id) {
       return response.unauthorized({ message: 'No autenticado' })
@@ -150,15 +147,10 @@ export default class AgentesCaptacionController {
       })
     }
 
-    const plain = row.serialize()
-    const activo = plain.activo_calc === true || plain.activo_calc === 1 || plain.activo_calc === '1'
-    return { ...plain, activo }
+    return rowToPlainWithActivo(row)
   }
 
-  /**
-   * POST /agentes-captacion
-   * body: { tipo, nombre, telefono?, doc_tipo?, doc_numero?, activo?, usuario_id? }
-   */
+  /** POST /agentes-captacion */
   public async store({ request, response }: HttpContext) {
     let { tipo, nombre, telefono, doc_tipo, doc_numero, activo, usuario_id } = request.only([
       'tipo',
@@ -199,18 +191,14 @@ export default class AgentesCaptacionController {
       docTipo: doc_tipo || null,
       docNumero: doc_numero ? String(doc_numero).trim() : null,
       usuarioId: usuario_id ?? null,
-      // activo físico solo aplica en convenios; por defecto true
+      // para convenios; para comerciales/telemercadeo no se usa (se calcula)
       activo: typeof activo === 'boolean' ? activo : true,
     })
 
     return response.created(created)
   }
 
-  /**
-   * PUT /agentes-captacion/:id
-   * body parcial: { tipo?, nombre?, telefono?, doc_tipo?, doc_numero?, activo?, usuario_id? }
-   * Nota: activo SOLO se actualiza si tipo === ASESOR_CONVENIO (para no romper sincronía con usuarios).
-   */
+  /** PUT /agentes-captacion/:id */
   public async update({ params, request, response }: HttpContext) {
     const item = await AgenteCaptacion.find(params.id)
     if (!item) return response.notFound({ message: 'Agente no encontrado' })
@@ -267,28 +255,21 @@ export default class AgentesCaptacionController {
       }
     }
 
-    // 🔒 activo solo editable para ASESOR_CONVENIO
-    if (payload.activo !== undefined) {
-      if (item.tipo === 'ASESOR_CONVENIO') {
-        const v = String(payload.activo).toLowerCase()
-        item.activo = ['true', '1'].includes(v)
-          ? true
-          : ['false', '0'].includes(v)
-            ? false
-            : item.activo
-      } else {
-        // Ignorar para comerciales/telemercadeo (depende de usuarios.estado)
-      }
+    // activo editable solo para ASESOR_CONVENIO
+    if (payload.activo !== undefined && item.tipo === 'ASESOR_CONVENIO') {
+      const v = String(payload.activo).toLowerCase()
+      item.activo = ['true', '1'].includes(v)
+        ? true
+        : ['false', '0'].includes(v)
+          ? false
+          : item.activo
     }
 
     await item.save()
     return item
   }
 
-  /**
-   * DELETE /agentes-captacion/:id
-   * Bloquea si existen dateos que lo referencien
-   */
+  /** DELETE /agentes-captacion/:id */
   public async destroy({ params, response }: HttpContext) {
     const item = await AgenteCaptacion.find(params.id)
     if (!item) return response.notFound({ message: 'Agente no encontrado' })
@@ -309,11 +290,10 @@ export default class AgentesCaptacionController {
     return response.noContent()
   }
 
-  /** GET /agentes-captacion/:id/resumen  */
+  /** GET /agentes-captacion/:id/resumen */
   public async resumen({ params }: HttpContext) {
     const asesorId = Number(params.id)
 
-    // Convenios
     const [{ 'count(*)': convTotStr }] = await AsesorConvenioAsignacion.query()
       .where('asesor_id', asesorId)
       .count('*')
@@ -324,7 +304,6 @@ export default class AgentesCaptacionController {
       .whereNull('fecha_fin')
       .count('*')
 
-    // Prospectos
     const hoyIni = DateTime.now().startOf('day').toJSDate()
     const hoyFin = DateTime.now().endOf('day').toJSDate()
     const mesIni = DateTime.now().startOf('month').toJSDate()
@@ -352,7 +331,7 @@ export default class AgentesCaptacionController {
         vigentes: Number(convVigStr ?? 0),
       },
       prospectos: {
-        total: Number(prosVigStr ?? 0), // si quieres total histórico, cambia la consulta
+        total: Number(prosVigStr ?? 0),
         vigentes: Number(prosVigStr ?? 0),
         hoy: Number(prosHoyStr ?? 0),
         mes: Number(prosMesStr ?? 0),
@@ -360,7 +339,7 @@ export default class AgentesCaptacionController {
     }
   }
 
-  /** GET /agentes-captacion/:id/prospectos?vigente=1&q=… */
+  /** GET /agentes-captacion/:id/prospectos?vigente=1&q=... */
   public async prospectos({ params, request }: HttpContext) {
     const asesorId = Number(params.id)
     const vigente = String(request.input('vigente', '1')) === '1'
@@ -405,24 +384,18 @@ export default class AgentesCaptacionController {
         db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`)
       )
       .modify((qb) => {
-        if (activos) {
-          qb.whereRaw(`${ACTIVO_CALC_SQL} = TRUE`)
-        }
+        if (activos) qb.whereRaw(`${ACTIVO_CALC_SQL} = 1`)
       })
 
     const data = rows.map((r: any) => {
-      const activo = r.activo_calc === true || r.activo_calc === 1 || r.activo_calc === '1'
+      const activo = Number(r.activo_calc) === 1
       return { ...r, activo }
     })
 
     return response.ok({ data })
   }
 
-  /**
-   * ✅ GET /agentes-captacion/:id/convenios?vigente=1
-   * Devuelve los convenios asociados al asesor. Si `vigente=1`, solo los activos (pivot activo y sin fecha_fin).
-   * Devuelve un arreglo tipo: [{ id, nombre, ...pivot }]
-   */
+  /** GET /agentes-captacion/:id/convenios?vigente=1 */
   public async conveniosByAgente({ params, request }: HttpContext) {
     const asesorId = Number(params.id)
     const vigente = String(request.input('vigente', '1')) === '1'

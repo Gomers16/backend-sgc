@@ -1,15 +1,32 @@
 // app/Controllers/Http/clientes_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
+import { DateTime } from 'luxon'
+
 import Cliente from '#models/cliente'
+import Vehiculo from '#models/vehiculo'
+import TurnoRtm from '#models/turno_rtm'
 
 function normalizePhone(value?: string): string | undefined {
   if (!value) return value
   return value.replace(/\D/g, '')
 }
 
+function toBogotaDateTime(v: unknown): DateTime | null {
+  if (!v) return null
+  if (v instanceof Date) {
+    return DateTime.fromJSDate(v, { zone: 'America/Bogota' }).startOf('day')
+  }
+  const s = String(v)
+  const dt =
+    s.length <= 10
+      ? DateTime.fromFormat(s, 'yyyy-LL-dd', { zone: 'America/Bogota' })
+      : DateTime.fromISO(s, { zone: 'America/Bogota' })
+  return dt.isValid ? dt.startOf('day') : null
+}
+
 export default class ClientesController {
-  /** GET /clientes?page=1&perPage=20&q=andres */
+  /** GET /clientes?page=1&perPage=20&q=... */
   public async index({ request }: HttpContext) {
     const page = Number(request.input('page', 1))
     const perPage = Math.min(Number(request.input('perPage', 20)), 100)
@@ -21,6 +38,7 @@ export default class ClientesController {
         .where('nombre', 'like', `%${q}%`)
         .orWhere('telefono', 'like', `%${q}%`)
         .orWhere('doc_numero', 'like', `%${q}%`)
+        .orWhere('email', 'like', `%${q}%`)
     }
     return await query.paginate(page, perPage)
   }
@@ -32,25 +50,23 @@ export default class ClientesController {
     return item
   }
 
-  /** POST /clientes  body: { nombre?, doc_tipo?, doc_numero?, telefono, email?, ciudad_id? } */
+  /** POST /clientes */
   public async store({ request, response }: HttpContext) {
     const {
       nombre,
-      doc_tipo: docTipo, // alias → camelCase en TS
-      doc_numero: docNumero, // alias → camelCase en TS
+      doc_tipo: docTipo,
+      doc_numero: docNumero,
       telefono: rawTelefono,
       email,
-      ciudad_id: ciudadId, // alias → camelCase en TS
+      ciudad_id: ciudadId,
     } = request.only(['nombre', 'doc_tipo', 'doc_numero', 'telefono', 'email', 'ciudad_id'])
 
     const telefono = normalizePhone(rawTelefono) || ''
     if (!telefono) return response.badRequest({ message: 'telefono es requerido' })
 
-    // Unicidad de teléfono
     const telExists = await Cliente.findBy('telefono', telefono)
     if (telExists) return response.conflict({ message: 'El teléfono ya existe' })
 
-    // Unicidad de documento (si viene)
     if (docTipo && docNumero) {
       const docExists = await Cliente.query()
         .where('doc_tipo', docTipo)
@@ -71,18 +87,18 @@ export default class ClientesController {
     return response.created(created)
   }
 
-  /** PUT /clientes/:id  body parcial: { nombre?, doc_tipo?, doc_numero?, telefono?, email?, ciudad_id? } */
+  /** PUT /clientes/:id */
   public async update({ params, request, response }: HttpContext) {
     const item = await Cliente.find(params.id)
     if (!item) return response.notFound({ message: 'Cliente no encontrado' })
 
     const {
       nombre,
-      doc_tipo: docTipo, // alias
-      doc_numero: docNumero, // alias
+      doc_tipo: docTipo,
+      doc_numero: docNumero,
       telefono: rawTelefono,
       email,
-      ciudad_id: ciudadId, // alias
+      ciudad_id: ciudadId,
     } = request.only(['nombre', 'doc_tipo', 'doc_numero', 'telefono', 'email', 'ciudad_id'])
 
     if (typeof nombre === 'string') item.nombre = nombre.trim() || null
@@ -129,10 +145,7 @@ export default class ClientesController {
     const item = await Cliente.find(params.id)
     if (!item) return response.notFound({ message: 'Cliente no encontrado' })
 
-    const [{ total }] = await db
-      .from('vehiculos')
-      .where('cliente_id', params.id)
-      .count('* as total')
+    const [{ total }] = await db.from('vehiculos').where('cliente_id', params.id).count('* as total')
     if (Number(total) > 0) {
       return response.conflict({
         message: 'No se puede eliminar: existen vehículos asociados a este cliente.',
@@ -141,5 +154,187 @@ export default class ClientesController {
 
     await item.delete()
     return response.noContent()
+  }
+
+  // ===================== VISTAS ENRIQUECIDAS =====================
+
+  /** GET /clientes/:id/detalle  → métricas, vehículos, últimas por vehículo y recientes */
+  public async detalle({ params, response }: HttpContext) {
+    const id = Number(params.id)
+    const cliente = await Cliente.find(id)
+    if (!cliente) return response.notFound({ message: 'Cliente no encontrado' })
+
+    // Vehículos del cliente (con clase)
+    const vehiculos = await Vehiculo.query().where('cliente_id', id).preload('clase')
+
+    // Base común para conteos
+    const base = db
+      .from('turnos_rtms as t')
+      .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
+      .where((qb) => {
+        qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
+      })
+
+    // Conteos + última visita global
+    const [{ total_visitas, ultima }] = await base
+      .clone()
+      .count('* as total_visitas')
+      .max('t.fecha as ultima')
+
+    const last = toBogotaDateTime(ultima)
+    const today = DateTime.now().setZone('America/Bogota').startOf('day')
+    const dias_desde_ultima_visita =
+      last ? String(Math.max(0, Math.floor(today.diff(last, 'days').days ?? 0))) : null
+
+    // Top servicios
+    const serviciosTopRaw = await base
+      .clone()
+      .select('t.servicio_id')
+      .count('* as cnt')
+      .groupBy('t.servicio_id')
+      .orderBy('cnt', 'desc')
+      .limit(5)
+
+    // 1) Última visita POR CADA VEHÍCULO del cliente
+    //    (N+1 consultas, número de vehículos por cliente es pequeño)
+    const ultimasPorVehiculo: Array<{
+      vehiculoId: number
+      placa: string
+      fecha: string | null
+      servicioNombre: string | null
+      estado: string | null
+      sedeNombre: string | null
+    }> = []
+
+    for (const v of vehiculos) {
+      const t = await TurnoRtm.query()
+        .where('vehiculo_id', v.id)
+        .orderBy('fecha', 'desc')
+        .orderBy('turno_numero', 'desc')
+        .preload('servicio')
+        .preload('sede')
+        .first()
+
+      ultimasPorVehiculo.push({
+        vehiculoId: v.id,
+        placa: v.placa,
+        fecha: t?.fecha ? t.fecha.toISODate() : null,
+        servicioNombre: (t as any)?.$preloaded?.servicio?.nombreServicio ?? null,
+        estado: t?.estado ?? null,
+        sedeNombre: (t as any)?.$preloaded?.sede?.nombre ?? null,
+      })
+    }
+
+    // 2) Visitas recientes (mezclando todos los vehículos del cliente)
+    const recientes = await base
+      .clone()
+      .leftJoin('servicios as s', 's.id', 't.servicio_id')
+      .leftJoin('sedes as se', 'se.id', 't.sede_id')
+      .select([
+        't.id',
+        't.fecha',
+        't.placa',
+        't.estado',
+        's.nombre_servicio as servicioNombre',
+        'se.nombre as sedeNombre',
+      ])
+      .orderBy('t.fecha', 'desc')
+      .orderBy('t.turno_numero', 'desc')
+      .limit(5)
+
+    const metricas = {
+      vehiculos_count: vehiculos.length,
+      visitas_count: Number(total_visitas ?? 0),
+      ultima_visita_at: last ? last.toISODate() : null,
+      dias_desde_ultima_visita,
+      servicios_top: (serviciosTopRaw || []).map((r: any) => ({
+        servicio_id: Number(r.servicio_id ?? r.servicioId ?? r['t.servicio_id']),
+        cnt: Number(r.cnt ?? r['count'] ?? r.$extras?.cnt ?? 0),
+      })),
+    }
+
+    return response.ok({
+      cliente,
+      vehiculos: vehiculos.map((v) => ({
+        id: v.id,
+        placa: v.placa,
+        marca: v.marca,
+        linea: v.linea,
+        modelo: v.modelo,
+        clase: v.$preloaded?.clase
+          ? { id: v.claseVehiculoId, nombre: (v.$preloaded as any).clase?.nombre }
+          : undefined,
+      })),
+      metricas,
+      kpis: metricas, // alias, por compatibilidad
+      ultimas_por_vehiculo: ultimasPorVehiculo,
+      visitas_recientes: recientes,
+    })
+  }
+
+  /** GET /clientes/:id/historial?page=&perPage=&... */
+  public async historial({ params, request, response }: HttpContext) {
+    const id = Number(params.id)
+    const page = Number(request.input('page', 1))
+    const perPage = Math.min(Number(request.input('perPage', 20)), 100)
+
+    const servicioId = request.input('servicioId')
+    const servicioCodigo = request.input('servicioCodigo')
+    const sedeId = request.input('sedeId')
+    const placa = String(request.input('placa', '')).trim()
+    const desde = request.input('desde') // YYYY-MM-DD
+    const hasta = request.input('hasta') // YYYY-MM-DD
+    const estado = request.input('estado') // activo|inactivo|cancelado|finalizado
+
+    let q = db
+      .from('turnos_rtms as t')
+      .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
+      .leftJoin('servicios as s', 's.id', 't.servicio_id')
+      .leftJoin('sedes as se', 'se.id', 't.sede_id')
+      .where((qb) => {
+        qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
+      })
+      .select([
+        't.id',
+        't.fecha',
+        't.hora_ingreso as horaIngreso',
+        't.hora_salida as horaSalida',
+        't.tiempo_servicio as tiempoServicio',
+        't.turno_numero as turnoNumero',
+        't.turno_numero_servicio as turnoNumeroServicio',
+        't.turno_codigo as turnoCodigo',
+        't.placa',
+        't.tipo_vehiculo as tipoVehiculo',
+        't.estado',
+        't.medio_entero as medioEntero',
+        't.canal_atribucion as canalAtribucion',
+        't.observaciones',
+        's.codigo_servicio as servicioCodigo',
+        's.nombre_servicio as servicioNombre',
+        'se.nombre as sedeNombre',
+      ])
+      .orderBy('t.fecha', 'desc')
+      .orderBy('t.turno_numero', 'desc')
+
+    if (servicioId) q = q.where('t.servicio_id', Number(servicioId))
+    if (servicioCodigo) q = q.where('s.codigo_servicio', String(servicioCodigo))
+    if (sedeId) q = q.where('t.sede_id', Number(sedeId))
+    if (placa) q = q.whereRaw('LOWER(t.placa) like ?', [`%${placa.toLowerCase()}%`])
+    if (estado) q = q.where('t.estado', String(estado))
+    if (desde) q = q.where('t.fecha', '>=', String(desde))
+    if (hasta) q = q.where('t.fecha', '<=', String(hasta))
+
+    const countRow = await q.clone().clearSelect().count('* as total').first()
+    const total = Number((countRow as any)?.total ?? 0)
+
+    const rows = await q.clone().offset((page - 1) * perPage).limit(perPage)
+
+    return response.ok({
+      data: rows,
+      page,
+      perPage,
+      total,
+      lastPage: Math.ceil(total / perPage),
+    })
   }
 }

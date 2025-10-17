@@ -1,50 +1,66 @@
+// database/seeders/21_convenios_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import Convenio from '#models/convenio'
 
 export default class ConveniosSeeder extends BaseSeeder {
   public async run() {
+    // Convenios = mismos asesores de convenio (1:1), sin crear ninguno adicional
     const convenios = [
       {
-        tipo: 'TALLER' as const,
-        nombre: 'MotorPlus Taller',
-        docTipo: 'NIT',
-        docNumero: '901234567',
-        telefono: '6011234567',
-        whatsapp: '3001112233',
-        email: 'contacto@motorplus.com',
+        tipo: 'PERSONA' as const,
+        nombre: 'Carolina Rojas',
+        docTipo: 'CC',
+        docNumero: '1010000001',
+        telefono: '3013456781',
+        whatsapp: '3123456781',
+        email: 'carolina.rojas@empresa.com',
         ciudadId: null,
-        direccion: 'Cra 10 # 20-30',
-        notas: 'Taller aliado especializado en frenos',
-        activo: true,
-      },
-      {
-        tipo: 'TALLER' as const,
-        nombre: 'Llantas & Frenos SAS',
-        docTipo: 'NIT',
-        docNumero: '900765432',
-        telefono: '6017654321',
-        whatsapp: '3004445566',
-        email: 'ventas@lyf.com',
-        ciudadId: null,
-        direccion: 'Av 68 # 50-25',
-        notas: 'Alto volumen mensual',
+        direccion: null,
+        notas: 'Asesor convenio (1:1)',
         activo: true,
       },
       {
         tipo: 'PERSONA' as const,
-        nombre: 'Laura Pérez',
+        nombre: 'Felipe Gutiérrez',
         docTipo: 'CC',
-        docNumero: '1020304050',
-        telefono: '3160001122',
-        whatsapp: '3160001122',
-        email: 'laura.perez@example.com',
+        docNumero: '1010000002',
+        telefono: '3014567892',
+        whatsapp: '3134567892',
+        email: 'felipe.gutierrez@empresa.com',
         ciudadId: null,
         direccion: null,
-        notas: 'Referidos frecuentes de su conjunto',
+        notas: 'Asesor convenio (1:1)',
+        activo: true,
+      },
+      {
+        tipo: 'PERSONA' as const,
+        nombre: 'Natalia Jiménez',
+        docTipo: 'CC',
+        docNumero: '1010000003',
+        telefono: '3015678903',
+        whatsapp: '3145678903',
+        email: 'natalia.jimenez@empresa.com',
+        ciudadId: null,
+        direccion: null,
+        notas: 'Asesor convenio (1:1)',
+        activo: true,
+      },
+      {
+        tipo: 'PERSONA' as const,
+        nombre: 'Ricardo Álvarez',
+        docTipo: 'CC',
+        docNumero: '1010000004',
+        telefono: '3016789014',
+        whatsapp: '3156789014',
+        email: 'ricardo.alvarez@empresa.com',
+        ciudadId: null,
+        direccion: null,
+        notas: 'Asesor convenio (1:1)',
         activo: true,
       },
     ]
 
+    // Upsert por (docTipo, docNumero) — NO crea nada más
     for (const c of convenios) {
       await Convenio.updateOrCreate({ docTipo: c.docTipo, docNumero: c.docNumero }, c)
     }
