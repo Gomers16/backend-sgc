@@ -591,6 +591,20 @@ router
       })
       .where('id', /^[0-9]+$/)
 
+    // 🔹 Búsqueda directa por placa (para la sección "Prospecto (por placa)")
+    router.get('/prospectos/by-placa', async (ctx) => {
+      const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+      return new ProspectosController().findByPlaca(ctx)
+    })
+
+    // 🔹 Lista de prospectos por asesor (vigentes por defecto)
+    router
+      .get('/prospectos/asesor/:id/list', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().listByAsesor(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
     /* =============================== CONVENIOS ========================= */
     router.get('/convenios', async (ctx) => {
       const { default: ConveniosController } = await import('#controllers/convenios_controller')

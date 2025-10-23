@@ -327,7 +327,10 @@ export default class ClientesController {
     const countRow = await q.clone().clearSelect().count('* as total').first()
     const total = Number((countRow as any)?.total ?? 0)
 
-    const rows = await q.clone().offset((page - 1) * perPage).limit(perPage)
+    const rows = await q
+      .clone()
+      .offset((page - 1) * perPage)
+      .limit(perPage)
 
     return response.ok({
       data: rows,

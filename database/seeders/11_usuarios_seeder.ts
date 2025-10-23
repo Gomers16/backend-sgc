@@ -1,3 +1,4 @@
+// database/seeders/11_usuarios_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import Database from '@adonisjs/lucid/services/db'
 import Usuario from '#models/usuario'
@@ -23,7 +24,7 @@ export default class UsuarioSeeder extends BaseSeeder {
       const existing = await Database.from(table).select('id').where('nombre', nombre).first()
       if (!existing?.id) {
         throw new Error(
-          `Falta razón social "${nombre}". Corre primero database/seeders/razon_social_seeder.ts`
+          `Falta razón social "${nombre}". Corre primero database/seeders/02_razon_social_seeder.ts`
         )
       }
       return Number(existing.id)
@@ -41,7 +42,7 @@ export default class UsuarioSeeder extends BaseSeeder {
     const operacionesRol = await Rol.findBy('nombre', 'OPERACIONES')
     const talentoHumanoRol = await Rol.findBy('nombre', 'TALENTO_HUMANO')
 
-    // Cargos
+    // Cargos (asegura que corrió 09_cargo_seeder.ts)
     const direccionFinancieraCargo = await Cargo.findBy('nombre', 'DIRECCION FINANCIERA')
     const direccionCalidadCargo = await Cargo.findBy('nombre', 'DIRECCION DE CALIDAD Y AUDITORÍA')
     const direccionAdminCargo = await Cargo.findBy('nombre', 'DIRECCION ADMINSITRATIVA Y COMERCIAL')
@@ -83,7 +84,7 @@ export default class UsuarioSeeder extends BaseSeeder {
     const rsIdCdaCentro = await getRazonSocialIdByNombre(rsTable, 'CDA del Centro') // Ibagué
     const rsIdCdaActiva = await getRazonSocialIdByNombre(rsTable, 'CDA Activa') // Bogotá
     const rsIdJefCo = await getRazonSocialIdByNombre(rsTable, 'JEF & CO') // Cemoto
-    const rsIdActivaMarketing = await getRazonSocialIdByNombre(rsTable, 'Activa Marketing') // Sede 4
+    const rsIdActivaMarketing = await getRazonSocialIdByNombre(rsTable, 'Activa Marketing')
 
     // Mapeo sede -> razón social
     const rsBySede: Record<number, number> = {
@@ -93,7 +94,7 @@ export default class UsuarioSeeder extends BaseSeeder {
       [marketingSede.id]: rsIdActivaMarketing,
     }
 
-    // Helper para armar usuario con sede y que tome la razón social correcta automáticamente
+    // Helper 1: armar usuario fijando razón social según sede
     const u = (
       params: Omit<Partial<InstanceType<typeof Usuario>>, 'razonSocialId'> & {
         sedeId: number
@@ -130,10 +131,9 @@ export default class UsuarioSeeder extends BaseSeeder {
       }
     }
 
-    // ---------- usuarios (muestra “real” como la tuya) ----------
+    // ---------- Usuarios explícitos (1:1) ----------
     const usuarios: Partial<InstanceType<typeof Usuario>>[] = [
-      // 1) UNO por sede distinta de Ibagué
-      // Bogotá
+      // Admin / otras áreas (para tener variedad como la tuya)
       u({
         sedeId: bogotaSede.id,
         rolId: adminRol.id,
@@ -148,7 +148,6 @@ export default class UsuarioSeeder extends BaseSeeder {
         centroCosto: 'ADM-01',
         recomendaciones: true,
       }),
-      // Cemoto
       u({
         sedeId: cemotoSede.id,
         rolId: adminRol.id,
@@ -161,14 +160,7 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3003456789',
         celularCorporativo: '3129876543',
         centroCosto: 'ADM-02',
-        recomendaciones: false,
-        epsId: 3,
-        arlId: 13,
-        afpId: 19,
-        afcId: 24,
-        ccfId: 29,
       }),
-      // Activa Marketing
       u({
         sedeId: marketingSede.id,
         rolId: talentoHumanoRol?.id || adminRol.id,
@@ -183,8 +175,6 @@ export default class UsuarioSeeder extends BaseSeeder {
         centroCosto: 'TH-01',
         recomendaciones: true,
       }),
-
-      // 2) Los demás (ejemplo “real” como el tuyo) en Ibagué
       u({
         sedeId: ibagueSede.id,
         rolId: adminRol.id,
@@ -198,13 +188,7 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularCorporativo: '3119876543',
         centroCosto: 'ADM-01',
         recomendaciones: true,
-        epsId: 2,
-        arlId: 12,
-        afpId: 18,
-        afcId: 23,
-        ccfId: 28,
       }),
-
       // Contabilidad (3)
       u({
         sedeId: ibagueSede.id,
@@ -218,7 +202,6 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3012345678',
         celularCorporativo: '3112233445',
         centroCosto: 'CON-01',
-        recomendaciones: false,
       }),
       u({
         sedeId: ibagueSede.id,
@@ -246,9 +229,7 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3016789012',
         celularCorporativo: '3154321098',
         centroCosto: 'CON-03',
-        recomendaciones: false,
       }),
-
       // Líder SAC
       u({
         sedeId: ibagueSede.id,
@@ -265,10 +246,10 @@ export default class UsuarioSeeder extends BaseSeeder {
         recomendaciones: true,
       }),
 
-      // Asesores comerciales (5 — ejemplo)
+      // ✅ ASESOR COMERCIAL (5 exactos — los únicos que podrán datear)
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorComercialCargo.id,
         nombres: 'Juan',
         apellidos: 'Morales',
@@ -282,7 +263,7 @@ export default class UsuarioSeeder extends BaseSeeder {
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorComercialCargo.id,
         nombres: 'Diana',
         apellidos: 'Castro',
@@ -292,11 +273,10 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3019012345',
         celularCorporativo: '3187654321',
         centroCosto: 'COM-02',
-        recomendaciones: false,
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorComercialCargo.id,
         nombres: 'Miguel',
         apellidos: 'Hernández',
@@ -310,7 +290,7 @@ export default class UsuarioSeeder extends BaseSeeder {
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorComercialCargo.id,
         nombres: 'Valentina',
         apellidos: 'Pérez',
@@ -320,11 +300,10 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3011234567',
         celularCorporativo: '3101234567',
         centroCosto: 'COM-04',
-        recomendaciones: false,
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorComercialCargo.id,
         nombres: 'Andrés',
         apellidos: 'Martínez',
@@ -336,66 +315,269 @@ export default class UsuarioSeeder extends BaseSeeder {
         centroCosto: 'COM-05',
         recomendaciones: true,
       }),
-
-      // Asesores convenio (4 — ejemplo)
+      // ✅ ASESOR CONVENIO (20 exactos – mezcla talleres/parqueaderos/lavaderos/personas)
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorConvenioCargo.id,
-        nombres: 'Carolina',
-        apellidos: 'Rojas',
-        correo: 'carolina.rojas@empresa.com',
+        nombres: 'Taller Rápido',
+        apellidos: 'El Cambio',
+        correo: 'taller.rapido@convenios.com',
         password: 'convenio123',
-        direccion: 'Calle 92 #25-15',
-        celularPersonal: '3013456781',
-        celularCorporativo: '3123456781',
+        direccion: 'Cra 20 #12-05',
+        celularPersonal: '3011000001',
+        celularCorporativo: '3121000001',
         centroCosto: 'CONV-01',
-        recomendaciones: true,
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Parqueadero',
+        apellidos: 'La 5ta',
+        correo: 'parqueadero.5ta@convenios.com',
+        password: 'convenio123',
+        direccion: 'Calle 5 #8-20',
+        celularPersonal: '3011000002',
+        celularCorporativo: '3121000002',
+        centroCosto: 'CONV-02',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Lavadero',
+        apellidos: 'Espuma Total',
+        correo: 'lavadero.espuma@convenios.com',
+        password: 'convenio123',
+        direccion: 'Av 60 #20-30',
+        celularPersonal: '3011000003',
+        celularCorporativo: '3121000003',
+        centroCosto: 'CONV-03',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Taller',
+        apellidos: 'El Éxito',
+        correo: 'taller.exito@convenios.com',
+        password: 'convenio123',
+        direccion: 'Calle 80 #25-40',
+        celularPersonal: '3011000004',
+        celularCorporativo: '3121000004',
+        centroCosto: 'CONV-04',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Parqueadero',
+        apellidos: 'Central',
+        correo: 'parqueadero.central@convenios.com',
+        password: 'convenio123',
+        direccion: 'Cra 4 #18-15',
+        celularPersonal: '3011000005',
+        celularCorporativo: '3121000005',
+        centroCosto: 'CONV-05',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Taller',
+        apellidos: 'Ruta 40',
+        correo: 'taller.ruta40@convenios.com',
+        password: 'convenio123',
+        direccion: 'Ruta 40 Km 3',
+        celularPersonal: '3011000006',
+        celularCorporativo: '3121000006',
+        centroCosto: 'CONV-06',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Lavadero',
+        apellidos: 'TurboWash',
+        correo: 'lavadero.turbowash@convenios.com',
+        password: 'convenio123',
+        direccion: 'Cra 6 #10-22',
+        celularPersonal: '3011000007',
+        celularCorporativo: '3121000007',
+        centroCosto: 'CONV-07',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Parqueadero',
+        apellidos: 'Mi Casa',
+        correo: 'parqueadero.micasa@convenios.com',
+        password: 'convenio123',
+        direccion: 'Calle 12 #7-11',
+        celularPersonal: '3011000008',
+        celularCorporativo: '3121000008',
+        centroCosto: 'CONV-08',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Taller',
+        apellidos: 'El Pro',
+        correo: 'taller.elpro@convenios.com',
+        password: 'convenio123',
+        direccion: 'Av Mirolindo 25-10',
+        celularPersonal: '3011000009',
+        celularCorporativo: '3121000009',
+        centroCosto: 'CONV-09',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Carolina',
+        apellidos: ' Rojas',
+        correo: 'carolina.rojas@convenios.com',
+        password: 'convenio123',
+        direccion: 'Calle 92 #25-15',
+        celularPersonal: '3011000010',
+        celularCorporativo: '3121000010',
+        centroCosto: 'CONV-10',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
         cargoId: asesorConvenioCargo.id,
         nombres: 'Felipe',
         apellidos: 'Gutiérrez',
-        correo: 'felipe.gutierrez@empresa.com',
+        correo: 'felipe.gutierrez@convenios.com',
         password: 'convenio123',
         direccion: 'Cra 7 #18-30',
-        celularPersonal: '3014567892',
-        celularCorporativo: '3134567892',
-        centroCosto: 'CONV-02',
-        recomendaciones: false,
+        celularPersonal: '3011000011',
+        celularCorporativo: '3121000011',
+        centroCosto: 'CONV-11',
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorConvenioCargo.id,
         nombres: 'Natalia',
         apellidos: 'Jiménez',
-        correo: 'natalia.jimenez@empresa.com',
+        correo: 'natalia.jimenez@convenios.com',
         password: 'convenio123',
         direccion: 'Av 68 #80-45',
-        celularPersonal: '3015678903',
-        celularCorporativo: '3145678903',
-        centroCosto: 'CONV-03',
-        recomendaciones: true,
+        celularPersonal: '3011000012',
+        celularCorporativo: '3121000012',
+        centroCosto: 'CONV-12',
       }),
       u({
         sedeId: ibagueSede.id,
-        rolId: comercialRol?.id || adminRol.id,
+        rolId: comercialRol.id,
         cargoId: asesorConvenioCargo.id,
         nombres: 'Ricardo',
         apellidos: 'Álvarez',
-        correo: 'ricardo.alvarez@empresa.com',
+        correo: 'ricardo.alvarez@convenios.com',
         password: 'convenio123',
         direccion: 'Calle 22 #8-10',
-        celularPersonal: '3016789014',
-        celularCorporativo: '3156789014',
-        centroCosto: 'CONV-04',
-        recomendaciones: false,
+        celularPersonal: '3011000013',
+        celularCorporativo: '3121000013',
+        centroCosto: 'CONV-13',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Taller',
+        apellidos: 'Los Amigos',
+        correo: 'taller.amigos@convenios.com',
+        password: 'convenio123',
+        direccion: 'Cra 1 #3-55',
+        celularPersonal: '3011000014',
+        celularCorporativo: '3121000014',
+        centroCosto: 'CONV-14',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Parqueadero',
+        apellidos: 'El Bosque',
+        correo: 'parqueadero.bosque@convenios.com',
+        password: 'convenio123',
+        direccion: 'Calle 40 #7-25',
+        celularPersonal: '3011000015',
+        celularCorporativo: '3121000015',
+        centroCosto: 'CONV-15',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Lavadero',
+        apellidos: 'EcoClean',
+        correo: 'lavadero.ecoclean@convenios.com',
+        password: 'convenio123',
+        direccion: 'Av 4ta #15-05',
+        celularPersonal: '3011000016',
+        celularCorporativo: '3121000016',
+        centroCosto: 'CONV-16',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Taller',
+        apellidos: 'TurboCar',
+        correo: 'taller.turbocar@convenios.com',
+        password: 'convenio123',
+        direccion: 'Cra 12 #66-10',
+        celularPersonal: '3011000017',
+        celularCorporativo: '3121000017',
+        centroCosto: 'CONV-17',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Parqueadero',
+        apellidos: 'VIP Center',
+        correo: 'parqueadero.vip@convenios.com',
+        password: 'convenio123',
+        direccion: 'Transv 10 #100-20',
+        celularPersonal: '3011000018',
+        celularCorporativo: '3121000018',
+        centroCosto: 'CONV-18',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Lavadero',
+        apellidos: 'BrillaAuto',
+        correo: 'lavadero.brilla@convenios.com',
+        password: 'convenio123',
+        direccion: 'Diagonal 9 #4-33',
+        celularPersonal: '3011000019',
+        celularCorporativo: '3121000019',
+        centroCosto: 'CONV-19',
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: comercialRol.id,
+        cargoId: asesorConvenioCargo.id,
+        nombres: 'Taller',
+        apellidos: 'ProService',
+        correo: 'taller.proservice@convenios.com',
+        password: 'convenio123',
+        direccion: 'Calle 100 #12-02',
+        celularPersonal: '3011000020',
+        celularCorporativo: '3121000020',
+        centroCosto: 'CONV-20',
       }),
 
-      // Operaciones/otros (6 — ejemplo)
+      // Operaciones / otros (si quieres mantenerlos como en tu ejemplo)
       u({
         sedeId: ibagueSede.id,
         rolId: operacionesRol?.id || adminRol.id,
@@ -422,7 +604,6 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3018901236',
         celularCorporativo: '3178901236',
         centroCosto: 'CAJ-01',
-        recomendaciones: false,
       }),
       u({
         sedeId: ibagueSede.id,
@@ -450,7 +631,6 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3010123458',
         celularCorporativo: '3190123458',
         centroCosto: 'TEL-01',
-        recomendaciones: false,
       }),
       u({
         sedeId: ibagueSede.id,
@@ -478,7 +658,6 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3012345671',
         celularCorporativo: '3112345671',
         centroCosto: 'TEC-02',
-        recomendaciones: false,
       }),
       u({
         sedeId: ibagueSede.id,
@@ -496,19 +675,11 @@ export default class UsuarioSeeder extends BaseSeeder {
       }),
     ]
 
-    // ---------- UPSERT por correo (evita Duplicate entry) ----------
+    // ---------- UPSERT por correo (1:1, sin duplicados) ----------
     for (const data of usuarios) {
-      await Usuario.updateOrCreate(
-        { correo: data.correo as string },
-        {
-          ...data,
-          // Si quieres evitar re-hashear password cuando el usuario existe, podrías
-          // excluir 'password' aquí al hacer update, pero normalmente el hook de
-          // hash maneja esto sin problema.
-        }
-      )
+      await Usuario.updateOrCreate({ correo: data.correo as string }, { ...data })
     }
 
-    console.log('✅ Usuarios: creados/actualizados correctamente (sin duplicar correos).')
+    console.log('✅ Usuarios: creados/actualizados (1:1, sin automáticos).')
   }
 }

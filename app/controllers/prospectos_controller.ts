@@ -138,6 +138,71 @@ export default class ProspectosController {
     }
   }
 
+  /** GET /api/prospectos/by-placa?placa=ABC123 */
+  public async findByPlaca({ request, response }: HttpContext) {
+    const placaRaw = String(request.input('placa') ?? '')
+    const placa = normPlaca(placaRaw)
+    if (!placa) return response.badRequest({ message: 'placa es requerida' })
+
+    const p = await Prospecto.query()
+      .whereRaw('REPLACE(UPPER(placa), \'-\', \'\') = ?', [placa])
+      .orderBy('updated_at', 'desc')
+      .preload('creador')
+      .preload('convenio')
+      .preload('asignaciones', (q) =>
+        q
+          .where('activo', true)
+          .whereNull('fecha_fin')
+          .orderBy('fecha_asignacion', 'desc')
+          .preload('asesor')
+      )
+      .first()
+
+    if (!p) return response.ok({ exists: false })
+
+    const soat = docStatus(p.soatVencimiento)
+    const rtm = docStatus(p.tecnoVencimiento)
+    const hoy = DateTime.now().startOf('day')
+
+    const preventiva: DocResumen = !p.preventivaVencimiento
+      ? { estado: p.preventivaVigente ? 'vigente' : 'sin_datos', vencimiento: null, dias_restantes: null }
+      : {
+          estado: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days) >= 0 ? 'vigente' : 'vencido',
+          vencimiento: p.preventivaVencimiento.toISODate()!,
+          dias_restantes: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days),
+        }
+
+    const peritaje = p.peritajeUltimaFecha
+      ? { estado: 'registrado', fecha: p.peritajeUltimaFecha.toISODate() }
+      : { estado: 'sin_datos', fecha: null as string | null }
+
+    const activa = (p.asignaciones || []).find((a) => a.activo && !a.fechaFin) || null
+    const asignacionOut = activa
+      ? {
+          ...activa.serialize(),
+          fecha_asignacion: activa.fechaAsignacion?.toISO() ?? p.createdAt?.toISO() ?? null,
+        }
+      : null
+
+    const creadorModel = (p as any).creador as Parameters<typeof userDisplayName>[0] | undefined
+    const creadorOut = creadorModel
+      ? { id: creadorModel.id ?? null, nombre: userDisplayName(creadorModel) }
+      : null
+
+    return response.ok({
+      exists: true,
+      id: p.id,
+      placa: p.placa,
+      telefono: p.telefono,
+      nombre: p.nombre,
+      origen: p.origen,
+      creado_por: creadorOut,
+      created_at: p.createdAt?.toISO() ?? null,
+      asignacion_activa: asignacionOut,
+      resumenVigencias: { soat, rtm, preventiva, peritaje },
+    })
+  }
+
   /** POST /api/prospectos  (placa requerida) */
   public async store({ request, response, auth }: HttpContext) {
     const body = request.only([
@@ -156,16 +221,14 @@ export default class ProspectosController {
       'observaciones',
       'creadoPor',
       'creado_por',
-      'asesorId',
-      'asesor_id',
-      'asesor_agente_id',
+      // ❌ ya no usamos asesorId/asesor_agente_id para la asignación inicial
     ])
 
     const placa = normPlaca(body.placa)
     const telefono = normTel(body.telefono)
     const nombre = (body.nombre ?? '').trim()
 
-    // 🔒 Placa obligatoria (y también tel + nombre)
+    // 🔒 Campos obligatorios
     if (!placa || !telefono || !nombre) {
       return response.badRequest({
         message: 'placa, telefono y nombre son obligatorios',
@@ -180,28 +243,25 @@ export default class ProspectosController {
       : null
     const periUlt = body.peritajeUltimaFecha ? DateTime.fromISO(body.peritajeUltimaFecha) : null
 
+    // 🔐 Determinar creador
     const creadorIdNum = Number(auth?.user?.id ?? body.creadoPor ?? body.creado_por)
     const creadoPor = Number.isFinite(creadorIdNum) ? creadorIdNum : null
 
-    // Resolver asesor
-    let asesorAgenteId: number | null = null
-    const directAgente =
-      Number(body.asesor_agente_id) || Number(body.asesorId) || Number(body.asesor_id)
-    if (Number.isFinite(directAgente)) {
-      asesorAgenteId = Number(directAgente)
-    } else if (auth?.user?.id) {
-      const agente = await AgenteCaptacion.query()
-        .where('usuario_id', auth.user.id)
-        .where('activo', true)
-        .first()
-      if (agente) asesorAgenteId = agente.id
-    } else if (creadoPor) {
-      const agenteCreador = await AgenteCaptacion.query()
-        .where('usuario_id', creadoPor)
-        .where('activo', true)
-        .first()
-      if (agenteCreador) asesorAgenteId = agenteCreador.id
+    // ✅ Regla: el asesor asignado inicial DEBE ser el agente del usuario creador
+    if (!creadoPor) {
+      return response.badRequest({ message: 'No se pudo determinar el usuario creador (creadoPor).' })
     }
+    const agenteCreador = await AgenteCaptacion.query()
+      .where('usuario_id', creadoPor)
+      .where('activo', true)
+      .first()
+    if (!agenteCreador) {
+      return response.badRequest({
+        message: 'El usuario creador no tiene un Agente de Captación activo configurado',
+        details: { creadoPor },
+      })
+    }
+    const asesorAgenteId = agenteCreador.id
 
     const trx = await db.transaction()
     try {
@@ -225,20 +285,19 @@ export default class ProspectosController {
         { client: trx }
       )
 
-      if (Number.isFinite(asesorAgenteId)) {
-        await AsesorProspectoAsignacion.create(
-          {
-            asesorId: Number(asesorAgenteId),
-            prospectoId: prospecto.id,
-            asignadoPor: auth?.user?.id ?? creadoPor ?? null,
-            fechaAsignacion: DateTime.now(),
-            fechaFin: null,
-            motivoFin: null,
-            activo: true,
-          } as any,
-          { client: trx }
-        )
-      }
+      // Asignación inicial al agente del creador (activo)
+      await AsesorProspectoAsignacion.create(
+        {
+          asesorId: Number(asesorAgenteId),
+          prospectoId: prospecto.id,
+          asignadoPor: creadoPor,
+          fechaAsignacion: DateTime.now(),
+          fechaFin: null,
+          motivoFin: null,
+          activo: true,
+        } as any,
+        { client: trx }
+      )
 
       await trx.commit()
 
@@ -283,12 +342,9 @@ export default class ProspectosController {
       'peritajeUltimaFecha',
     ])
 
-    // 🔒 Si mandan placa, debe ser válida y no vacía
     if (body.placa !== undefined) {
       const nueva = normPlaca(body.placa)
-      if (!nueva) {
-        return response.badRequest({ message: 'placa es obligatoria y no puede ser vacía' })
-      }
+      if (!nueva) return response.badRequest({ message: 'placa es obligatoria y no puede ser vacía' })
       prospecto.placa = nueva
     }
 
@@ -351,9 +407,6 @@ export default class ProspectosController {
       !Number.isNaN(vencenEnDias) && vencenEnDias > 0 ? hoy.plus({ days: vencenEnDias }) : null
 
     const query = Prospecto.query()
-
-    // (opcional) si quisieras filtrar sólo prospectos con placa válida:
-    // query.whereRaw("COALESCE(TRIM(placa),'') <> ''")
 
     if (convenioId) query.where('convenio_id', Number(convenioId))
     if (creadoPor) query.where('creado_por', Number(creadoPor))

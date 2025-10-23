@@ -1,54 +1,55 @@
 // database/seeders/17_agentes_captacion_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
-import Database from '@adonisjs/lucid/services/db'
 import AgenteCaptacion from '#models/agente_captacion'
 import Cargo from '#models/cargo'
 import Usuario from '#models/usuario'
 
 export default class AgentesCaptacionSeeder extends BaseSeeder {
   public async run() {
-    // 1) Encontrar cargo ASESOR CONVENIO
-    const cargoConvenio = await Cargo.findBy('nombre', 'ASESOR CONVENIO')
-    if (!cargoConvenio) {
-      console.error('❌ Falta el cargo "ASESOR CONVENIO"')
-      return
+    // Ubicamos los cargos clave
+    const cargoCom = await Cargo.findBy('nombre', 'ASESOR COMERCIAL')
+    const cargoConv = await Cargo.findBy('nombre', 'ASESOR CONVENIO')
+
+    if (!cargoCom || !cargoConv) {
+      throw new Error(
+        '❌ Faltan cargos ASESOR COMERCIAL / ASESOR CONVENIO. Corre el CargoSeeder antes.'
+      )
     }
 
-    // 2) Usuarios base (exactamente los que tienen ese cargo)
-    const usuariosConvenio = await Usuario.query().where('cargo_id', cargoConvenio.id)
+    // Usuarios por cargo (1:1)
+    const comerciales = await Usuario.query().where('cargo_id', cargoCom.id)
+    const convenios = await Usuario.query().where('cargo_id', cargoConv.id)
 
-    const agentes = usuariosConvenio.map((u) => ({
-      usuarioId: u.id,
-      tipo: 'ASESOR_CONVENIO' as const,
-      nombre: `${u.nombres} ${u.apellidos}`.trim(),
-      activo: true,
-    }))
-
-    const usuarioIdsBase = agentes.map((a) => a.usuarioId)
-
-    // 3) Limpieza estricta
-    // 3.1) Borra cualquier agente que NO sea de tipo ASESOR_CONVENIO
-    await Database.from('agentes_captacions').whereNot('tipo', 'ASESOR_CONVENIO').delete()
-
-    // 3.2) Borra agentes de tipo ASESOR_CONVENIO cuyo usuario NO esté en la lista base
-    await Database.from('agentes_captacions')
-      .where('tipo', 'ASESOR_CONVENIO')
-      .whereNotIn('usuario_id', usuarioIdsBase.length ? usuarioIdsBase : [-1])
-      .delete()
-
-    // 4) Upsert 1:1 por usuarioId para los que sí deben existir
-    for (const a of agentes) {
+    // ASESOR COMERCIAL -> tipo ASESOR_COMERCIAL
+    for (const u of comerciales) {
       await AgenteCaptacion.updateOrCreate(
-        { usuarioId: a.usuarioId }, // clave lógica 1:1
+        { usuarioId: u.id },
         {
-          usuarioId: a.usuarioId,
-          tipo: a.tipo,
-          nombre: a.nombre,
-          activo: a.activo,
+          usuarioId: u.id,
+          tipo: 'ASESOR_COMERCIAL',
+          nombre: `${u.nombres} ${u.apellidos}`.trim(),
+          telefono: u.celularPersonal ?? u.celularCorporativo ?? null,
+          activo: true,
         }
       )
     }
 
-    console.log(`✅ Agentes de captación (SOLO CONVENIOS) listos: CONV=${agentes.length}`)
+    // ASESOR CONVENIO -> tipo ASESOR_CONVENIO
+    for (const u of convenios) {
+      await AgenteCaptacion.updateOrCreate(
+        { usuarioId: u.id },
+        {
+          usuarioId: u.id,
+          tipo: 'ASESOR_CONVENIO',
+          nombre: `${u.nombres} ${u.apellidos}`.trim(),
+          telefono: u.celularPersonal ?? u.celularCorporativo ?? null,
+          activo: true,
+        }
+      )
+    }
+
+    console.log(
+      `✅ Agentes de Captación creados/actualizados: comerciales=${comerciales.length}, convenios=${convenios.length}`
+    )
   }
 }

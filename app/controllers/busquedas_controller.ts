@@ -7,10 +7,11 @@ import AgenteCaptacion from '#models/agente_captacion'
 import Prospecto from '#models/prospecto'
 import Convenio from '#models/convenio'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
+import TurnoRtm from '#models/turno_rtm'
 
-type Canal = 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
+type CanalSimple = 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
 
-// Tipos de instancia (para evitar '{}' y problemas con 'in')
+// Tipos instancia
 type VehiculoInstance = InstanceType<typeof Vehiculo>
 type ClienteInstance = InstanceType<typeof Cliente>
 type CaptacionDateoInstance = InstanceType<typeof CaptacionDateo>
@@ -69,7 +70,7 @@ async function getAsesorActivoDeConvenio(convenioId: number) {
   return { asignacion, asesor }
 }
 
-/** Serializa vehículo de forma segura para TS */
+/** Serializador vehículo */
 function serializeVehiculo(vehiculo: VehiculoInstance | null) {
   if (!vehiculo) return null
   const clase = (vehiculo as any).$preloaded?.clase
@@ -90,7 +91,7 @@ function serializeVehiculo(vehiculo: VehiculoInstance | null) {
   }
 }
 
-/** Serializa cliente de forma segura para TS */
+/** Serializador cliente */
 function serializeCliente(cliente: ClienteInstance | null) {
   if (!cliente) return null
 
@@ -117,12 +118,59 @@ function serializeCliente(cliente: ClienteInstance | null) {
   }
 }
 
+/** Mapea canal BD → canal simple */
+function canalSimple(c: string | null | undefined): CanalSimple | null {
+  if (!c) return null
+  if (c === 'ASESOR_COMERCIAL' || c === 'ASESOR_CONVENIO') return 'ASESOR'
+  if (c === 'FACHADA' || c === 'TELE' || c === 'REDES') return c as CanalSimple
+  return null
+}
+
+/** Última visita por placa o cliente (una sola) */
+async function getUltimaVisita(placa?: string | null, clienteId?: number | null) {
+  if (placa) {
+    const t = await TurnoRtm.query()
+      .where('placa', placa)
+      .preload('servicio')
+      .preload('sede')
+      .orderBy('fecha', 'desc')
+      .orderBy('turno_numero', 'desc')
+      .first()
+    if (t) {
+      return {
+        fecha: t.fecha?.toISODate?.() ?? null,
+        servicioCodigo: (t as any).$preloaded?.servicio?.codigoServicio ?? null,
+        servicioNombre: (t as any).$preloaded?.servicio?.nombreServicio ?? null,
+        sedeNombre: (t as any).$preloaded?.sede?.nombre ?? null,
+        estado: t.estado,
+      }
+    }
+  } else if (clienteId) {
+    const t = await TurnoRtm.query()
+      .where('cliente_id', clienteId)
+      .preload('servicio')
+      .preload('sede')
+      .orderBy('fecha', 'desc')
+      .orderBy('turno_numero', 'desc')
+      .first()
+    if (t) {
+      return {
+        fecha: t.fecha?.toISODate?.() ?? null,
+        servicioCodigo: (t as any).$preloaded?.servicio?.codigoServicio ?? null,
+        servicioNombre: (t as any).$preloaded?.servicio?.nombreServicio ?? null,
+        sedeNombre: (t as any).$preloaded?.sede?.nombre ?? null,
+        estado: t.estado,
+      }
+    }
+  }
+  return null
+}
+
 export default class BusquedasController {
   /**
    * GET /api/buscar?placa=ABC123 | /api/buscar?telefono=3XXXXXXXXX
-   * Devuelve estructura original + extras:
-   *  - fuente: 'DATEO'|'CONVENIO'|'FACHADA'
-   *  - dateoId, convenio, asesorAsignado, detectadoPorConvenio
+   * Devuelve: vehiculo, cliente, dateoReciente (+reserva), captacionSugerida, ultimaVisita, etc.
+   * ✅ Incluye convenio del dateo (dateoReciente.convenio) y a nivel raíz (convenio)
    */
   public async unificada({ request, response }: HttpContext) {
     const placa = normalizePlaca(request.input('placa'))
@@ -153,7 +201,7 @@ export default class BusquedasController {
         .first()
     }
 
-    // 2) Último dateo por placa/teléfono
+    // 2) Último dateo por placa/teléfono (preload convenio)
     let dateo: CaptacionDateoInstance | null = await CaptacionDateo.query()
       .where((qb) => {
         if (placa) qb.where('placa', placa)
@@ -165,12 +213,24 @@ export default class BusquedasController {
       .orderBy('created_at', 'desc')
       .first()
 
+    // Precalcular última visita (para todos los caminos)
+    const ultimaVisita = await getUltimaVisita(placa ?? undefined, cliente?.id ?? undefined)
+
     let reserva: { vigente: boolean; bloqueaHasta: string | null } | null = null
 
     if (dateo) {
       const r = buildReserva(dateo)
       reserva = r
       if (r.vigente) {
+        const conv = (dateo as any).convenio
+          ? {
+              id: (dateo as any).convenio.id,
+              nombre: (dateo as any).convenio.nombre,
+              codigo:
+                (dateo as any).convenio.codigo ?? (dateo as any).convenio.codigo_convenio ?? null,
+            }
+          : null
+
         return response.ok({
           fuente: 'DATEO',
           dateoId: dateo.id,
@@ -178,7 +238,7 @@ export default class BusquedasController {
           cliente: serializeCliente(cliente),
           dateoReciente: {
             id: dateo.id,
-            canal: dateo.canal,
+            canal: canalSimple(dateo.canal) ?? 'FACHADA',
             agente: (dateo as any).agente
               ? {
                   id: (dateo as any).agente.id,
@@ -194,10 +254,12 @@ export default class BusquedasController {
             created_at: dateo.createdAt ? dateo.createdAt.toISO() : null,
             consumido_turno_id: dateo.consumidoTurnoId ?? null,
             consumido_at: dateo.consumidoAt ? dateo.consumidoAt.toISO() : null,
+            detectado_por_convenio: (dateo as any).detectadoPorConvenio ?? false,
+            convenio: conv, // ✅ convenio del dateo
           },
           reserva,
           captacionSugerida: {
-            canal: dateo.canal as Canal,
+            canal: canalSimple(dateo.canal) ?? 'FACHADA',
             agente: (dateo as any).agente
               ? {
                   id: (dateo as any).agente.id,
@@ -206,7 +268,7 @@ export default class BusquedasController {
                 }
               : null,
           },
-          convenio: (dateo as any).convenio ?? null,
+          convenio: conv, // ✅ también a nivel raíz para fácil acceso en front
           asesorAsignado: (dateo as any).agente
             ? {
                 id: (dateo as any).agente.id,
@@ -215,8 +277,8 @@ export default class BusquedasController {
               }
             : null,
           origenBusqueda: placa ? 'placa' : 'telefono',
-          // Si tu modelo YA tiene la columna:
           detectadoPorConvenio: (dateo as any).detectadoPorConvenio ?? false,
+          ultimaVisita,
         })
       }
     }
@@ -239,11 +301,9 @@ export default class BusquedasController {
       const info = await getAsesorActivoDeConvenio(prospecto.convenioId)
       if (info?.asesor) asesorAsignado = info.asesor
 
-      // Crear dateo automático.
-      // NOTA: Asegúrate de tener en el MODELO:
-      // @column({ columnName: 'detectado_por_convenio' }) declare detectadoPorConvenio: boolean
+      // Crear dateo automático (canal BD correcto)
       dateo = await CaptacionDateo.create({
-        canal: 'ASESOR',
+        canal: 'ASESOR_CONVENIO' as any,
         agenteId: asesorAsignado ? asesorAsignado.id : null,
         convenioId: convenio?.id ?? null,
         prospectoId: prospecto.id,
@@ -253,15 +313,22 @@ export default class BusquedasController {
         telefono: telefono ?? null,
         origen: 'UI',
         observacion: 'Captación automática por base de convenio',
-        // Si tu modelo aún no tiene la columna, comenta la línea de abajo temporalmente:
         detectadoPorConvenio: true as any,
         resultado: 'PENDIENTE',
-      } as Partial<any>) // <- cast defensivo por si tu tipo del modelo aún no incluye la columna
+      } as Partial<any>)
 
       await dateo.load('agente')
       await dateo.load('convenio')
 
       const r = buildReserva(dateo)
+      const conv = (dateo as any).convenio
+        ? {
+            id: (dateo as any).convenio.id,
+            nombre: (dateo as any).convenio.nombre,
+            codigo:
+              (dateo as any).convenio.codigo ?? (dateo as any).convenio.codigo_convenio ?? null,
+          }
+        : null
 
       return response.ok({
         fuente: 'CONVENIO',
@@ -270,7 +337,7 @@ export default class BusquedasController {
         cliente: serializeCliente(cliente),
         dateoReciente: {
           id: dateo.id,
-          canal: dateo.canal,
+          canal: 'ASESOR',
           agente: (dateo as any).agente
             ? {
                 id: (dateo as any).agente.id,
@@ -286,6 +353,8 @@ export default class BusquedasController {
           created_at: dateo.createdAt ? dateo.createdAt.toISO() : null,
           consumido_turno_id: dateo.consumidoTurnoId ?? null,
           consumido_at: dateo.consumidoAt ? dateo.consumidoAt.toISO() : null,
+          detectado_por_convenio: true,
+          convenio: conv, // ✅ convenio del nuevo dateo
         },
         reserva: r,
         captacionSugerida: {
@@ -294,18 +363,19 @@ export default class BusquedasController {
             ? { id: asesorAsignado.id, nombre: asesorAsignado.nombre, tipo: asesorAsignado.tipo }
             : null,
         },
-        convenio: (dateo as any).convenio ?? null,
+        convenio: conv,
         asesorAsignado: asesorAsignado
           ? { id: asesorAsignado.id, nombre: asesorAsignado.nombre, tipo: asesorAsignado.tipo }
           : null,
         origenBusqueda: placa ? 'placa' : 'telefono',
         detectadoPorConvenio: true,
+        ultimaVisita,
       })
     }
 
     // 4) Sin dateo ni convenio → fallback por teléfono a un agente
     let sugerenciaPorTelefono: {
-      canal: Canal
+      canal: CanalSimple
       agente: { id: number; nombre: string; tipo: string } | null
     } | null = null
 
@@ -317,7 +387,7 @@ export default class BusquedasController {
           .first()
 
         if (agente) {
-          let canal: Canal = 'ASESOR'
+          let canal: CanalSimple = 'ASESOR'
           if ((agente as any).tipo === 'TELEMERCADEO') canal = 'TELE'
           sugerenciaPorTelefono = {
             canal,
@@ -342,6 +412,7 @@ export default class BusquedasController {
       asesorAsignado: sugerenciaPorTelefono?.agente ?? null,
       origenBusqueda: placa ? 'placa' : 'telefono',
       detectadoPorConvenio: false,
+      ultimaVisita,
     })
   }
 }

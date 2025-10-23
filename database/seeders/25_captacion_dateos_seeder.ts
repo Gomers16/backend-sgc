@@ -1,3 +1,4 @@
+// database/seeders/25_captacion_dateos_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -16,7 +17,7 @@ function makePhone(): string {
 
 function makePlateSet(total: number): string[] {
   // Placa AAA000–ZZZ999 (sin Ñ, ni caracteres raros)
-  const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ' // sin O/Q/I para que se vean “más reales”
+  const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ' // sin O/Q/I
   const out: string[] = []
   const seen = new Set<string>()
 
@@ -47,14 +48,18 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
       const TOTAL = 50
       const hoy = DateTime.now().startOf('day')
 
+      // ===== Ventana para crear "recientes" =====
+      const TTL_SIN_CONSUMIR = Number(process.env.TTL_SIN_CONSUMIR_DIAS ?? 7) // ej. 7
+      const MAX_DIAS_ATRAS = Number(process.env.DATEOS_MAX_DIAS_ATRAS ?? 5) // ej. 5
+      // Nunca generes más atrás que el TTL-1, para que salgan vigentes
+      const WINDOW_DAYS = Math.max(0, Math.min(MAX_DIAS_ATRAS, TTL_SIN_CONSUMIR - 1))
+
       // ===== 1) Datos requeridos =====
       const conveniosActivos = await Convenio.query({ client: trx })
         .where('activo', true)
         .select(['id', 'nombre'])
+
       if (!conveniosActivos.length) {
-        console.warn(
-          '⚠️ No hay convenios activos: este seeder requiere convenios para canal asesor.'
-        )
         await trx.commit()
         return
       }
@@ -85,7 +90,6 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
       const telefonos = Array.from({ length: TOTAL }, () => makePhone())
 
       // ===== 3) Crear dateos =====
-      let created = 0
       for (let i = 0; i < TOTAL; i++) {
         const canal = pick(canalesPool)
 
@@ -94,11 +98,11 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
         let convenioId: number | null = null
 
         if (canal === 'ASESOR_COMERCIAL') {
-          if (!asesoresCom.length) continue // no hay asesores comerciales, omitir
+          if (!asesoresCom.length) continue
           agenteId = pick(asesoresCom).id
           convenioId = pick(conveniosActivos).id
         } else if (canal === 'ASESOR_CONVENIO') {
-          if (!asesoresConv.length) continue // no hay asesores de convenio, omitir
+          if (!asesoresConv.length) continue
           agenteId = pick(asesoresConv).id
           convenioId = pick(conveniosActivos).id
         } else if (canal === 'TELE') {
@@ -110,20 +114,20 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
           convenioId = null
         }
 
-        // Fecha de creación aleatoria últimos 45 días
-        const createdAt = hoy.minus({ days: rand(0, 45), hours: rand(0, 23), minutes: rand(0, 59) })
-
-        // Placa y teléfono
-        const placa = placas[i]
-        const telefono = telefonos[i]
+        // ⏱️ Fecha de creación **reciente** (dentro de la ventana calculada)
+        const createdAt = hoy.minus({
+          days: rand(0, WINDOW_DAYS),
+          hours: rand(0, 23),
+          minutes: rand(0, 59),
+        })
 
         await CaptacionDateo.create(
           {
             canal,
             agenteId,
-            convenioId, // <-- clave: convenio real para asesor
-            placa,
-            telefono,
+            convenioId,
+            placa: placas[i],
+            telefono: telefonos[i],
             origen: 'UI',
             observacion: Math.random() < 0.2 ? 'Dateo de prueba' : null,
             resultado: 'PENDIENTE',
@@ -132,17 +136,11 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
           } as any,
           { client: trx }
         )
-
-        created++
       }
 
       await trx.commit()
-      console.log(
-        `✅ Captación: ${created} dateos creados con agente y convenio reales cuando aplica.`
-      )
     } catch (err) {
       await trx.rollback()
-      console.error('❌ Error seeding captacion_dateos:', err)
       throw err
     }
   }

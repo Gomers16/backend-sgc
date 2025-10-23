@@ -12,8 +12,8 @@ import Cliente from '#models/cliente'
 import CaptacionDateo from '#models/captacion_dateo'
 
 // ===== Helpers =====
-const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss')   // DATETIME (sin ms/offset)
-const toMySQLDate = (dt: DateTime) => dt.toFormat('yyyy-LL-dd')        // DATE
+const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss') // DATETIME (sin ms/offset)
+const toMySQLDate = (dt: DateTime) => dt.toFormat('yyyy-LL-dd') // DATE
 
 type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 const VALID_TIPOS_VEHICULO: TipoVehiculoDB[] = [
@@ -81,11 +81,15 @@ function medioFromCanal(
   canal: CanalAtrib
 ): 'Fachada' | 'Redes Sociales' | 'Call Center' | 'Asesor Comercial' {
   switch (canal) {
-    case 'REDES': return 'Redes Sociales'
-    case 'TELE':  return 'Call Center'
-    case 'ASESOR':return 'Asesor Comercial'
+    case 'REDES':
+      return 'Redes Sociales'
+    case 'TELE':
+      return 'Call Center'
+    case 'ASESOR':
+      return 'Asesor Comercial'
     case 'FACHADA':
-    default:      return 'Fachada'
+    default:
+      return 'Fachada'
   }
 }
 
@@ -114,14 +118,14 @@ export default class TurnosRtmController {
     } = request.qs()
 
     try {
-      let query = TurnoRtm.query()
+      const query = TurnoRtm.query()
         .preload('usuario')
         .preload('sede')
         .preload('servicio')
         .preload('vehiculo')
         .preload('cliente')
         .preload('agenteCaptacion')
-        .preload('captacionDateo')
+        .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
 
       // Fechas (columna DATE): usar yyyy-mm-dd
       if (fechaInicio && fechaFin) {
@@ -183,9 +187,7 @@ export default class TurnosRtmController {
       if (clienteId) query.where('cliente_id', Number(clienteId))
       if (vehiculoId) query.where('vehiculo_id', Number(vehiculoId))
 
-      const turnos = await query
-        .orderBy('fecha', 'desc')
-        .orderBy('turno_numero', 'desc')
+      const turnos = await query.orderBy('fecha', 'desc').orderBy('turno_numero', 'desc')
 
       return response.ok(turnos)
     } catch (error) {
@@ -205,7 +207,7 @@ export default class TurnosRtmController {
         .preload('vehiculo')
         .preload('cliente')
         .preload('agenteCaptacion')
-        .preload('captacionDateo')
+        .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
         .first()
 
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
@@ -217,12 +219,14 @@ export default class TurnosRtmController {
   }
 
   /**
-   * Crear turno (flujo NUEVO):
+   * Crear turno (flujo corregido):
    * - Valida duplicado diario por placa+servicio+sede.
    * - Valida ventana de bloqueo por servicio si hubo un turno FINALIZADO previo.
-   * - Input: canal (FACHADA|REDES|TELE|ASESOR) y agenteCaptacionId (si canal=ASESOR)
-   * - Si hay dateo vigente de placa/teléfono, pisa canal/agente y se marca consumido.
-   * - Calcula y guarda turno_numero (global) y turno_numero_servicio (por servicio).
+   * - Guarda canalAtribucion y medioEntero (derivado).
+   * - Si trae `dateoId` (o se detecta uno vigente), lo marca consumido y lo vincula.
+   * - ❌ No crea registros en `captacion_dateos` automáticamente.
+   * - Calcula turno_numero (global) y turno_numero_servicio (por servicio).
+   * - Permite datos básicos de cliente (clienteTelefono/clienteNombre/clienteEmail).
    */
   public async store({ request, response }: HttpContext) {
     const trx = await Database.transaction()
@@ -237,20 +241,26 @@ export default class TurnosRtmController {
         'usuarioId',
         'servicioId',
         'servicioCodigo',
-        // flujo nuevo
-        'canal',             // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
-        'agenteCaptacionId', // number si canal = ASESOR
+        // atribución
+        'canal',              // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
+        'agenteCaptacionId',  // number si canal = ASESOR
+        // extras UI
+        'dateoId',
+        'clienteTelefono',
+        'clienteNombre',
+        'clienteEmail',
       ])
 
       if (!raw.placa || !raw.tipoVehiculo || !raw.usuarioId || !raw.fecha || !raw.horaIngreso) {
         await trx.rollback()
         return response.badRequest({
-          message: 'Faltan campos obligatorios: placa, tipoVehiculo, usuarioId, fecha, horaIngreso.',
+          message:
+            'Faltan campos obligatorios: placa, tipoVehiculo, usuarioId, fecha, horaIngreso.',
         })
       }
 
       const placa = normalizePlaca(raw.placa)!
-      const telefono = normalizePhone(raw.telefono)
+      const telefono = normalizePhone(raw.telefono) ?? normalizePhone(raw.clienteTelefono)
 
       const usuarioCreador = await Usuario.find(Number(raw.usuarioId))
       if (!usuarioCreador) {
@@ -272,7 +282,9 @@ export default class TurnosRtmController {
         }
         servicio = await Servicio.find(sid)
       } else if (raw.servicioCodigo) {
-        servicio = await Servicio.query().where('codigo_servicio', String(raw.servicioCodigo)).first()
+        servicio = await Servicio.query()
+          .where('codigo_servicio', String(raw.servicioCodigo))
+          .first()
       }
       if (!servicio) {
         await trx.rollback()
@@ -317,7 +329,8 @@ export default class TurnosRtmController {
         const manana = fechaGuardar.plus({ days: 1 }).toISODate()
         return response.conflict({
           code: 'DUPLICATE_DAY',
-          message: 'Ya existe un turno hoy para esta placa y servicio en esta sede. Intenta nuevamente mañana.',
+          message:
+            'Ya existe un turno hoy para esta placa y servicio en esta sede. Intenta nuevamente mañana.',
           nextAllowedDate: manana,
         })
       }
@@ -333,7 +346,7 @@ export default class TurnosRtmController {
       if (lastFinalizado) {
         const meses = bloqueoMesesPorServicio((servicio as any).codigoServicio)
         if (meses > 0) {
-          const ultimaFecha = (lastFinalizado.fecha as DateTime) // columna DATE
+          const ultimaFecha = lastFinalizado.fecha as DateTime // columna DATE
           const nextAllowed = ultimaFecha.plus({ months: meses }).startOf('day')
           if (fechaGuardar.startOf('day') < nextAllowed) {
             await trx.rollback()
@@ -350,7 +363,6 @@ export default class TurnosRtmController {
       }
 
       // ===== 3) Calcular consecutivos en la MISMA transacción =====
-      // Global (max turno_numero del día+sede) + 1
       const rowGlobal = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
@@ -359,7 +371,6 @@ export default class TurnosRtmController {
         .first()
       const nextGlobal: number = Number(rowGlobal?.max ?? 0) + 1
 
-      // Por servicio (max turno_numero_servicio del día+sede+servicio) + 1
       const rowSvc = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
@@ -369,7 +380,7 @@ export default class TurnosRtmController {
         .first()
       const nextPorServicio: number = Number(rowSvc?.max ?? 0) + 1
 
-      // Enlaces opcionales a vehículo/cliente/clase
+      // ===== 3.1 Cliente / Vehículo opcional =====
       let vehiculoId: number | null = null
       let clienteId: number | null = null
       let claseVehiculoId: number | null = null
@@ -379,24 +390,31 @@ export default class TurnosRtmController {
         vehiculoId = veh.id
         claseVehiculoId = (veh as any).claseVehiculoId ?? (veh as any).claseId ?? null
         clienteId = veh.clienteId ?? null
-      } else if (telefono) {
-        const c = await Cliente.query({ client: trx }).where('telefono', telefono).first()
-        if (c) clienteId = c.id
       }
 
-      // Dateo vigente (tiene prioridad)
-      const dateo = await CaptacionDateo.query({ client: trx })
-        .where((qb) => {
-          qb.where('placa', placa)
-          if (telefono) qb.orWhere('telefono', telefono)
-        })
-        .orderBy('created_at', 'desc')
-        .first()
+      // Si aún no tenemos cliente, intentar por teléfono
+      if (!clienteId && telefono) {
+        const cExist = await Cliente.query({ client: trx }).where('telefono', telefono).first()
+        if (cExist) {
+          clienteId = cExist.id
+        } else if (raw.clienteNombre || raw.clienteEmail || telefono) {
+          // Crear cliente básico
+          const cNuevo = await Cliente.create(
+            {
+              nombre: String(raw.clienteNombre || 'Cliente'),
+              telefono: telefono,
+              email: raw.clienteEmail || null,
+            } as any,
+            { client: trx }
+          )
+          clienteId = cNuevo.id
+        }
+      }
 
+      // ===== 4) Atribución (canal/agente) y posible dateo existente =====
       const nowBog = DateTime.local().setZone('America/Bogota')
       const turnoCodigo = `${servicio.codigoServicio}-${nowBog.toFormat('yyyyMMddHHmmss')}`
 
-      // Canal/agente por defecto desde input nuevo
       const allowedCanales: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
       let canalAtribucion: CanalAtrib = 'FACHADA'
       let agenteCaptacionId: number | null = null
@@ -413,22 +431,42 @@ export default class TurnosRtmController {
         }
       }
 
-      // Si hay dateo vigente, pisa canal/agente por el dateo
+      // Buscar dateo solamente para consumir si EXISTE y está vigente
+      let dateo: CaptacionDateo | null = null
+      if (raw.dateoId) {
+        dateo = await CaptacionDateo.query({ client: trx }).where('id', Number(raw.dateoId)).first()
+      }
+      if (!dateo) {
+        dateo = await CaptacionDateo.query({ client: trx })
+          .where((qb) => {
+            qb.where('placa', placa)
+            if (telefono) qb.orWhere('telefono', telefono)
+          })
+          .orderBy('created_at', 'desc')
+          .first()
+      }
+
       let captacionDateoId: number | null = null
       if (dateo) {
         const r = buildReserva(dateo)
         if (r.vigente) {
-          canalAtribucion = dateo.canal as CanalAtrib
+          const cRaw = (dateo as any).canal as string
+          canalAtribucion =
+            cRaw === 'ASESOR_COMERCIAL' || cRaw === 'ASESOR_CONVENIO'
+              ? 'ASESOR'
+              : (cRaw as CanalAtrib)
           // @ts-ignore
           agenteCaptacionId = (dateo as any).agenteId ?? (dateo as any).agente_id ?? null
           captacionDateoId = dateo.id
+        } else {
+          dateo = null
         }
       }
 
       // medio_entero (BD) derivado del canal final
       const medioBD = medioFromCanal(canalAtribucion)
 
-      // Construir payload
+      // Construir payload de turno
       const payload: any = {
         sedeId: usuarioCreador.sedeId!,
         funcionarioId: usuarioCreador.id,
@@ -453,20 +491,22 @@ export default class TurnosRtmController {
 
         canalAtribucion,
         agenteCaptacionId,
-        captacionDateoId,
+        captacionDateoId: captacionDateoId ?? null,
       }
       payload.turnoNumeroServicio = nextPorServicio
       payload['turno_numero_servicio'] = nextPorServicio
 
       const turno = await TurnoRtm.create(payload, { client: trx })
 
-      // Si consumimos un dateo, marcarlo (DATETIME sin ms/offset)
+      // ===== 5) Si había dateo, marcarlo consumido (EN_PROCESO). Si NO, NO creamos ninguno. =====
       if (captacionDateoId) {
         await CaptacionDateo.query({ client: trx })
           .where('id', captacionDateoId)
           .update({
+            resultado: 'EN_PROCESO',
             consumidoTurnoId: turno.id,
             consumidoAt: toMySQL(nowBog),
+            updatedAt: toMySQL(nowBog) as any,
           } as any)
       }
 
@@ -478,11 +518,13 @@ export default class TurnosRtmController {
       await turno.load('vehiculo')
       await turno.load('cliente')
       await turno.load('agenteCaptacion')
-      await turno.load('captacionDateo')
+      await turno.load('captacionDateo', (q) => q.preload('agente').preload('convenio'))
 
       return response.created(turno)
     } catch (error) {
-      try { await (trx as any).rollback() } catch {}
+      try {
+        await (trx as any).rollback()
+      } catch {}
       console.error('Error al crear turno:', error)
       return response.internalServerError({
         message: 'Error al crear el turno',
@@ -505,7 +547,7 @@ export default class TurnosRtmController {
         'estado',
         'servicioId',
         'servicioCodigo',
-        'canal',             // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
+        'canal', // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
         'agenteCaptacionId', // number si canal = ASESOR
         'clienteId',
         'vehiculoId',
@@ -514,9 +556,11 @@ export default class TurnosRtmController {
       ])
 
       const idNumericoUsuario = Number(raw.usuarioId)
-      if (Number.isNaN(idNumericoUsuario)) return response.badRequest({ message: 'usuarioId inválido' })
+      if (Number.isNaN(idNumericoUsuario))
+        return response.badRequest({ message: 'usuarioId inválido' })
       const usuarioActualizador = await Usuario.find(idNumericoUsuario)
-      if (!usuarioActualizador) return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
+      if (!usuarioActualizador)
+        return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
 
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
@@ -534,13 +578,19 @@ export default class TurnosRtmController {
       let servicioIdNext: number | undefined
       if (raw.servicioId) {
         const sid = Number(raw.servicioId)
-        if (Number.isNaN(sid)) return response.badRequest({ message: 'servicioId debe ser numérico' })
+        if (Number.isNaN(sid))
+          return response.badRequest({ message: 'servicioId debe ser numérico' })
         const s = await Servicio.find(sid)
         if (!s) return response.badRequest({ message: `Servicio id ${sid} no existe` })
         servicioIdNext = s.id
       } else if (raw.servicioCodigo) {
-        const s = await Servicio.query().where('codigo_servicio', String(raw.servicioCodigo)).first()
-        if (!s) return response.badRequest({ message: `Servicio código '${raw.servicioCodigo}' no existe` })
+        const s = await Servicio.query()
+          .where('codigo_servicio', String(raw.servicioCodigo))
+          .first()
+        if (!s)
+          return response.badRequest({
+            message: `Servicio código '${raw.servicioCodigo}' no existe`,
+          })
         servicioIdNext = s.id
       }
 
@@ -563,7 +613,9 @@ export default class TurnosRtmController {
       if (raw.estado) {
         const ok = ['activo', 'inactivo', 'cancelado', 'finalizado']
         if (!ok.includes(raw.estado)) {
-          return response.badRequest({ message: `Estado inválido. Debe ser uno de: ${ok.join(', ')}` })
+          return response.badRequest({
+            message: `Estado inválido. Debe ser uno de: ${ok.join(', ')}`,
+          })
         }
         estadoVal = raw.estado as any
       }
@@ -577,7 +629,8 @@ export default class TurnosRtmController {
       let horaIngresoNext: string | undefined
       if (raw.horaIngreso) {
         const hi = parseHoraIngresoToHHmm(String(raw.horaIngreso))
-        if (!hi) return response.badRequest({ message: 'Hora de ingreso inválida (HH:mm o HH:mm:ss)' })
+        if (!hi)
+          return response.badRequest({ message: 'Hora de ingreso inválida (HH:mm o HH:mm:ss)' })
         horaIngresoNext = hi
       }
 
@@ -594,8 +647,9 @@ export default class TurnosRtmController {
 
         servicioId: servicioIdNext ?? turno.servicioId,
 
-        clienteId: raw.clienteId !== undefined ? (Number(raw.clienteId) || null) : turno.clienteId,
-        vehiculoId: raw.vehiculoId !== undefined ? (Number(raw.vehiculoId) || null) : turno.vehiculoId,
+        clienteId: raw.clienteId !== undefined ? Number(raw.clienteId) || null : turno.clienteId,
+        vehiculoId:
+          raw.vehiculoId !== undefined ? Number(raw.vehiculoId) || null : turno.vehiculoId,
 
         ...(fechaNext ? { fecha: fechaNext } : {}),
         ...(horaIngresoNext ? { horaIngreso: horaIngresoNext } : {}),
@@ -614,7 +668,7 @@ export default class TurnosRtmController {
       await turno.load('vehiculo')
       await turno.load('cliente')
       await turno.load('agenteCaptacion')
-      await turno.load('captacionDateo')
+      await turno.load('captacionDateo', (q) => q.preload('agente').preload('convenio'))
 
       return response.ok(turno)
     } catch (error) {
@@ -630,9 +684,11 @@ export default class TurnosRtmController {
       if (!usuarioId) return response.unauthorized({ message: 'usuarioId requerido' })
 
       const idNumericoUsuario = Number(usuarioId)
-      if (Number.isNaN(idNumericoUsuario)) return response.badRequest({ message: 'usuarioId inválido' })
+      if (Number.isNaN(idNumericoUsuario))
+        return response.badRequest({ message: 'usuarioId inválido' })
       const usuarioOperador = await Usuario.find(idNumericoUsuario)
-      if (!usuarioOperador) return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
+      if (!usuarioOperador)
+        return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
 
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
@@ -653,9 +709,11 @@ export default class TurnosRtmController {
       if (!usuarioId) return response.unauthorized({ message: 'usuarioId requerido' })
 
       const idNumericoUsuario = Number(usuarioId)
-      if (Number.isNaN(idNumericoUsuario)) return response.badRequest({ message: 'usuarioId inválido' })
+      if (Number.isNaN(idNumericoUsuario))
+        return response.badRequest({ message: 'usuarioId inválido' })
       const usuarioOperador = await Usuario.find(idNumericoUsuario)
-      if (!usuarioOperador) return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
+      if (!usuarioOperador)
+        return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
 
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
@@ -676,9 +734,11 @@ export default class TurnosRtmController {
       if (!usuarioId) return response.unauthorized({ message: 'usuarioId requerido' })
 
       const idNumericoUsuario = Number(usuarioId)
-      if (Number.isNaN(idNumericoUsuario)) return response.badRequest({ message: 'usuarioId inválido' })
+      if (Number.isNaN(idNumericoUsuario))
+        return response.badRequest({ message: 'usuarioId inválido' })
       const usuarioOperador = await Usuario.find(idNumericoUsuario)
-      if (!usuarioOperador) return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
+      if (!usuarioOperador)
+        return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
 
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
@@ -699,21 +759,30 @@ export default class TurnosRtmController {
       if (!usuarioId) return response.unauthorized({ message: 'usuarioId requerido' })
 
       const idNumericoUsuario = Number(usuarioId)
-      if (Number.isNaN(idNumericoUsuario)) return response.badRequest({ message: 'usuarioId inválido' })
+      if (Number.isNaN(idNumericoUsuario))
+        return response.badRequest({ message: 'usuarioId inválido' })
       const usuarioOperador = await Usuario.find(idNumericoUsuario)
-      if (!usuarioOperador) return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
+      if (!usuarioOperador)
+        return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
 
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
 
       const salida = DateTime.local().setZone('America/Bogota')
 
-      let entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', { zone: 'America/Bogota' })
+      let entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', {
+        zone: 'America/Bogota',
+      })
       if (!entrada.isValid) {
         entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm', { zone: 'America/Bogota' })
       }
 
-      const diff = salida.diff(entrada, ['hours', 'minutes']).toObject()
+      // Asegura no-negativo
+      let diff = salida.diff(entrada, ['hours', 'minutes']).toObject()
+      if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
+        diff = { hours: 0, minutes: 0 }
+      }
+
       let tiempoServicioStr = ''
       if (diff.hours && diff.hours >= 1) tiempoServicioStr += `${Math.floor(diff.hours)} h `
       tiempoServicioStr += `${Math.round((diff.minutes ?? 0) % 60)} min`
@@ -757,8 +826,7 @@ export default class TurnosRtmController {
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
       // Global (sede+día): max(turno_numero)+1
-      const rowGlobal = await Database
-        .from('turnos_rtms')
+      const rowGlobal = await Database.from('turnos_rtms')
         .where('fecha', hoy)
         .andWhere('sede_id', usuarioSolicitante.sedeId)
         .max('turno_numero as max')
@@ -775,12 +843,12 @@ export default class TurnosRtmController {
           sid = s.id
         } else if (servicioCodigo) {
           const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
-          if (!s) return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
+          if (!s)
+            return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
           sid = s.id
         }
 
-        const rowSvc = await Database
-          .from('turnos_rtms')
+        const rowSvc = await Database.from('turnos_rtms')
           .where('fecha', hoy)
           .andWhere('sede_id', usuarioSolicitante.sedeId)
           .andWhere('servicio_id', sid!)
@@ -840,11 +908,13 @@ export default class TurnosRtmController {
       // Servicio
       if (servicioId) {
         const sid = Number(servicioId)
-        if (Number.isNaN(sid)) return response.badRequest({ message: 'servicioId debe ser numérico' })
+        if (Number.isNaN(sid))
+          return response.badRequest({ message: 'servicioId debe ser numérico' })
         q.where('servicio_id', sid)
       } else if (servicioCodigo) {
         const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
-        if (!s) return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
+        if (!s)
+          return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
         q.where('servicio_id', s.id)
       }
 
@@ -852,7 +922,8 @@ export default class TurnosRtmController {
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
         const c = String(canalAtribucion).toUpperCase() as CanalAtrib
-        if (!allowed.includes(c)) return response.badRequest({ message: 'canalAtribucion inválido' })
+        if (!allowed.includes(c))
+          return response.badRequest({ message: 'canalAtribucion inválido' })
         q.where('canal_atribucion', c)
       }
       if (agenteId) q.where('agente_captacion_id', Number(agenteId))
@@ -892,15 +963,15 @@ export default class TurnosRtmController {
           : '-'
 
         const turnoServicio =
-          (t as any).turnoNumeroServicio ??
-          (t as any).turno_numero_servicio ??
-          ''
+          (t as any).turnoNumeroServicio ?? (t as any).turno_numero_servicio ?? ''
 
         worksheet.addRow({
           fecha: fechaExcel,
           turnoGlobal: t.turnoNumero,
           turnoServicio,
-          servicio: t.servicio ? `${t.servicio.codigoServicio} — ${t.servicio.nombreServicio}` : '-',
+          servicio: t.servicio
+            ? `${t.servicio.codigoServicio} — ${t.servicio.nombreServicio}`
+            : '-',
           horaIngreso: t.horaIngreso,
           horaSalida: t.horaSalida || '-',
           tiempoServicio: t.tiempoServicio || '-',
@@ -917,7 +988,9 @@ export default class TurnosRtmController {
       })
 
       const buffer = await workbook.xlsx.writeBuffer()
-      const fileName = `reporte_turnos_${DateTime.local().setZone('America/Bogota').toISODate()}.xlsx`
+      const fileName = `reporte_turnos_${DateTime.local()
+        .setZone('America/Bogota')
+        .toISODate()}.xlsx`
 
       response.header(
         'Content-Type',

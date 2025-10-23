@@ -1,3 +1,4 @@
+// app/Models/Convenio.ts
 import { DateTime } from 'luxon'
 import { BaseModel, column, hasMany } from '@adonisjs/lucid/orm'
 import type { HasMany } from '@adonisjs/lucid/types/relations'
@@ -15,9 +16,8 @@ export default class Convenio extends BaseModel {
   @column()
   declare tipo: ConvenioTipo
 
-  // 🔹 FALTABA
   @column()
-  declare codigo: string
+  declare codigo: string | null
 
   @column()
   declare nombre: string
@@ -55,7 +55,6 @@ export default class Convenio extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true, columnName: 'updated_at' })
   declare updatedAt: DateTime
 
-  // Relaciones
   @hasMany(() => AsesorConvenioAsignacion, { foreignKey: 'convenioId' })
   declare asignaciones: HasMany<typeof AsesorConvenioAsignacion>
 
