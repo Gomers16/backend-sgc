@@ -675,6 +675,62 @@ router
       })
       .where('id', /^[0-9]+$/)
 
+    /* ============================ FACTURACIÓN ========================== */
+    // Listado con filtros y paginación
+    router.get('/facturacion/tickets', async (ctx) => {
+      const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+      return new Facturacion().index(ctx)
+    })
+    // Detalle
+    router
+      .get('/facturacion/tickets/:id', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    // Hash exists
+    router.get('/facturacion/tickets/hash-exists/:hash', async (ctx) => {
+      const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+      return new Facturacion().hashExists(ctx)
+    })
+    // Duplicado por contenido (placa+total+fecha ±1h)
+    router.get('/facturacion/tickets/duplicados', async (ctx) => {
+      const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+      return new Facturacion().checkDuplicados(ctx)
+    })
+    // Crear (subir archivo)
+    router.post('/facturacion/tickets', async (ctx) => {
+      const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+      return new Facturacion().store(ctx)
+    })
+    // Reintentar OCR
+    router
+      .post('/facturacion/tickets/:id/reocr', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().reocr(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    // Actualizar campos (formulario)
+    router
+      .patch('/facturacion/tickets/:id', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+    // Confirmar comisión
+    router
+      .post('/facturacion/tickets/:id/confirmar', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().confirmar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
+    /* =============================== OCR (BACKEND) ===================== */
+    router.post('/ocr/parse-ticket', async (ctx) => {
+      const { default: OcrController } = await import('#controllers/ocr_controller')
+      return new OcrController().parseTicket(ctx)
+    })
+
     /* ================================ UPLOADS ========================== */
     router.post('/uploads/images', async (ctx) => {
       const { default: UploadsController } = await import('#controllers/uploads_controller')

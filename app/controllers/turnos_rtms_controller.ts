@@ -162,11 +162,13 @@ export default class TurnosRtmController {
       // Servicio
       if (servicioId) {
         const sid = Number(servicioId)
-        if (Number.isNaN(sid)) return response.badRequest({ message: 'servicioId debe ser numérico' })
+        if (Number.isNaN(sid))
+          return response.badRequest({ message: 'servicioId debe ser numérico' })
         query.where('servicio_id', sid)
       } else if (servicioCodigo) {
         const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
-        if (!s) return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
+        if (!s)
+          return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
         query.where('servicio_id', s.id)
       }
 
@@ -174,7 +176,8 @@ export default class TurnosRtmController {
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
         const c = String(canalAtribucion).toUpperCase() as CanalAtrib
-        if (!allowed.includes(c)) return response.badRequest({ message: 'canalAtribucion inválido' })
+        if (!allowed.includes(c))
+          return response.badRequest({ message: 'canalAtribucion inválido' })
         query.where('canal_atribucion', c)
       }
       if (agenteId) query.where('agente_captacion_id', Number(agenteId))
@@ -217,7 +220,6 @@ export default class TurnosRtmController {
       return response.internalServerError({ message: 'Error al obtener el turno' })
     }
   }
-
   /**
    * Crear turno (flujo corregido):
    * - Valida duplicado diario por placa+servicio+sede.
@@ -242,8 +244,8 @@ export default class TurnosRtmController {
         'servicioId',
         'servicioCodigo',
         // atribución
-        'canal',              // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
-        'agenteCaptacionId',  // number si canal = ASESOR
+        'canal', // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
+        'agenteCaptacionId', // number si canal = ASESOR
         // extras UI
         'dateoId',
         'clienteTelefono',
@@ -385,7 +387,10 @@ export default class TurnosRtmController {
       let clienteId: number | null = null
       let claseVehiculoId: number | null = null
 
-      const veh = await Vehiculo.query({ client: trx }).where('placa', placa).preload('clase').first()
+      const veh = await Vehiculo.query({ client: trx })
+        .where('placa', placa)
+        .preload('clase')
+        .first()
       if (veh) {
         vehiculoId = veh.id
         claseVehiculoId = (veh as any).claseVehiculoId ?? (veh as any).claseId ?? null
