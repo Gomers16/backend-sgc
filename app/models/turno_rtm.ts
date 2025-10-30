@@ -86,7 +86,7 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'turno_numero' })
   declare turnoNumero: number
 
-  // ✅ nuevo: consecutivo por servicio (sede+día)
+  // consecutivo por servicio (sede+día)
   @column({ columnName: 'turno_numero_servicio' })
   declare turnoNumeroServicio: number
 
@@ -99,17 +99,24 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: TipoVehiculoUI
 
-  // ── Captación “plana” (compat con esquema BD)
-  @column({ columnName: 'medio_entero' })
-  declare medioEntero: MedioEntero
+  // ── Captación “plana” (LEGADO). **Ahora nullable y sin fallback.**
+  @column({
+    columnName: 'medio_entero',
+    // No serializar string vacío como 'Fachada'; respeta null.
+    serialize: (value?: MedioEntero | null) => value ?? null,
+  })
+  declare medioEntero: MedioEntero | null
 
   // ── Observaciones del turno
   @column()
   declare observaciones: string | null
 
-  // ── Atribución final simple
-  @column({ columnName: 'canal_atribucion' })
-  declare canalAtribucion: CanalAtribucion
+  // ── Atribución final simple. **Ahora nullable y sin fallback.**
+  @column({
+    columnName: 'canal_atribucion',
+    serialize: (value?: CanalAtribucion | null) => value ?? null,
+  })
+  declare canalAtribucion: CanalAtribucion | null
 
   @column()
   declare estado: EstadoTurno

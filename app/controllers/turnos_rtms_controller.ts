@@ -76,7 +76,18 @@ function buildReserva(d: CaptacionDateo) {
   return { vigente, bloqueaHasta }
 }
 
-// medio_entero (BD) derivado del canal (para cumplir enum actual en la DB)
+/** ✅ Normaliza canal desde varios sinónimos a enum de atribución (sin default) */
+const normalizeCanal = (v?: string): CanalAtrib | null => {
+  const x = (v || '').toUpperCase().trim()
+  if (['FACHADA', 'ASESOR', 'TELE', 'REDES'].includes(x)) return x as CanalAtrib
+  if (['REDES_SOCIALES', 'RRSS'].includes(x)) return 'REDES'
+  if (['CALLCENTER', 'CALL_CENTER', 'TELEMERCADEO', 'TELEMARKETING', 'TELEFONO'].includes(x))
+    return 'TELE'
+  if (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'].includes(x)) return 'ASESOR'
+  return null
+}
+
+// medio_entero (BD) derivado desde canal (cuando exista). Si NO hay canal, NO se setea.
 function medioFromCanal(
   canal: CanalAtrib
 ): 'Fachada' | 'Redes Sociales' | 'Call Center' | 'Asesor Comercial' {
@@ -219,12 +230,12 @@ export default class TurnosRtmController {
       console.error('Error en show turno:', error)
       return response.internalServerError({ message: 'Error al obtener el turno' })
     }
-  }
-  /**
+ }
+   /**
    * Crear turno (flujo corregido):
    * - Valida duplicado diario por placa+servicio+sede.
    * - Valida ventana de bloqueo por servicio si hubo un turno FINALIZADO previo.
-   * - Guarda canalAtribucion y medioEntero (derivado).
+   * - Guarda canalAtribucion (normalizado) y medioEntero SOLO si hay canal.
    * - Si trae `dateoId` (o se detecta uno vigente), lo marca consumido y lo vincula.
    * - ❌ No crea registros en `captacion_dateos` automáticamente.
    * - Calcula turno_numero (global) y turno_numero_servicio (por servicio).
@@ -420,20 +431,11 @@ export default class TurnosRtmController {
       const nowBog = DateTime.local().setZone('America/Bogota')
       const turnoCodigo = `${servicio.codigoServicio}-${nowBog.toFormat('yyyyMMddHHmmss')}`
 
-      const allowedCanales: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
-      let canalAtribucion: CanalAtrib = 'FACHADA'
+      // ✅ Sin default a 'FACHADA'
+      let canalAtribucion: CanalAtrib | null = normalizeCanal(raw.canal)
       let agenteCaptacionId: number | null = null
-
-      if (raw.canal) {
-        const c = String(raw.canal).toUpperCase() as CanalAtrib
-        if (!allowedCanales.includes(c)) {
-          await trx.rollback()
-          return response.badRequest({ message: `canal inválido: ${raw.canal}` })
-        }
-        canalAtribucion = c
-        if (c === 'ASESOR') {
-          agenteCaptacionId = raw.agenteCaptacionId ? Number(raw.agenteCaptacionId) || null : null
-        }
+      if (canalAtribucion === 'ASESOR') {
+        agenteCaptacionId = raw.agenteCaptacionId ? Number(raw.agenteCaptacionId) || null : null
       }
 
       // Buscar dateo solamente para consumir si EXISTE y está vigente
@@ -455,23 +457,18 @@ export default class TurnosRtmController {
       if (dateo) {
         const r = buildReserva(dateo)
         if (r.vigente) {
-          const cRaw = (dateo as any).canal as string
-          canalAtribucion =
-            cRaw === 'ASESOR_COMERCIAL' || cRaw === 'ASESOR_CONVENIO'
-              ? 'ASESOR'
-              : (cRaw as CanalAtrib)
+          const cRaw = (dateo as any).canal as string | undefined
+          const cNorm = normalizeCanal(cRaw)
+          if (cNorm) canalAtribucion = cNorm
           // @ts-ignore
-          agenteCaptacionId = (dateo as any).agenteId ?? (dateo as any).agente_id ?? null
+          agenteCaptacionId = (dateo as any).agenteId ?? (dateo as any).agente_id ?? agenteCaptacionId
           captacionDateoId = dateo.id
         } else {
           dateo = null
         }
       }
 
-      // medio_entero (BD) derivado del canal final
-      const medioBD = medioFromCanal(canalAtribucion)
-
-      // Construir payload de turno
+      // ===== 5) Construir payload de turno SIN forzar defaults de canal/medio =====
       const payload: any = {
         sedeId: usuarioCreador.sedeId!,
         funcionarioId: usuarioCreador.id,
@@ -485,25 +482,30 @@ export default class TurnosRtmController {
         placa,
         tipoVehiculo: raw.tipoVehiculo as TipoVehiculoDB,
 
-        medioEntero: medioBD,
         observaciones: raw.observaciones || null,
-
         estado: 'activo',
 
         vehiculoId,
         clienteId,
         claseVehiculoId,
 
-        canalAtribucion,
+        canalAtribucion, // puede quedar null si no hubo canal detectado
         agenteCaptacionId,
         captacionDateoId: captacionDateoId ?? null,
       }
+
+      // 👉 medioEntero solo si HAY canal
+      if (canalAtribucion) {
+        payload.medioEntero = medioFromCanal(canalAtribucion)
+      }
+
+      // Consecutivo por servicio
       payload.turnoNumeroServicio = nextPorServicio
       payload['turno_numero_servicio'] = nextPorServicio
 
       const turno = await TurnoRtm.create(payload, { client: trx })
 
-      // ===== 5) Si había dateo, marcarlo consumido (EN_PROCESO). Si NO, NO creamos ninguno. =====
+      // ===== 6) Si había dateo, marcarlo consumido (EN_PROCESO). Si NO, NO creamos ninguno. =====
       if (captacionDateoId) {
         await CaptacionDateo.query({ client: trx })
           .where('id', captacionDateoId)
@@ -599,17 +601,19 @@ export default class TurnosRtmController {
         servicioIdNext = s.id
       }
 
-      const allowedCanales: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
-      let canalAtribucionNext: CanalAtrib | undefined
-      if (raw.canal) {
-        const c = String(raw.canal).toUpperCase() as CanalAtrib
-        if (!allowedCanales.includes(c)) {
-          return response.badRequest({ message: `canal inválido: ${raw.canal}` })
-        }
-        canalAtribucionNext = c
+      // ✅ Canal opcional con normalización (puede ser null explícito)
+      let canalAtribucionNext: (CanalAtrib | null) | undefined
+      if (raw.canal !== undefined) {
+        canalAtribucionNext = normalizeCanal(raw.canal)
       }
 
-      let medioBDNext: 'Fachada' | 'Redes Sociales' | 'Call Center' | 'Asesor Comercial' | undefined
+      // Deriva medioEntero SOLO si hay canal nuevo (no si es undefined)
+      let medioBDNext:
+        | 'Fachada'
+        | 'Redes Sociales'
+        | 'Call Center'
+        | 'Asesor Comercial'
+        | undefined
       if (canalAtribucionNext) {
         medioBDNext = medioFromCanal(canalAtribucionNext)
       }
@@ -659,8 +663,14 @@ export default class TurnosRtmController {
         ...(fechaNext ? { fecha: fechaNext } : {}),
         ...(horaIngresoNext ? { horaIngreso: horaIngresoNext } : {}),
 
-        ...(canalAtribucionNext ? { canalAtribucion: canalAtribucionNext } : {}),
+        // ✅ Si viene undefined no toques el canal; si viene null, lo limpias; si viene valor, lo actualizas
+        ...(canalAtribucionNext !== undefined
+          ? { canalAtribucion: canalAtribucionNext }
+          : {}),
+
+        // ✅ Solo setea medioEntero cuando derivaste de un canal válido
         ...(medioBDNext ? { medioEntero: medioBDNext } : {}),
+
         ...(raw.agenteCaptacionId !== undefined
           ? { agenteCaptacionId: Number(raw.agenteCaptacionId) || null }
           : {}),
@@ -982,7 +992,7 @@ export default class TurnosRtmController {
           tiempoServicio: t.tiempoServicio || '-',
           placa: t.placa,
           tipoVehiculo: t.tipoVehiculo,
-          medioEntero: t.medioEntero,
+          medioEntero: t.medioEntero ?? '-', // si no hubo canal, puede venir null/undefined
           canalAtribucion: (t as any).canalAtribucion ?? '-',
           agente,
           observaciones: t.observaciones || '-',

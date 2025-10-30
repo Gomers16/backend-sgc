@@ -22,192 +22,106 @@ export default class FacturacionTicket extends BaseModel {
   @column({ isPrimary: true })
   declare id: number
 
-  // Archivo
-  @column()
-  declare hash: string
+  /* ============== Archivo ============== */
+  @column() declare hash: string
+  @column({ columnName: 'file_path' }) declare filePath: string
+  @column({ columnName: 'file_mime' }) declare fileMime: string | null
+  @column({ columnName: 'file_size' }) declare fileSize: number | null
+  @column({ columnName: 'image_rotation' }) declare imageRotation: number
 
-  @column({ columnName: 'file_path' })
-  declare filePath: string
+  /* ============== Estado ============== */
+  @column() declare estado: FactEstado
 
-  @column({ columnName: 'file_mime' })
-  declare fileMime: string | null
+  /* ============== Mínimos ============== */
+  @column() declare placa: string | null
+  @column() declare total: number | null
+  @column({ columnName: 'total_factura' }) declare totalFactura: number | null
+  @column({ columnName: 'subtotal' }) declare subtotal: number | null
+  @column({ columnName: 'iva' }) declare iva: number | null
+  @column.dateTime({ columnName: 'fecha_pago' }) declare fechaPago: DateTime | null
 
-  @column({ columnName: 'file_size' })
-  declare fileSize: number | null
+  /* ============== Datos OCR / extra ============== */
+  @column() declare nit: string | null
+  @column() declare pin: string | null
+  @column() declare marca: string | null
+  @column({ columnName: 'vendedor_text' }) declare vendedorText: string | null
 
-  @column({ columnName: 'image_rotation' })
-  declare imageRotation: number
+  /* ============== Detalle pago ============== */
+  @column({ columnName: 'pago_consignacion' }) declare pagoConsignacion: number | null
+  @column({ columnName: 'pago_tarjeta' }) declare pagoTarjeta: number | null
+  @column({ columnName: 'pago_efectivo' }) declare pagoEfectivo: number | null
+  @column({ columnName: 'pago_cambio' }) declare pagoCambio: number | null
 
-  // Estado
-  @column()
-  declare estado: FactEstado
-
-  // Mínimos
-  @column()
-  declare placa: string | null
-
-  @column()
-  declare total: number | null // DECIMAL(14,2) en DB (compat principal)
-
-  @column({ columnName: 'total_factura' })
-  declare totalFactura: number | null // espejo/fuente del total leído
-
-  @column({ columnName: 'subtotal' })
-  declare subtotal: number | null
-
-  @column({ columnName: 'iva' })
-  declare iva: number | null
-
-  @column.dateTime({ columnName: 'fecha_pago' })
-  declare fechaPago: DateTime | null
-
-  // Datos OCR adicionales
-  @column()
-  declare nit: string | null
-
-  @column()
-  declare pin: string | null
-
-  @column()
-  declare marca: string | null
-
-  @column({ columnName: 'vendedor_text' })
-  declare vendedorText: string | null
-
-  // Detalle de pago
-  @column({ columnName: 'pago_consignacion' })
-  declare pagoConsignacion: number | null
-
-  @column({ columnName: 'pago_tarjeta' })
-  declare pagoTarjeta: number | null
-
-  @column({ columnName: 'pago_efectivo' })
-  declare pagoEfectivo: number | null
-
-  @column({ columnName: 'pago_cambio' })
-  declare pagoCambio: number | null
-
-  // Relaciones clave
-  @column({ columnName: 'agente_id' })
-  declare agenteId: number | null
-
+  /* ============== Relaciones (FK) ============== */
+  @column({ columnName: 'agente_id' }) declare agenteId: number | null
   @belongsTo(() => AgenteCaptacion, { foreignKey: 'agenteId' })
   declare agente: BelongsTo<typeof AgenteCaptacion>
 
-  @column({ columnName: 'sede_id' })
-  declare sedeId: number | null
-
+  @column({ columnName: 'sede_id' }) declare sedeId: number | null
   @belongsTo(() => Sede, { foreignKey: 'sedeId' })
   declare sede: BelongsTo<typeof Sede>
 
-  @column({ columnName: 'turno_id' })
-  declare turnoId: number | null
-
+  @column({ columnName: 'turno_id' }) declare turnoId: number | null
   @belongsTo(() => TurnoRtm, { foreignKey: 'turnoId' })
   declare turno: BelongsTo<typeof TurnoRtm>
 
-  @column({ columnName: 'dateo_id' })
-  declare dateoId: number | null
-
+  @column({ columnName: 'dateo_id' }) declare dateoId: number | null
   @belongsTo(() => CaptacionDateo, { foreignKey: 'dateoId' })
   declare dateo: BelongsTo<typeof CaptacionDateo>
 
-  @column({ columnName: 'servicio_id' })
-  declare servicioId: number | null
-
+  @column({ columnName: 'servicio_id' }) declare servicioId: number | null
   @belongsTo(() => Servicio, { foreignKey: 'servicioId' })
   declare servicio: BelongsTo<typeof Servicio>
 
-  // Comprobante
-  @column()
-  declare prefijo: string | null
+  /* ============== Comprobante ============== */
+  @column() declare prefijo: string | null
+  @column() declare consecutivo: string | null
+  @column({ columnName: 'forma_pago' }) declare formaPago: FormaPago | null
 
-  @column()
-  declare consecutivo: string | null
+  /* ============== Cliente / Vehículo ============== */
+  @column({ columnName: 'doc_tipo' }) declare docTipo: DocTipo | null
+  @column({ columnName: 'doc_numero' }) declare docNumero: string | null
+  @column() declare nombre: string | null
+  @column() declare telefono: string | null
+  @column() declare observaciones: string | null
 
-  @column({ columnName: 'forma_pago' })
-  declare formaPago: FormaPago | null
-
-  // Cliente / Vehículo (enriquecimiento)
-  @column({ columnName: 'doc_tipo' })
-  declare docTipo: DocTipo | null
-
-  @column({ columnName: 'doc_numero' })
-  declare docNumero: string | null
-
-  @column()
-  declare nombre: string | null
-
-  @column()
-  declare telefono: string | null
-
-  @column()
-  declare observaciones: string | null
-
-  @column({ columnName: 'cliente_id' })
-  declare clienteId: number | null
-
+  @column({ columnName: 'cliente_id' }) declare clienteId: number | null
   @belongsTo(() => Cliente, { foreignKey: 'clienteId' })
   declare cliente: BelongsTo<typeof Cliente>
 
-  @column({ columnName: 'vehiculo_id' })
-  declare vehiculoId: number | null
-
+  @column({ columnName: 'vehiculo_id' }) declare vehiculoId: number | null
   @belongsTo(() => Vehiculo, { foreignKey: 'vehiculoId' })
   declare vehiculo: BelongsTo<typeof Vehiculo>
 
-  // OCR
-  @column({ columnName: 'ocr_text' })
-  declare ocrText: string | null
+  /* ============== OCR crudo + flags ============== */
+  @column({ columnName: 'ocr_text' }) declare ocrText: string | null
+  @column({ columnName: 'ocr_conf_placa' }) declare ocrConfPlaca: number
+  @column({ columnName: 'ocr_conf_total' }) declare ocrConfTotal: number
+  @column({ columnName: 'ocr_conf_fecha' }) declare ocrConfFecha: number
+  @column({ columnName: 'ocr_conf_agente' }) declare ocrConfAgente: number
+  @column({ columnName: 'ocr_conf_baja_revisado' }) declare ocrConfBajaRevisado: boolean
 
-  @column({ columnName: 'ocr_conf_placa' })
-  declare ocrConfPlaca: number
-
-  @column({ columnName: 'ocr_conf_total' })
-  declare ocrConfTotal: number
-
-  @column({ columnName: 'ocr_conf_fecha' })
-  declare ocrConfFecha: number
-
-  @column({ columnName: 'ocr_conf_agente' })
-  declare ocrConfAgente: number
-
-  @column({ columnName: 'ocr_conf_baja_revisado' })
-  declare ocrConfBajaRevisado: boolean
-
-  // Duplicados
-  @column({ columnName: 'duplicado_por_hash' })
-  declare duplicadoPorHash: boolean
-
-  @column({ columnName: 'duplicado_por_contenido' })
-  declare duplicadoPorContenido: boolean
-
+  /* ============== Duplicados ============== */
+  @column({ columnName: 'duplicado_por_hash' }) declare duplicadoPorHash: boolean
+  @column({ columnName: 'duplicado_por_contenido' }) declare duplicadoPorContenido: boolean
   @column.dateTime({ columnName: 'posible_duplicado_at' })
   declare posibleDuplicadoAt: DateTime | null
 
-  // Confirmación / Enriquecimiento
-  @column.dateTime({ columnName: 'confirmado_at' })
-  declare confirmadoAt: DateTime | null
+  /* ============== Confirmación / reversión ============== */
+  @column.dateTime({ columnName: 'confirmado_at' }) declare confirmadoAt: DateTime | null
 
-  @column({ columnName: 'ajuste_total_flag' })
-  declare ajusteTotalFlag: boolean
+  @column({ columnName: 'confirmed_by_id' }) declare confirmedById: number | null
+  @belongsTo(() => Usuario, { foreignKey: 'confirmedById' })
+  declare confirmedBy: BelongsTo<typeof Usuario>
 
-  @column({ columnName: 'ajuste_total_diff' })
-  declare ajusteTotalDiff: number
+  @column({ columnName: 'ajuste_total_flag' }) declare ajusteTotalFlag: boolean
+  @column({ columnName: 'ajuste_total_diff' }) declare ajusteTotalDiff: number
+  @column({ columnName: 'revertida_flag' }) declare revertidaFlag: boolean
+  @column({ columnName: 'revertida_motivo' }) declare revertidaMotivo: string | null
+  @column.dateTime({ columnName: 'revertida_at' }) declare revertidaAt: DateTime | null
 
-  @column({ columnName: 'revertida_flag' })
-  declare revertidaFlag: boolean
-
-  @column({ columnName: 'revertida_motivo' })
-  declare revertidaMotivo: string | null
-
-  @column.dateTime({ columnName: 'revertida_at' })
-  declare revertidaAt: DateTime | null
-
-  // Auditoría
-  @column({ columnName: 'created_by_id' })
-  declare createdById: number | null
-
+  /* ============== Auditoría ============== */
+  @column({ columnName: 'created_by_id' }) declare createdById: number | null
   @belongsTo(() => Usuario, { foreignKey: 'createdById' })
   declare createdBy: BelongsTo<typeof Usuario>
 
@@ -217,7 +131,7 @@ export default class FacturacionTicket extends BaseModel {
   @column.dateTime({ columnName: 'updated_at', autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
-  // Helpers
+  /* ============== Helpers de presentación ============== */
   @computed()
   public get prefijoConsecutivo(): string | null {
     if (!this.prefijo && !this.consecutivo) return null
@@ -229,7 +143,7 @@ export default class FacturacionTicket extends BaseModel {
   public static normalize(t: FacturacionTicket) {
     if (t.placa) t.placa = t.placa.toUpperCase().replace(/\s+/g, '')
     if (t.nit) t.nit = t.nit.replace(/[^\d\-\.]/g, '')
-    // Mantener sincronía total vs totalFactura
+    // Sincroniza total vs totalFactura
     if ((!t.total || t.total === 0) && t.totalFactura && t.totalFactura > 0) {
       t.total = t.totalFactura
     }

@@ -15,7 +15,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
       table.integer('file_size').unsigned().nullable()
       table.integer('image_rotation').unsigned().notNullable().defaultTo(0)
 
-      // Estado del flujo (según la vista)
+      // Estado del flujo
       table
         .enu('estado', ['BORRADOR', 'OCR_LISTO', 'LISTA_CONFIRMAR', 'CONFIRMADA', 'REVERTIDA'], {
           useNative: true,
@@ -26,10 +26,10 @@ export default class CreateFacturacionTickets extends BaseSchema {
 
       // A. Datos mínimos para comisión
       table.string('placa', 12).nullable().index()
-      table.decimal('total', 14, 2).nullable().index() // compat base
+      table.decimal('total', 14, 2).nullable().index()
       table.dateTime('fecha_pago', { useTz: true }).nullable().index()
 
-      // Nuevos totales explícitos
+      // Totales explícitos
       table.decimal('subtotal', 14, 2).nullable()
       table.decimal('iva', 14, 2).nullable()
       table.decimal('total_factura', 14, 2).nullable()
@@ -40,13 +40,13 @@ export default class CreateFacturacionTickets extends BaseSchema {
       table.string('marca', 120).nullable()
       table.string('vendedor_text', 180).nullable()
 
-      // Detalle de pago
+      // Detalle de pago (si luego usas MIXTO)
       table.decimal('pago_consignacion', 14, 2).nullable()
       table.decimal('pago_tarjeta', 14, 2).nullable()
       table.decimal('pago_efectivo', 14, 2).nullable()
       table.decimal('pago_cambio', 14, 2).nullable()
 
-      // En tu flujo NO hay vendedor_id → usamos el agente comercial real
+      // Relaciones (visibles en tarjeta / comisiones)
       table
         .integer('agente_id')
         .unsigned()
@@ -56,7 +56,6 @@ export default class CreateFacturacionTickets extends BaseSchema {
         .onDelete('SET NULL')
         .index()
 
-      // Sede
       table
         .integer('sede_id')
         .unsigned()
@@ -66,7 +65,6 @@ export default class CreateFacturacionTickets extends BaseSchema {
         .onDelete('SET NULL')
         .index()
 
-      // Vínculos principales del flujo
       table
         .integer('turno_id')
         .unsigned()
@@ -85,7 +83,6 @@ export default class CreateFacturacionTickets extends BaseSchema {
         .onDelete('SET NULL')
         .index()
 
-      // Servicio para comisión por tipo
       table
         .integer('servicio_id')
         .unsigned()
@@ -95,7 +92,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
         .onDelete('SET NULL')
         .index()
 
-      // B. Datos del comprobante (opcionales)
+      // B. Comprobante (opcionales)
       table.string('prefijo', 20).nullable()
       table.string('consecutivo', 30).nullable()
       table
@@ -105,7 +102,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
         })
         .nullable()
 
-      // C. Cliente/Vehículo (opcionales → enriquecimiento nocturno)
+      // C. Cliente / Vehículo (enriquecimiento)
       table
         .enu('doc_tipo', ['CC', 'NIT'], {
           useNative: true,
@@ -138,23 +135,34 @@ export default class CreateFacturacionTickets extends BaseSchema {
       table.float('ocr_conf_placa').notNullable().defaultTo(0)
       table.float('ocr_conf_total').notNullable().defaultTo(0)
       table.float('ocr_conf_fecha').notNullable().defaultTo(0)
-      table.float('ocr_conf_agente').notNullable().defaultTo(0) // reemplaza "vendedor"
+      table.float('ocr_conf_agente').notNullable().defaultTo(0)
       table.boolean('ocr_conf_baja_revisado').notNullable().defaultTo(false)
 
-      // Reglas de duplicado
+      // Duplicados
       table.boolean('duplicado_por_hash').notNullable().defaultTo(false)
       table.boolean('duplicado_por_contenido').notNullable().defaultTo(false)
       table.dateTime('posible_duplicado_at', { useTz: true }).nullable()
 
-      // Confirmación / Enriquecimiento
+      // Confirmación / Reversión
       table.dateTime('confirmado_at', { useTz: true }).nullable()
+
+      // ⬅️ NUEVO: quién confirmó
+      table
+        .integer('confirmed_by_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('usuarios')
+        .onDelete('SET NULL')
+        .index()
+
       table.boolean('ajuste_total_flag').notNullable().defaultTo(false)
       table.decimal('ajuste_total_diff', 14, 2).notNullable().defaultTo(0)
       table.boolean('revertida_flag').notNullable().defaultTo(false)
       table.string('revertida_motivo', 180).nullable()
       table.dateTime('revertida_at', { useTz: true }).nullable()
 
-      // Auditoría
+      // Auditoría (quién creó el ticket)
       table
         .integer('created_by_id')
         .unsigned()
@@ -170,6 +178,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
       // Índices útiles
       table.index(['placa', 'total', 'fecha_pago'], 'idx_fact_placa_total_fecha')
       table.index(['prefijo', 'consecutivo'])
+      table.index(['estado'])
     })
   }
 
