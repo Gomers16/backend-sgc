@@ -1,4 +1,3 @@
-// database/migrations/1759154950000_create_captacion_dateos_table.ts
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class CaptacionDateos extends BaseSchema {
@@ -10,6 +9,7 @@ export default class CaptacionDateos extends BaseSchema {
     await this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
 
+      // Canal / Origen
       table
         .enu('canal', ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'], {
           useNative: true,
@@ -37,7 +37,7 @@ export default class CaptacionDateos extends BaseSchema {
 
       table.string('observacion', 255).nullable()
 
-      // Imagen
+      // Imagen (opcional)
       table.string('imagen_url', 512).nullable()
       table.string('imagen_mime', 100).nullable()
       table.integer('imagen_tamano_bytes').unsigned().nullable()
@@ -45,7 +45,7 @@ export default class CaptacionDateos extends BaseSchema {
       table.string('imagen_origen_id', 128).nullable()
       table.integer('imagen_subida_por').unsigned().nullable()
 
-      // Consumo
+      // Consumo por turno
       table
         .integer('consumido_turno_id')
         .unsigned()
@@ -57,13 +57,29 @@ export default class CaptacionDateos extends BaseSchema {
       table.dateTime('consumido_at', { precision: 0 }).nullable()
       table.string('payload_hash', 128).nullable().unique()
 
-      // Vínculos
+      // Vínculos comerciales
       table
         .integer('convenio_id')
         .unsigned()
         .nullable()
         .references('id')
         .inTable('convenios')
+        .onDelete('SET NULL')
+
+      table
+        .integer('asesor_convenio_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('asesor_convenio_asignaciones')
+        .onDelete('SET NULL')
+
+      table
+        .integer('asesor_convenio_usuario_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('usuarios')
         .onDelete('SET NULL')
 
       table
@@ -90,7 +106,7 @@ export default class CaptacionDateos extends BaseSchema {
         .inTable('clientes')
         .onDelete('SET NULL')
 
-      // ✅ Estados incluye EN_PROCESO
+      // Resultado del dateo
       table
         .enu('resultado', ['PENDIENTE', 'EN_PROCESO', 'EXITOSO', 'NO_EXITOSO'], {
           useNative: true,
@@ -101,15 +117,21 @@ export default class CaptacionDateos extends BaseSchema {
 
       table.string('motivo_no_exitoso', 180).nullable()
 
+      // Detección automática por convenio
+      table.boolean('detectado_por_convenio').notNullable().defaultTo(false)
+
+      // Timestamps
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
       table.dateTime('updated_at', { precision: 0 }).notNullable().defaultTo(this.now())
 
+      // Índices
       table.index(['placa', 'created_at'])
       table.index(['telefono', 'created_at'])
       table.index(['canal', 'agente_id', 'created_at'])
       table.index(['consumido_at'])
       table.index(['resultado', 'created_at'])
       table.index(['convenio_id'])
+      table.index(['asesor_convenio_id'])
       table.index(['prospecto_id'])
     })
   }

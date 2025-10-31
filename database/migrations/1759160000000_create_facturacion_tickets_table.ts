@@ -92,6 +92,30 @@ export default class CreateFacturacionTickets extends BaseSchema {
         .onDelete('SET NULL')
         .index()
 
+      // ====== SNAPSHOTS DEL TURNO / SERVICIO / VEHÍCULO ======
+      table.integer('turno_numero_global').unsigned().nullable().index()
+      table.integer('turno_numero_servicio').unsigned().nullable().index()
+      table.string('turno_codigo', 40).nullable()
+
+      table.string('tipo_vehiculo', 40).nullable().index()
+      table.string('placa_turno', 12).nullable().index()
+
+      table.string('servicio_codigo', 32).nullable().index()
+      table.string('servicio_nombre', 120).nullable()
+
+      table.string('sede_nombre', 120).nullable()
+      table.string('funcionario_nombre', 160).nullable()
+
+      // Atribución/canales (si turno los trae)
+      table.string('canal_atribucion', 20).nullable().index() // 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
+      table.string('medio_entero', 40).nullable() // 'Fachada' | 'Redes Sociales' | ...
+
+      // ====== SNAPSHOTS DE CAPTACIÓN (si aplica) ======
+      table.string('captacion_canal', 30).nullable().index() // 'FACHADA' | 'ASESOR_COMERCIAL' | ...
+      table.string('agente_comercial_nombre', 160).nullable()
+      table.string('asesor_convenio_nombre', 160).nullable()
+      table.string('convenio_nombre', 160).nullable()
+
       // B. Comprobante (opcionales)
       table.string('prefijo', 20).nullable()
       table.string('consecutivo', 30).nullable()
@@ -146,7 +170,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
       // Confirmación / Reversión
       table.dateTime('confirmado_at', { useTz: true }).nullable()
 
-      // ⬅️ NUEVO: quién confirmó
+      // quién confirmó
       table
         .integer('confirmed_by_id')
         .unsigned()

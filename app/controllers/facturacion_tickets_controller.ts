@@ -7,10 +7,12 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import Database from '@adonisjs/lucid/services/db'
 import FacturacionTicket, { type FactEstado } from '#models/facturacion_ticket'
 import CaptacionDateo from '#models/captacion_dateo'
 import TurnoRtm from '#models/turno_rtm'
 import Servicio from '#models/servicio'
+import Comision from '#models/comision'
 
 /** Carpeta para subir tickets (local). */
 const UPLOAD_BASE_DIR = app.makePath('uploads/tickets')
@@ -18,10 +20,138 @@ const UPLOAD_BASE_DIR = app.makePath('uploads/tickets')
 /** Ventana para considerar duplicado por contenido. */
 const DUP_WINDOW_MINUTES = 60
 
+/* ============================== Tipos DTO / Snapshots ============================== */
+
+interface IAgenteDTO { id: number; nombre: string; tipo?: string | null }
+interface IConvenioDTO { id: number; codigo?: string | null; nombre: string }
+interface IUsuarioDTO { id: number; nombres?: string | null; apellidos?: string | null }
+interface ISedeDTO { id: number; nombre: string }
+interface IServicioDTO { id: number; codigoServicio?: string | null; nombreServicio?: string | null }
+
+interface IDateoDTO {
+  id: number
+  canal: string
+  agente: IAgenteDTO | null
+  asesorConvenio: IAgenteDTO | null
+  convenio: IConvenioDTO | null
+}
+
+interface ITurnoDTO {
+  id: number
+  turnoNumero?: number | null
+  turnoNumeroServicio?: number | null
+  turnoCodigo?: string | null
+  placa?: string | null
+  estado?: string | null
+  fecha?: string | null
+  horaIngreso?: string | null
+  horaSalida?: string | null
+  tiempoServicio?: string | null
+  tipoVehiculo?: string | null
+  medioEntero?: string | null
+  canalAtribucion?: string | null
+  servicio: IServicioDTO | null
+  usuario: IUsuarioDTO | null
+  sede: ISedeDTO | null
+  agenteCaptacion: IAgenteDTO | null
+  asesorConvenio: IAgenteDTO | null
+  convenio: IConvenioDTO | null
+}
+
+interface ITurnoSnapshotReadable {
+  turnoNumero?: number | null
+  turnoNumeroServicio?: number | null
+  turnoCodigo?: string | null
+  placa?: string | null
+  estado?: string | null
+  fecha?: string | null
+  horaIngreso?: string | null
+  horaSalida?: string | null
+  tiempoServicio?: string | null
+  tipoVehiculo?: string | null
+  medioEntero?: string | null
+  canalAtribucion?: string | null
+  servicioId?: number | null
+  sedeId?: number | null
+  agenteCaptacionId?: number | null
+  $preloaded?: {
+    servicio?: { id: number; codigoServicio?: string | null; nombreServicio?: string | null }
+    usuario?: { id: number; nombres?: string | null; apellidos?: string | null }
+    sede?: { id: number; nombre: string }
+    agenteCaptacion?: { id: number; nombre: string; tipo?: string | null }
+    captacionDateo?: {
+      id: number
+      canal: string
+      agente?: { id: number; nombre: string; tipo?: string | null } | null
+      asesorConvenio?: { id: number; nombre: string; tipo?: string | null } | null
+      convenio?: { id: number; codigo?: string | null; nombre: string } | null
+    }
+  }
+}
+
+interface IComisionLiteDTO {
+  id: number
+  estado: 'PENDIENTE' | 'APROBADA' | 'PAGADA' | 'ANULADA'
+  monto: number
+  asesor?: { id: number; nombre: string } | null
+  convenio?: { id: number; nombre: string } | null
+}
+
+interface ITicketDTO {
+  id: number
+  estado: FactEstado
+  hash: string
+  filePath: string | null
+  fileMime: string | null
+  fileSize: number | null
+  imageRotation: number
+  createdAt: string
+  updatedAt: string
+
+  placa: string | null
+  fechaPago: string | null
+  total: number | null
+  subtotal: number | null
+  iva: number | null
+  totalFactura: number | null
+  vendedorText: string | null
+  prefijo: string | null
+  consecutivo: string | null
+
+  // snapshots útiles para el modal
+  nit?: string | null
+  pin?: string | null
+  marca?: string | null
+
+  turnoId: number | null
+  servicioId: number | null
+  sedeId: number | null
+  agenteId: number | null
+  dateoId: number | null
+
+  servicioCodigo: string | null
+  servicioNombre: string | null
+  tipoVehiculoSnapshot: string | null
+  turnoGlobal: number | null
+  turnoServicio: number | null
+  turnoCodigo: string | null
+  placaTurno: string | null
+  sedeNombre: string | null
+  funcionarioNombre: string | null
+  canalAtribucion: string | null
+  medioEntero: string | null
+
+  turno: ITurnoDTO | null
+  dateo: IDateoDTO | null
+
+  /** Resumen ligero de comisiones asociadas al dateo (si hay) */
+  comisiones?: IComisionLiteDTO[]
+}
+
+/* ============================== Controlador ============================== */
+
 export default class FacturacionTicketsController {
-  /**
-   * GET /facturacion/tickets
-   */
+  /** GET /facturacion/tickets */
   public async index({ request }: HttpContext) {
     const q = FacturacionTicket.query().orderBy('created_at', 'desc')
 
@@ -29,32 +159,53 @@ export default class FacturacionTicketsController {
     const hasta = request.input('hasta') as string | undefined
     const sedeId = toIntOrNull(request.input('sede_id'))
     const agenteId = toIntOrNull(request.input('agente_id'))
-    const placa =
-      (request.input('placa') as string | undefined)?.toUpperCase()?.replace(/\s+/g, '') || null
+    const placa = (request.input('placa') as string | undefined)?.toUpperCase()?.replace(/\s+/g, '') || null
     const estado = request.input('estado') as FactEstado | undefined
     const turnoId = toIntOrNull(request.input('turno_id'))
     const dateoId = toIntOrNull(request.input('dateo_id'))
+    const vendedor = request.input('vendedor') as string | undefined
 
-    if (desde) q.where('created_at', '>=', DateTime.fromISO(desde).toSQL())
-    if (hasta) q.where('created_at', '<=', DateTime.fromISO(hasta).toSQL())
+    if (desde) { const d = DateTime.fromISO(desde).toSQL(); if (d) q.where('created_at', '>=', d) }
+    if (hasta) { const h = DateTime.fromISO(hasta).toSQL(); if (h) q.where('created_at', '<=', h) }
     if (sedeId) q.where('sede_id', sedeId)
     if (agenteId) q.where('agente_id', agenteId)
     if (placa) q.where('placa', placa)
     if (estado) q.where('estado', estado)
     if (turnoId) q.where('turno_id', turnoId)
     if (dateoId) q.where('dateo_id', dateoId)
+    if (vendedor && vendedor.trim().length >= 2) q.whereILike('vendedor_text', `%${vendedor.trim()}%`)
 
+    // Listado: sin preloads, usamos snapshots persistidos
     const page = Number(request.input('page') || 1)
     const limit = Math.min(Number(request.input('limit') || 20), 100)
+    const pag = await q.paginate(page, limit)
 
-    const data = await q.paginate(page, limit)
-    return data
+    // Remap a snake_case que espera la tabla
+    const { meta, data } = pag.toJSON()
+    const rows = data.map((t: any) => ({
+      id: t.id,
+      estado: t.estado,
+      placa: t.placa ?? null,
+      fecha_pago: t.fechaPago ?? null,
+      total_factura: (t.totalFactura ?? t.total) ?? null,
+
+      servicio_nombre: t.servicioNombre ?? null,
+      sede_nombre: t.sedeNombre ?? null,
+      vendedor_text: t.vendedorText ?? null,
+
+      nit: t.nit ?? null,
+      pin: t.pin ?? null,
+      marca: t.marca ?? null,
+
+      canal_atribucion: t.canalAtribucion ?? null,
+      agente_comercial_nombre: t.agenteComercialNombre ?? null,
+      convenio_nombre: t.convenioNombre ?? null,
+    }))
+
+    return { meta, data: rows }
   }
 
-  /**
-   * GET /facturacion/tickets/:id
-   * Devuelve DTO enriquecido.
-   */
+  /** GET /facturacion/tickets/:id */
   public async show({ params, response }: HttpContext) {
     const ticket = await FacturacionTicket.query()
       .where('id', params.id)
@@ -63,63 +214,51 @@ export default class FacturacionTicketsController {
       .preload('servicio')
       .preload('dateo', (q) => q.preload('agente').preload('asesorConvenio').preload('convenio'))
       .preload('turno', (q) => {
-        q
-          .preload('servicio')
+        q.preload('servicio')
           .preload('usuario')
           .preload('sede')
           .preload('agenteCaptacion')
-          .preload('captacionDateo', (cq) =>
-            cq.preload('agente').preload('asesorConvenio').preload('convenio')
-          )
+          .preload('captacionDateo', (cq) => cq.preload('agente').preload('asesorConvenio').preload('convenio'))
       })
       .first()
 
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
-
-    return buildTicketDTO(ticket)
+    const dto = await this.getTicketDTOById(ticket.id)
+    return dto
   }
 
-  /**
-   * GET /facturacion/tickets/hash-exists/:hash
-   */
+  /** GET /facturacion/tickets/hash-exists/:hash */
   public async hashExists({ params }: HttpContext) {
     const dup = await FacturacionTicket.findBy('hash', params.hash)
     return { exists: !!dup }
   }
 
-  /**
-   * GET /facturacion/tickets/duplicados
-   */
+  /** GET /facturacion/tickets/duplicados */
   public async checkDuplicados({ request }: HttpContext) {
-    const placa =
-      (request.input('placa') as string | undefined)?.toUpperCase()?.replace(/\s+/g, '') || ''
+    const placa = (request.input('placa') as string | undefined)?.toUpperCase()?.replace(/\s+/g, '') || ''
     const total = toNumberOrZero(request.input('total'))
     const fechaIso = request.input('fecha_pago_iso') as string | undefined
-
-    if (!placa || !total || !fechaIso) {
-      return { possible: false, count: 0 }
-    }
+    if (!placa || !total || !fechaIso) return { possible: false, count: 0 }
 
     const fecha = DateTime.fromISO(fechaIso)
     const from = fecha.minus({ minutes: DUP_WINDOW_MINUTES }).toSQL()
     const to = fecha.plus({ minutes: DUP_WINDOW_MINUTES }).toSQL()
 
-    const count = await FacturacionTicket.query()
+    const countRow = await FacturacionTicket.query()
       .where('placa', placa)
       .where('total', total)
       .whereBetween('fecha_pago', [from!, to!])
       .count('* as total')
       .first()
 
-    const n = Number(count?.$extras.total || 0)
+    const n = Number(countRow?.$extras.total || 0)
     return { possible: n > 0, count: n }
   }
 
   /**
    * POST /facturacion/tickets
    * Sube archivo + metadatos (turno_id, dateo_id, sede_id, servicio_id).
-   * Intenta completar placa/agente/sede/servicio desde dateo/turno y
-   * guarda snapshots si ya tenemos el turno.
+   * Completa placa/agente/sede/servicio desde dateo/turno y persiste snapshots.
    */
   public async store({ request, auth, response }: HttpContext) {
     const file = request.file('archivo', { size: '8mb', extnames: ['jpg', 'jpeg', 'png'] })
@@ -132,17 +271,12 @@ export default class FacturacionTicketsController {
 
     // Duplicado por hash
     const dup = await FacturacionTicket.findBy('hash', hash)
-    if (dup) {
-      return response.conflict({ message: 'Este ticket ya fue cargado (hash duplicado)', id: dup.id })
-    }
+    if (dup) return response.conflict({ message: 'Este ticket ya fue cargado (hash duplicado)', id: dup.id })
 
     // Guardar archivo
     const now = DateTime.now()
-    const yyyy = String(now.year)
-    const mm = String(now.month).padStart(2, '0')
-    const outDir = path.join(UPLOAD_BASE_DIR, yyyy, mm)
+    const outDir = path.join(UPLOAD_BASE_DIR, String(now.year), String(now.month).padStart(2, '0'))
     await fs.mkdir(outDir, { recursive: true })
-
     const filename = `${cuid()}.${file.extname}`
     const filePath = path.join(outDir, filename)
     await fs.copyFile(file.tmpPath!, filePath)
@@ -169,42 +303,52 @@ export default class FacturacionTicketsController {
     ticket.sedeId = sedeId
     ticket.servicioId = servicioId
 
-    // Completar desde dateo o turno
+    // Completar desde dateo (si vino)
     if (dateoId) {
-      const dateo = await CaptacionDateo.find(dateoId)
+      const dateo = await CaptacionDateo.query()
+        .where('id', dateoId)
+        .preload('agente')
+        .preload('asesorConvenio')
+        .preload('convenio')
+        .first()
+
       if (dateo) {
         if (!ticket.placa && (dateo.placa || '').trim()) {
           ticket.placa = (dateo.placa || '').toUpperCase().replace(/\s+/g, '')
         }
         ticket.agenteId = dateo.agenteId ?? ticket.agenteId ?? null
+        ticket.captacionCanal = dateo.canal ?? null
+        ticket.agenteComercialNombre = dateo.$preloaded?.agente?.nombre ?? null
+        ticket.asesorConvenioNombre = dateo.$preloaded?.asesorConvenio?.nombre ?? null
+        ticket.convenioNombre = dateo.$preloaded?.convenio?.nombre ?? null
       }
     }
 
+    // Completar desde turno (si vino)
     let turno: TurnoRtm | null = null
-    if (turnoId) turno = await TurnoRtm.query().where('id', turnoId).preload('servicio').first()
+    if (turnoId) {
+      turno = await TurnoRtm.query()
+        .where('id', turnoId)
+        .preload('servicio')
+        .preload('usuario')
+        .preload('sede')
+        .first()
+    }
 
     if (turno) {
-      // completar placa/sede/agente/servicio si faltan
-      if (!ticket.placa && (turno.placa || '').trim()) {
-        ticket.placa = (turno.placa || '').toUpperCase().replace(/\s+/g, '')
+      const turnSnap = turno as unknown as ITurnoSnapshotReadable
+      if (!ticket.placa && (turnSnap.placa || '').trim()) {
+        ticket.placa = (turnSnap.placa || '').toUpperCase().replace(/\s+/g, '')
       }
-      // @ts-ignore
-      ticket.sedeId = ticket.sedeId || (turno as any).sedeId || null
-      // @ts-ignore
-      ticket.agenteId = ticket.agenteId || (turno as any).agenteCaptacionId || null
-      // @ts-ignore
-      ticket.servicioId = ticket.servicioId || (turno as any).servicioId || null
-
-      // 🧾 Snapshots directos del turno
+      ticket.sedeId = ticket.sedeId || turnSnap.sedeId || null
+      ticket.agenteId = ticket.agenteId || turnSnap.agenteCaptacionId || null
+      ticket.servicioId = ticket.servicioId || turnSnap.servicioId || null
       await this.fillSnapshotsFromTurno(ticket, turno)
     } else if (ticket.servicioId) {
-      // snapshot de servicio si vino directo
       const s = await Servicio.find(ticket.servicioId)
       if (s) {
-        // @ts-ignore
-        ticket.servicioCodigo = (s as any).codigo ?? null
-        // @ts-ignore
-        ticket.servicioNombre = (s as any).nombre ?? null
+        ticket.servicioCodigo = s.codigoServicio ?? null
+        ticket.servicioNombre = s.nombreServicio ?? null
       }
     }
 
@@ -212,9 +356,7 @@ export default class FacturacionTicketsController {
     return response.created(ticket)
   }
 
-  /**
-   * POST /facturacion/tickets/:id/reocr
-   */
+  /** POST /facturacion/tickets/:id/reocr  (demo) */
   public async reocr({ params, response }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
@@ -239,109 +381,129 @@ export default class FacturacionTicketsController {
     return ticket
   }
 
-  /**
-   * PATCH /facturacion/tickets/:id
-   */
+  /** PATCH /facturacion/tickets/:id */
   public async update({ params, request, response }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
     const up = request.only([
-      'placa',
-      'total',
-      'fecha_pago',
-      'sede_id',
-      'agente_id',
-      'prefijo',
-      'consecutivo',
-      'forma_pago',
-      'servicio_id',
-      'doc_tipo',
-      'doc_numero',
-      'nombre',
-      'telefono',
-      'observaciones',
-      'ocr_conf_baja_revisado',
-      'image_rotation',
+      'placa','total','fecha_pago','sede_id','agente_id','prefijo','consecutivo','forma_pago',
+      'servicio_id','doc_tipo','doc_numero','nombre','telefono','observaciones',
+      'ocr_conf_baja_revisado','image_rotation',
+      // OCR / visibles
+      'nit','pin','marca','vendedor_text','subtotal','iva','total_factura',
+      'pago_consignacion','pago_tarjeta','pago_efectivo','pago_cambio',
+      // asociaciones tardías
+      'turno_id','dateo_id',
+      // alias UI
+      'vendedor',
+      // *** nuevo: objeto con los campos entregados por OCRController
+      'ocr_campos',
+    ]) as Record<string, unknown>
 
-      // OCR / totales explícitos
-      'nit',
-      'pin',
-      'marca',
-      'vendedor_text',
-      'subtotal',
-      'iva',
-      'total_factura',
-      'pago_consignacion',
-      'pago_tarjeta',
-      'pago_efectivo',
-      'pago_cambio',
-    ])
+    // Alias/normalizaciones básicas
+    if ('placa' in up) ticket.placa = String(up.placa || '').toUpperCase().replace(/\s+/g, '')
+    if ('total' in up) ticket.total = toNumberOrZero(up.total)
+    if ('fecha_pago' in up) ticket.fechaPago = up.fecha_pago ? DateTime.fromISO(String(up.fecha_pago)) : null
+    if ('sede_id' in up) ticket.sedeId = toIntOrNull(up.sede_id)
+    if ('agente_id' in up) ticket.agenteId = toIntOrNull(up.agente_id)
+    if ('prefijo' in up) ticket.prefijo = nullIfEmpty(up.prefijo)
+    if ('consecutivo' in up) ticket.consecutivo = nullIfEmpty(up.consecutivo)
+    if ('forma_pago' in up) ticket.formaPago = nullIfEmpty(up.forma_pago)
+    if ('servicio_id' in up) ticket.servicioId = toIntOrNull(up.servicio_id)
+    if ('doc_tipo' in up) ticket.docTipo = nullIfEmpty(up.doc_tipo)
+    if ('doc_numero' in up) ticket.docNumero = nullIfEmpty(up.doc_numero)
+    if ('nombre' in up) ticket.nombre = nullIfEmpty(up.nombre)
+    if ('telefono' in up) ticket.telefono = nullIfEmpty(up.telefono)
+    if ('observaciones' in up) ticket.observaciones = nullIfEmpty(up.observaciones)
+    if ('ocr_conf_baja_revisado' in up) ticket.ocrConfBajaRevisado = Boolean(up.ocr_conf_baja_revisado)
+    if ('image_rotation' in up) ticket.imageRotation = Number(up.image_rotation) || 0
 
-    if (up.placa !== undefined)
-      ticket.placa = String(up.placa || '').toUpperCase().replace(/\s+/g, '')
-    if (up.total !== undefined) ticket.total = toNumberOrZero(up.total)
-    if (up.fecha_pago !== undefined)
-      ticket.fechaPago = up.fecha_pago ? DateTime.fromISO(String(up.fecha_pago)) : null
-    if (up.sede_id !== undefined) ticket.sedeId = toIntOrNull(up.sede_id)
-    if (up.agente_id !== undefined) ticket.agenteId = toIntOrNull(up.agente_id)
-    if (up.prefijo !== undefined) ticket.prefijo = nullIfEmpty(up.prefijo)
-    if (up.consecutivo !== undefined) ticket.consecutivo = nullIfEmpty(up.consecutivo)
-    if (up.forma_pago !== undefined) ticket.formaPago = nullIfEmpty(up.forma_pago)
-    if (up.servicio_id !== undefined) ticket.servicioId = toIntOrNull(up.servicio_id)
-    if (up.doc_tipo !== undefined) ticket.docTipo = nullIfEmpty(up.doc_tipo)
-    if (up.doc_numero !== undefined) ticket.docNumero = nullIfEmpty(up.doc_numero)
-    if (up.nombre !== undefined) ticket.nombre = nullIfEmpty(up.nombre)
-    if (up.telefono !== undefined) ticket.telefono = nullIfEmpty(up.telefono)
-    if (up.observaciones !== undefined) ticket.observaciones = nullIfEmpty(up.observaciones)
-    if (up.ocr_conf_baja_revisado !== undefined)
-      ticket.ocrConfBajaRevisado = !!up.ocr_conf_baja_revisado
-    if (up.image_rotation !== undefined) ticket.imageRotation = Number(up.image_rotation) || 0
-
-    // Nuevos del OCR
-    if (up.nit !== undefined) ticket.nit = nullIfEmpty(sanitizeNit(up.nit))
-    if (up.pin !== undefined) ticket.pin = nullIfEmpty(String(up.pin))
-    if (up.marca !== undefined) ticket.marca = nullIfEmpty(String(up.marca))
-    if (up.vendedor_text !== undefined) ticket.vendedorText = nullIfEmpty(String(up.vendedor_text))
-    const vendedorAlias = request.input('vendedor')
-    if (vendedorAlias !== undefined && vendedorAlias !== null) {
-      ticket.vendedorText = nullIfEmpty(String(vendedorAlias))
+    // OCR visibles en UI
+    if ('nit' in up) ticket.nit = nullIfEmpty(sanitizeNit(String(up.nit)))
+    if ('pin' in up) ticket.pin = nullIfEmpty(String(up.pin))
+    if ('marca' in up) ticket.marca = nullIfEmpty(String(up.marca))
+    if ('vendedor_text' in up) ticket.vendedorText = nullIfEmpty(String(up.vendedor_text))
+    if ('vendedor' in up && up.vendedor !== undefined && up.vendedor !== null) {
+      ticket.vendedorText = nullIfEmpty(String(up.vendedor))
     }
 
-    if (up.subtotal !== undefined) ticket.subtotal = toNumberOrZero(up.subtotal)
-    if (up.iva !== undefined) ticket.iva = toNumberOrZero(up.iva)
-    if (up.total_factura !== undefined) ticket.totalFactura = toNumberOrZero(up.total_factura)
+    // Totales explícitos
+    if ('subtotal' in up) ticket.subtotal = toNumberOrZero(up.subtotal)
+    if ('iva' in up) ticket.iva = toNumberOrZero(up.iva)
+    if ('total_factura' in up) ticket.totalFactura = toNumberOrZero(up.total_factura)
 
-    if (up.pago_consignacion !== undefined)
-      ticket.pagoConsignacion = toNumberOrZero(up.pago_consignacion)
-    if (up.pago_tarjeta !== undefined) ticket.pagoTarjeta = toNumberOrZero(up.pago_tarjeta)
-    if (up.pago_efectivo !== undefined) ticket.pagoEfectivo = toNumberOrZero(up.pago_efectivo)
-    if (up.pago_cambio !== undefined) ticket.pagoCambio = toNumberOrZero(up.pago_cambio)
+    // Detalle de pagos
+    if ('pago_consignacion' in up) ticket.pagoConsignacion = toNumberOrZero(up.pago_consignacion)
+    if ('pago_tarjeta' in up) ticket.pagoTarjeta = toNumberOrZero(up.pago_tarjeta)
+    if ('pago_efectivo' in up) ticket.pagoEfectivo = toNumberOrZero(up.pago_efectivo)
+    if ('pago_cambio' in up) ticket.pagoCambio = toNumberOrZero(up.pago_cambio)
 
-    // Sincronía total vs total_factura
-    if ((!ticket.total || ticket.total === 0) && ticket.totalFactura && ticket.totalFactura > 0) {
-      ticket.total = ticket.totalFactura
+    // ======== NUEVO: fusionar y persistir campos devueltos por el OCR ========
+    if (up.ocr_campos && typeof up.ocr_campos === 'object') {
+      const c = up.ocr_campos as any
+      // vendedor / prefijo / consecutivo
+      if (c.vendedor) ticket.vendedorText = ticket.vendedorText ?? String(c.vendedor)
+      if (c.prefijo) ticket.prefijo = ticket.prefijo ?? String(c.prefijo)
+      if (c.consecutivo) ticket.consecutivo = ticket.consecutivo ?? String(c.consecutivo)
+
+      // NIT / PIN / Marca
+      if (c.nit) ticket.nit = ticket.nit ?? sanitizeNit(String(c.nit))
+      if (c.pin) ticket.pin = ticket.pin ?? String(c.pin)
+      if (c.marca) ticket.marca = ticket.marca ?? String(c.marca)
+
+      // Totales y fecha/hora
+      const sub = Number(c.subtotal || 0), iva = Number(c.iva || 0)
+      const tf = Number(c.totalFactura || c.total || 0)
+      if (!ticket.subtotal && sub) ticket.subtotal = sub
+      if (!ticket.iva && iva) ticket.iva = iva
+      if (!ticket.totalFactura && tf) ticket.totalFactura = tf
+      if (!ticket.total && tf) ticket.total = tf
+
+      if (!ticket.fechaPago && c.fechaHora) {
+        const dt = DateTime.fromISO(String(c.fechaHora))
+        if (dt.isValid) ticket.fechaPago = dt
+      }
+
+      // Placa (normalizada)
+      if (!ticket.placa && c.placa) {
+        ticket.placa = String(c.placa).toUpperCase().replace(/\s+/g, '')
+      }
     }
-    if ((!ticket.totalFactura || ticket.totalFactura === 0) && ticket.total && ticket.total > 0) {
-      ticket.totalFactura = ticket.total
-    }
+    // =======================================================================
 
     // Si ya cumple para confirmar, súbelo a LISTA_CONFIRMAR
-    if (
-      canConfirm(ticket, false) &&
-      (ticket.estado === 'BORRADOR' || ticket.estado === 'OCR_LISTO')
-    ) {
+    if (canConfirm(ticket, false) && (ticket.estado === 'BORRADOR' || ticket.estado === 'OCR_LISTO')) {
       ticket.estado = 'LISTA_CONFIRMAR'
     }
 
     // Si cambiaron servicio_id manualmente, refresca snapshots de servicio
-    if (up.servicio_id !== undefined && ticket.servicioId) {
+    if ('servicio_id' in up && ticket.servicioId) {
       const s = await Servicio.find(ticket.servicioId)
       if (s) {
-        // @ts-ignore
-        ticket.servicioCodigo = (s as any).codigo ?? null
-        // @ts-ignore
-        ticket.servicioNombre = (s as any).nombre ?? null
+        ticket.servicioCodigo = s.codigoServicio ?? null
+        ticket.servicioNombre = s.nombreServicio ?? null
+      }
+    }
+
+    // Asociaciones tardías
+    const newTurnoId = toIntOrNull(up.turno_id)
+    const newDateoId = toIntOrNull(up.dateo_id)
+    if (newTurnoId && !ticket.turnoId) ticket.turnoId = newTurnoId
+    if (newDateoId && !ticket.dateoId) ticket.dateoId = newDateoId
+
+    if (ticket.turnoId) {
+      const t = await TurnoRtm.query().where('id', ticket.turnoId).preload('servicio').preload('usuario').preload('sede').first()
+      if (t) await this.fillSnapshotsFromTurno(ticket, t)
+    }
+
+    if (ticket.dateoId) {
+      const d = await CaptacionDateo.query().where('id', ticket.dateoId).preload('agente').preload('asesorConvenio').preload('convenio').first()
+      if (d) {
+        ticket.captacionCanal = d.canal ?? ticket.captacionCanal ?? null
+        ticket.agenteComercialNombre = d.$preloaded?.agente?.nombre ?? ticket.agenteComercialNombre ?? null
+        ticket.asesorConvenioNombre = d.$preloaded?.asesorConvenio?.nombre ?? ticket.asesorConvenioNombre ?? null
+        ticket.convenioNombre = d.$preloaded?.convenio?.nombre ?? ticket.convenioNombre ?? null
       }
     }
 
@@ -352,9 +514,10 @@ export default class FacturacionTicketsController {
   /**
    * POST /facturacion/tickets/:id/confirmar
    * Confirma y persiste snapshots del turno/servicio en la fila.
+   * Genera comisiones según reglas RTM + dateo.
    */
   public async confirmar({ params, request, response, auth }: HttpContext) {
-    const forzar = !!request.input('forzar')
+    const forzar = Boolean(request.input('forzar'))
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
@@ -378,31 +541,32 @@ export default class FacturacionTicketsController {
     // Confirmar
     ticket.estado = 'CONFIRMADA'
     ticket.confirmadoAt = DateTime.now()
-    // @ts-ignore
     ticket.confirmedById = auth.user?.id ?? null
 
-    // Fallbacks desde dateo/turno
+    // Fallbacks desde dateo/turno si faltan FK
     if (!ticket.agenteId && ticket.dateoId) {
       const d = await CaptacionDateo.find(ticket.dateoId)
       if (d?.agenteId) ticket.agenteId = d.agenteId
     }
     if (!ticket.sedeId && ticket.turnoId) {
       const t = await TurnoRtm.find(ticket.turnoId)
-      // @ts-ignore
-      if (t?.sedeId) ticket.sedeId = (t as any).sedeId
+      // @ts-expect-error: algunos modelos exponen sedeId directamente
+      if (t?.sedeId) ticket.sedeId = (t as unknown as { sedeId: number | null }).sedeId ?? null
     }
     if (!ticket.servicioId && ticket.turnoId) {
       const t = await TurnoRtm.find(ticket.turnoId)
-      // @ts-ignore
-      if (t?.servicioId) ticket.servicioId = (t as any).servicioId
+      // @ts-expect-error: idem servicioId
+      if (t?.servicioId) ticket.servicioId = (t as unknown as { servicioId: number | null }).servicioId ?? null
     }
 
-    // 🔗 Snapshots desde el turno (si existe)
+    // Snapshots desde el turno (si existe)
     let turno: TurnoRtm | null = null
     if (ticket.turnoId) {
       turno = await TurnoRtm.query()
         .where('id', ticket.turnoId)
         .preload('servicio')
+        .preload('usuario')
+        .preload('sede')
         .first()
       if (turno) await this.fillSnapshotsFromTurno(ticket, turno)
     }
@@ -411,10 +575,8 @@ export default class FacturacionTicketsController {
     if (!turno && ticket.servicioId) {
       const s = await Servicio.find(ticket.servicioId)
       if (s) {
-        // @ts-ignore
-        ticket.servicioCodigo = (s as any).codigo ?? null
-        // @ts-ignore
-        ticket.servicioNombre = (s as any).nombre ?? null
+        ticket.servicioCodigo = s.codigoServicio ?? null
+        ticket.servicioNombre = s.nombreServicio ?? null
       }
     }
 
@@ -427,100 +589,280 @@ export default class FacturacionTicketsController {
       console.error('Commission hook failed:', err)
     }
 
-    // DTO enriquecido
+    // DTO enriquecido (incluye comisiones ligeras)
     const dto = await this.getTicketDTOById(ticket.id)
     return dto
   }
 
-  // ========================== Privados / Helpers ==========================
-
-  /** Rellena columnas snapshot del ticket a partir del Turno. */
-  private async fillSnapshotsFromTurno(ticket: FacturacionTicket, turno: TurnoRtm) {
-    // Numeraciones
-    // @ts-ignore
-    ticket.turnoGlobal = (turno as any).turnoNumero ?? null
-    // @ts-ignore
-    ticket.turnoServicio = (turno as any).turnoNumeroServicio ?? null
-    // @ts-ignore
-    ticket.turnoCodigo = (turno as any).turnoCodigo ?? null
-
-    // Tipo vehiculo y canal/medio
-    // @ts-ignore
-    ticket.tipoVehiculo = (turno as any).tipoVehiculo ?? ticket.tipoVehiculo ?? null
-    // @ts-ignore
-    ticket.canalAtribucion = (turno as any).canalAtribucion ?? ticket.canalAtribucion ?? null
-    // @ts-ignore
-    ticket.medioEntero = (turno as any).medioEntero ?? ticket.medioEntero ?? null
-
-    // Servicio (si vino preloaded, mejor)
-    let s = (turno as any).$preloaded?.servicio || null
-    if (!s && (turno as any).servicioId) {
-      s = await Servicio.find((turno as any).servicioId)
-    }
-    if (s) {
-      ticket.servicioId = ticket.servicioId || s.id
-      // @ts-ignore
-      ticket.servicioCodigo = (s as any).codigo ?? null
-      // @ts-ignore
-      ticket.servicioNombre = (s as any).nombre ?? null
-    }
-  }
+  // ========================== Privados / Hook Comisiones ==========================
 
   private async applyCommissionHook(ticket: FacturacionTicket) {
-    // Si no hay dateo_id, intenta inferirlo desde el turno
+    // Solo al estar confirmada
+    if (ticket.estado !== 'CONFIRMADA') return
+
+    // Validar servicio = RTM / Tecnomecánica
+    const esRTM = isRTMByCodigoONombre(ticket.servicioCodigo, ticket.servicioNombre)
+    if (!esRTM) return
+
+    // Asegurar que tenemos dateo_id: si no, intenta inferirlo desde el turno
     if (!ticket.dateoId && ticket.turnoId) {
       const turno = await TurnoRtm.find(ticket.turnoId)
-      if (turno && (turno as any).dateoId) {
-        ticket.dateoId = (turno as any).dateoId
+      const maybe = turno as unknown as { captacionDateoId?: number | null } | null
+      if (maybe?.captacionDateoId) {
+        ticket.dateoId = maybe.captacionDateoId
         await ticket.save()
       }
     }
-    // Aquí conectar tu servicio real de comisiones.
+    if (!ticket.dateoId) return // Sin dateo NO comisiona
+
+    // Cargar el dateo con relaciones
+    const dateo = await CaptacionDateo.query()
+      .where('id', ticket.dateoId)
+      .preload('agente')
+      .preload('asesorConvenio')
+      .preload('convenio')
+      .first()
+
+    if (!dateo) return
+
+    // Reglas:
+    // - Si NO hay convenio => 20.000 para el asesor comercial (dateo.agente)
+    // - Si SÍ hay convenio => 4.000 para el asesor comercial + 20.000 para el convenio (asesorConvenio)
+    // Estado inicial: PENDIENTE
+    // Tipo servicio: 'RTM'
+    // Fecha cálculo: ahora
+    const now = DateTime.now()
+    const usuarioId = ticket.confirmedById ?? ticket.createdById ?? null
+
+    // Evitar DUPLICADOS básicos: si ya existe HOY para este dateo y este "monto patrón", no creamos de nuevo
+    const startDay = now.startOf('day').toSQL()
+    const endDay = now.endOf('day').toSQL()
+
+    const montoAsesorNoConvenio = 20000
+    const montoAsesorConConvenio = 4000
+    const montoConvenio = 20000
+
+    const trx = await Database.transaction()
+    try {
+      const baseWhere = Comision.query({ client: trx })
+        .where('captacion_dateo_id', dateo.id)
+        .whereBetween('fecha_calculo', [startDay!, endDay!])
+        .where('tipo_servicio', 'RTM')
+
+      // Caso con convenio
+      if (dateo.convenioId) {
+        // 4k asesor comercial
+        if (dateo.agenteId) {
+          const existsAsesor4k = await baseWhere.clone()
+            .where('asesor_id', dateo.agenteId)
+            .where('convenio_id', dateo.convenioId)
+            .where('monto', montoAsesorConConvenio)
+            .first()
+
+          if (!existsAsesor4k) {
+            const c1 = new Comision()
+            c1.captacionDateoId = dateo.id
+            c1.asesorId = dateo.agenteId
+            c1.convenioId = dateo.convenioId
+            c1.tipoServicio = 'RTM'
+            c1.base = '0'
+            c1.porcentaje = '0'
+            c1.monto = String(montoAsesorConConvenio)
+            c1.estado = 'PENDIENTE'
+            c1.fechaCalculo = now
+            c1.calculadoPor = usuarioId
+            await c1.useTransaction(trx).save()
+          }
+        }
+
+        // 20k convenio (usamos asesorConvenio por restricción NOT NULL en asesor_id)
+        if (dateo.convenioId && dateo.asesorConvenioId) {
+          const existsConvenio20k = await baseWhere.clone()
+            .where('asesor_id', dateo.asesorConvenioId)
+            .where('convenio_id', dateo.convenioId)
+            .where('monto', montoConvenio)
+            .first()
+
+          if (!existsConvenio20k) {
+            const c2 = new Comision()
+            c2.captacionDateoId = dateo.id
+            c2.asesorId = dateo.asesorConvenioId // requerido por el schema
+            c2.convenioId = dateo.convenioId
+            c2.tipoServicio = 'RTM'
+            c2.base = '0'
+            c2.porcentaje = '0'
+            c2.monto = String(montoConvenio)
+            c2.estado = 'PENDIENTE'
+            c2.fechaCalculo = now
+            c2.calculadoPor = usuarioId
+            await c2.useTransaction(trx).save()
+          }
+        }
+      } else {
+        // Sin convenio: 20k para asesor comercial
+        if (dateo.agenteId) {
+          const existsAsesor20k = await baseWhere.clone()
+            .where('asesor_id', dateo.agenteId)
+            .whereNull('convenio_id')
+            .where('monto', montoAsesorNoConvenio)
+            .first()
+
+          if (!existsAsesor20k) {
+            const c = new Comision()
+            c.captacionDateoId = dateo.id
+            c.asesorId = dateo.agenteId
+            c.convenioId = null
+            c.tipoServicio = 'RTM'
+            c.base = '0'
+            c.porcentaje = '0'
+            c.monto = String(montoAsesorNoConvenio)
+            c.estado = 'PENDIENTE'
+            c.fechaCalculo = now
+            c.calculadoPor = usuarioId
+            await c.useTransaction(trx).save()
+          }
+        }
+      }
+
+      await trx.commit()
+    } catch (err) {
+      await trx.rollback()
+      throw err
+    }
+  }
+  /** Rellena columnas snapshot del ticket a partir del Turno. */
+  private async fillSnapshotsFromTurno(ticket: FacturacionTicket, turno: TurnoRtm) {
+    const t = turno as unknown as ITurnoSnapshotReadable
+
+    // Numeraciones
+    ticket.turnoNumeroGlobal = t.turnoNumero ?? ticket.turnoNumeroGlobal ?? null
+    ticket.turnoNumeroServicio = t.turnoNumeroServicio ?? ticket.turnoNumeroServicio ?? null
+    ticket.turnoCodigo = t.turnoCodigo ?? ticket.turnoCodigo ?? null
+
+    // Tipo vehiculo, placa, canal/medio
+    ticket.tipoVehiculoSnapshot = t.tipoVehiculo ?? ticket.tipoVehiculoSnapshot ?? null
+    ticket.placaTurno = t.placa ?? ticket.placaTurno ?? null
+    ticket.canalAtribucion = t.canalAtribucion ?? ticket.canalAtribucion ?? null
+    ticket.medioEntero = t.medioEntero ?? ticket.medioEntero ?? null
+
+    // Servicio (si vino preloaded, mejor)
+    const s = t.$preloaded?.servicio ?? null
+    if (s) {
+      ticket.servicioId = ticket.servicioId || s.id || null
+      ticket.servicioCodigo = s.codigoServicio ?? ticket.servicioCodigo ?? null
+      ticket.servicioNombre = s.nombreServicio ?? ticket.servicioNombre ?? null
+    }
+
+    // Sede / funcionario (si vino preloaded)
+    const sede = t.$preloaded?.sede ?? null
+    if (sede) ticket.sedeNombre = sede.nombre ?? ticket.sedeNombre ?? null
+
+    const usuario = t.$preloaded?.usuario ?? null
+    if (usuario) {
+      const nombre = [usuario.nombres, usuario.apellidos].filter(Boolean).join(' ')
+      ticket.funcionarioNombre = nombre || ticket.funcionarioNombre || null
+    }
   }
 
-  private async getTicketDTOById(id: number) {
+  /** Devuelve el DTO enriquecido e incluye un resumen ligero de comisiones por dateo (si aplica) */
+  private async getTicketDTOById(id: number): Promise<ITicketDTO> {
     const t = await FacturacionTicket.query()
       .where('id', id)
       .preload('servicio')
       .preload('sede')
       .preload('agente')
-      .preload('turno', (q) =>
-        q.preload('servicio').preload('usuario').preload('sede').preload('agenteCaptacion')
+      .preload('dateo', (dq) => dq.preload('agente').preload('asesorConvenio').preload('convenio'))
+      .preload('turno', (tq) =>
+        tq
+          .preload('servicio')
+          .preload('usuario')
+          .preload('sede')
+          .preload('agenteCaptacion')
+          .preload('captacionDateo', (cq) =>
+            cq.preload('agente').preload('asesorConvenio').preload('convenio')
+          )
       )
       .firstOrFail()
 
-    return buildTicketDTO(t)
+    // DTO base
+    const dto = buildTicketDTO(t)
+
+    // Buscar dateoId desde el propio ticket o el turno
+    const pre = (t as any).$preloaded || {}
+    const dateoIdFromTurno = pre.turno?.$preloaded?.captacionDateo?.id ?? null
+    const dateoId: number | null = (t as any).dateoId ?? dateoIdFromTurno ?? null
+
+    // Adjuntar comisiones ligeras si existe dateoId
+    if (dateoId) {
+      const comisiones = await Comision.query()
+        .where('captacion_dateo_id', dateoId)
+        .orderBy('fecha_calculo', 'desc')
+        .preload('asesor')
+        .preload('convenio')
+
+      dto.comisiones = comisiones.map((c) => ({
+        id: c.id,
+        estado: c.estado,
+        monto: Number(c.monto ?? 0),
+        asesor: c.$preloaded?.asesor
+          ? { id: c.$preloaded.asesor.id, nombre: c.$preloaded.asesor.nombre }
+          : null,
+        convenio: c.$preloaded?.convenio
+          ? { id: c.$preloaded.convenio.id, nombre: c.$preloaded.convenio.nombre }
+          : null,
+      }))
+    }
+
+    return dto
   }
 }
 
 /* ============================== Utils ============================== */
-function digestSHA256(buffer: Buffer) {
+
+function isRTMByCodigoONombre(codigo?: string | null, nombre?: string | null): boolean {
+  const c = (codigo || '').toUpperCase().trim()
+  const n = (nombre || '').toUpperCase().trim()
+  // Ajusta a tus catálogos reales
+  if (c.includes('RTM')) return true
+  if (n.includes('RTM')) return true
+  if (n.includes('TECNOMECANICA') || n.includes('TECNOMECÁNICA')) return true
+  if (n.includes('REVISION') && n.includes('TECNICO')) return true
+  return false
+}
+
+function digestSHA256(buffer: Buffer): string {
   const h = crypto.createHash('sha256')
   h.update(buffer)
   return h.digest('hex')
 }
-function toIntOrNull(v: any): number | null {
+
+function toIntOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
-function toNumberOrZero(v: any): number {
+
+function toNumberOrZero(v: unknown): number {
   const n = Number(String(v).replace(/[^\d.-]/g, ''))
   return Number.isFinite(n) ? n : 0
 }
-function nullIfEmpty(v: any) {
+
+function nullIfEmpty(v: unknown): string | null {
   if (v === null || v === undefined) return null
   const s = String(v).trim()
   return s.length ? s : null
 }
-function sanitizeNit(v: string) {
+
+function sanitizeNit(v: string): string {
   return String(v).replace(/[^\d\-\.]/g, '')
 }
+
 function placaValida(placa?: string | null): boolean {
   if (!placa) return false
   const rex = /^(?:[A-Z]{3}\d{3}|[A-Z]{3}\d{2}[A-Z])$/
   return rex.test(placa.toUpperCase())
 }
+
 function canConfirm(t: FacturacionTicket, _hard: boolean): boolean {
   const totalNum = t.total && t.total > 0 ? t.total : t.totalFactura || 0
   const base =
@@ -531,6 +873,7 @@ function canConfirm(t: FacturacionTicket, _hard: boolean): boolean {
     (!!t.sedeId || !!t.agenteId)
   return base
 }
+
 async function isContentDuplicate(t: FacturacionTicket): Promise<boolean> {
   const totalNum = t.total && t.total > 0 ? t.total : t.totalFactura || 0
   if (!t.placa || !totalNum || !t.fechaPago) return false
@@ -543,114 +886,74 @@ async function isContentDuplicate(t: FacturacionTicket): Promise<boolean> {
     .where('total', totalNum)
     .whereBetween('fecha_pago', [min!, max!])
     .count('* as total')
-    .first()
-
-  const n = Number(row?.$extras.total || 0)
+  const n = Number(row[0]?.$extras.total || 0)
   return n > 0
 }
 
 /* =================== DTO / Serializadores =================== */
-function buildTicketDTO(ticket: FacturacionTicket) {
-  const base = ticket.serialize()
-  const pre = (ticket as any).$preloaded || {}
 
-  const turno = pre.turno ? serializeTurnoEnriquecido(pre.turno as TurnoRtm) : null
-  const dateoFromTurno = (pre.turno as any)?.captacionDateo ?? null
-  const dateoEnriquecido =
-    base.dateo ||
-    (dateoFromTurno
-      ? {
-          id: dateoFromTurno.id,
-          canal: dateoFromTurno.canal,
-          agente: dateoFromTurno.agente
-            ? {
-                id: dateoFromTurno.agente.id,
-                nombre: dateoFromTurno.agente.nombre,
-                tipo: dateoFromTurno.agente.tipo,
-              }
-            : null,
-          asesorConvenio: dateoFromTurno.asesorConvenio
-            ? {
-                id: dateoFromTurno.asesorConvenio.id,
-                nombre: dateoFromTurno.asesorConvenio.nombre,
-                tipo: dateoFromTurno.asesorConvenio.tipo,
-              }
-            : null,
-          convenio: dateoFromTurno.convenio
-            ? {
-                id: dateoFromTurno.convenio.id,
-                codigo: dateoFromTurno.convenio.codigo,
-                nombre: dateoFromTurno.convenio.nombre,
-              }
-            : null,
-        }
-      : null)
+function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
+  const t = turno as unknown as ITurnoSnapshotReadable
 
-  // Si existen snapshots, úsalos; si no, cae al turno.
-  const servicioCodigo =
-    (base as any).servicio_codigo ?? turno?.servicio?.codigoServicio ?? null
-  const servicioNombre =
-    (base as any).servicio_nombre ?? turno?.servicio?.nombreServicio ?? null
-  const tipoVehiculoSnapshot =
-    (base as any).tipo_vehiculo ?? turno?.tipoVehiculo ?? null
-  const turnoGlobal = (base as any).turno_global ?? turno?.turnoNumero ?? null
-  const turnoServicio = (base as any).turno_servicio ?? turno?.turnoNumeroServicio ?? null
-
-  return {
-    ...base,
-    turno,
-    dateo: dateoEnriquecido,
-
-    turnoGlobal,
-    turnoServicio,
-    tipoVehiculoSnapshot,
-    servicioCodigo,
-    servicioNombre,
-  }
-}
-
-function serializeTurnoEnriquecido(turno: TurnoRtm) {
-  // @ts-ignore
-  const s = turno.$preloaded || {}
-
-  const servicio = s.servicio
-    ? { id: s.servicio.id, codigoServicio: s.servicio.codigo, nombreServicio: s.servicio.nombre }
+  const servicio: IServicioDTO | null = t.$preloaded?.servicio
+    ? {
+        id: t.$preloaded.servicio.id,
+        codigoServicio: t.$preloaded.servicio.codigoServicio ?? null,
+        nombreServicio: t.$preloaded.servicio.nombreServicio ?? null,
+      }
     : null
 
-  const usuario = s.usuario
-    ? { id: s.usuario.id, nombres: s.usuario.nombres, apellidos: s.usuario.apellidos }
+  const usuario: IUsuarioDTO | null = t.$preloaded?.usuario
+    ? {
+        id: t.$preloaded.usuario.id,
+        nombres: t.$preloaded.usuario.nombres ?? null,
+        apellidos: t.$preloaded.usuario.apellidos ?? null,
+      }
     : null
 
-  const sede = s.sede ? { id: s.sede.id, nombre: s.sede.nombre } : null
-
-  const agenteCaptacion = s.agenteCaptacion
-    ? { id: s.agenteCaptacion.id, nombre: s.agenteCaptacion.nombre, tipo: s.agenteCaptacion.tipo }
+  const sede: ISedeDTO | null = t.$preloaded?.sede
+    ? { id: t.$preloaded.sede.id, nombre: t.$preloaded.sede.nombre }
     : null
 
-  const dateo = s.captacionDateo || null
-  const asesorConvenio = dateo?.asesorConvenio
-    ? { id: dateo.asesorConvenio.id, nombre: dateo.asesorConvenio.nombre, tipo: dateo.asesorConvenio.tipo }
+  const agenteCaptacion: IAgenteDTO | null = t.$preloaded?.agenteCaptacion
+    ? {
+        id: t.$preloaded.agenteCaptacion.id,
+        nombre: t.$preloaded.agenteCaptacion.nombre,
+        tipo: t.$preloaded.agenteCaptacion.tipo ?? null,
+      }
     : null
 
-  const convenio = dateo?.convenio
-    ? { id: dateo.convenio.id, codigo: dateo.convenio.codigo, nombre: dateo.convenio.nombre }
+  const dateo = t.$preloaded?.captacionDateo ?? null
+  const asesorConvenio: IAgenteDTO | null = dateo?.asesorConvenio
+    ? {
+        id: dateo.asesorConvenio.id,
+        nombre: dateo.asesorConvenio.nombre,
+        tipo: dateo.asesorConvenio.tipo ?? null,
+      }
+    : null
+
+  const convenio: IConvenioDTO | null = dateo?.convenio
+    ? {
+        id: dateo.convenio.id,
+        codigo: dateo.convenio.codigo ?? null,
+        nombre: dateo.convenio.nombre,
+      }
     : null
 
   return {
-    id: turno.id,
-    turnoNumero: (turno as any).turnoNumero,
-    turnoNumeroServicio: (turno as any).turnoNumeroServicio,
-    turnoCodigo: (turno as any).turnoCodigo,
-    placa: (turno as any).placa,
-    estado: (turno as any).estado,
-    fecha: (turno as any).fecha?.toISODate?.() || (turno as any).fecha,
-    horaIngreso: (turno as any).horaIngreso,
-    horaSalida: (turno as any).horaSalida,
-    tiempoServicio: (turno as any).tiempoServicio,
-    tipoVehiculo: (turno as any).tipoVehiculo,
-    medioEntero: (turno as any).medioEntero,
-    canalAtribucion: (turno as any).canalAtribucion,
-
+    id: (turno as unknown as { id: number }).id,
+    turnoNumero: t.turnoNumero ?? null,
+    turnoNumeroServicio: t.turnoNumeroServicio ?? null,
+    turnoCodigo: t.turnoCodigo ?? null,
+    placa: t.placa ?? null,
+    estado: t.estado ?? null,
+    fecha: t.fecha ?? null,
+    horaIngreso: t.horaIngreso ?? null,
+    horaSalida: t.horaSalida ?? null,
+    tiempoServicio: t.tiempoServicio ?? null,
+    tipoVehiculo: t.tipoVehiculo ?? null,
+    medioEntero: t.medioEntero ?? null,
+    canalAtribucion: t.canalAtribucion ?? null,
     servicio,
     usuario,
     sede,
@@ -660,8 +963,109 @@ function serializeTurnoEnriquecido(turno: TurnoRtm) {
   }
 }
 
+function buildTicketDTO(ticket: FacturacionTicket): ITicketDTO {
+  const s = ticket.serialize() as any // Adonis devuelve camelCase
+
+  // Helper para coger camelCase o snake_case si existiera
+  const pick = (camel: string, snake: string) => (s[camel] ?? s[snake] ?? null)
+
+  const pre = (ticket as any).$preloaded || {}
+  const turnoDTO: ITurnoDTO | null = pre.turno ? serializeTurnoEnriquecido(pre.turno as TurnoRtm) : null
+  const dateoFromTurno = (pre.turno as any)?.$preloaded?.captacionDateo ?? null
+
+  const dateoEnriquecido: IDateoDTO | null =
+    s.dateo ?? (dateoFromTurno
+      ? {
+          id: dateoFromTurno.id,
+          canal: dateoFromTurno.canal,
+          agente: dateoFromTurno.agente
+            ? { id: dateoFromTurno.agente.id, nombre: dateoFromTurno.agente.nombre, tipo: dateoFromTurno.agente.tipo ?? null }
+            : null,
+          asesorConvenio: dateoFromTurno.asesorConvenio
+            ? { id: dateoFromTurno.asesorConvenio.id, nombre: dateoFromTurno.asesorConvenio.nombre, tipo: dateoFromTurno.asesorConvenio.tipo ?? null }
+            : null,
+          convenio: dateoFromTurno.convenio
+            ? { id: dateoFromTurno.convenio.id, codigo: dateoFromTurno.convenio.codigo ?? null, nombre: dateoFromTurno.convenio.nombre }
+            : null,
+        }
+      : null)
+
+  const servicioCodigo = pick('servicioCodigo', 'servicio_codigo') ?? turnoDTO?.servicio?.codigoServicio ?? null
+  const servicioNombre = pick('servicioNombre', 'servicio_nombre') ?? turnoDTO?.servicio?.nombreServicio ?? null
+  const tipoVehiculoSnapshot = pick('tipoVehiculoSnapshot', 'tipo_vehiculo') ?? turnoDTO?.tipoVehiculo ?? null
+  const turnoGlobal = pick('turnoNumeroGlobal', 'turno_numero_global') ?? turnoDTO?.turnoNumero ?? null
+  const turnoServicio = pick('turnoNumeroServicio', 'turno_numero_servicio') ?? turnoDTO?.turnoNumeroServicio ?? null
+  const turnoCodigo = pick('turnoCodigo', 'turno_codigo') ?? turnoDTO?.turnoCodigo ?? null
+  const placaTurno = pick('placaTurno', 'placa_turno') ?? turnoDTO?.placa ?? null
+
+  const sedeNombre = pick('sedeNombre', 'sede_nombre') ?? turnoDTO?.sede?.nombre ?? null
+  const funcionarioNombre =
+    pick('funcionarioNombre', 'funcionario_nombre') ??
+    (turnoDTO?.usuario ? [turnoDTO.usuario.nombres, turnoDTO.usuario.apellidos].filter(Boolean).join(' ') : null)
+
+  const canalAtribucion = pick('canalAtribucion', 'canal_atribucion') ?? turnoDTO?.canalAtribucion ?? null
+  const medioEntero = pick('medioEntero', 'medio_entero') ?? turnoDTO?.medioEntero ?? null
+
+  const dto: ITicketDTO = {
+    id: s.id,
+    estado: s.estado,
+    hash: s.hash,
+    filePath: pick('filePath', 'file_path'),
+    fileMime: pick('fileMime', 'file_mime'),
+    fileSize: pick('fileSize', 'file_size'),
+    imageRotation: pick('imageRotation', 'image_rotation'),
+    createdAt: pick('createdAt', 'created_at'),
+    updatedAt: pick('updatedAt', 'updated_at'),
+
+    placa: s.placa ?? null,
+    fechaPago: pick('fechaPago', 'fecha_pago'),
+    total: s.total ?? null,
+    subtotal: pick('subtotal', 'subtotal'),
+    iva: pick('iva', 'iva'),
+    totalFactura: pick('totalFactura', 'total_factura'),
+    vendedorText: pick('vendedorText', 'vendedor_text'),
+    prefijo: s.prefijo ?? null,
+    consecutivo: s.consecutivo ?? null,
+
+    // snapshots extra útiles para el modal
+    nit: s.nit ?? null,
+    pin: s.pin ?? null,
+    marca: s.marca ?? null,
+
+    turnoId: pick('turnoId', 'turno_id'),
+    servicioId: pick('servicioId', 'servicio_id'),
+    sedeId: pick('sedeId', 'sede_id'),
+    agenteId: pick('agenteId', 'agente_id'),
+    dateoId: pick('dateoId', 'dateo_id'),
+
+    servicioCodigo,
+    servicioNombre,
+    tipoVehiculoSnapshot,
+    turnoGlobal,
+    turnoServicio,
+    turnoCodigo,
+    placaTurno,
+    sedeNombre,
+    funcionarioNombre,
+    canalAtribucion,
+    medioEntero,
+
+    turno: turnoDTO,
+    dateo: dateoEnriquecido,
+  }
+
+  return dto
+}
+
 /* ======================== OCR Fake (ejemplo) ======================== */
-function fakeOCR() {
+
+function fakeOCR(): {
+  text: string
+  confidence: { placa: number; total: number; fecha: number; agente: number }
+  placa: string
+  total: number
+  fechaHora: string
+} {
   const placas = ['ABC123', 'QQX91C', 'FDS456']
   const placa = placas[Math.floor(Math.random() * placas.length)]
   const totals = [90000, 120000, 150000, 307850]
@@ -673,6 +1077,6 @@ function fakeOCR() {
     confidence: { placa: 0.86, total: 0.92, fecha: 0.78, agente: 0.55 },
     placa,
     total,
-    fechaHora,
+    fechaHora: fechaHora || DateTime.now().toISO(),
   }
 }

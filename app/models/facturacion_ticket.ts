@@ -73,6 +73,29 @@ export default class FacturacionTicket extends BaseModel {
   @belongsTo(() => Servicio, { foreignKey: 'servicioId' })
   declare servicio: BelongsTo<typeof Servicio>
 
+  /* ============== SNAPSHOTS persistidos (turno/servicio/vehículo) ============== */
+  @column({ columnName: 'turno_numero_global' }) declare turnoNumeroGlobal: number | null
+  @column({ columnName: 'turno_numero_servicio' }) declare turnoNumeroServicio: number | null
+  @column({ columnName: 'turno_codigo' }) declare turnoCodigo: string | null
+
+  @column({ columnName: 'tipo_vehiculo' }) declare tipoVehiculoSnapshot: string | null
+  @column({ columnName: 'placa_turno' }) declare placaTurno: string | null
+
+  @column({ columnName: 'servicio_codigo' }) declare servicioCodigo: string | null
+  @column({ columnName: 'servicio_nombre' }) declare servicioNombre: string | null
+
+  @column({ columnName: 'sede_nombre' }) declare sedeNombre: string | null
+  @column({ columnName: 'funcionario_nombre' }) declare funcionarioNombre: string | null
+
+  @column({ columnName: 'canal_atribucion' }) declare canalAtribucion: string | null
+  @column({ columnName: 'medio_entero' }) declare medioEntero: string | null
+
+  /* ============== SNAPSHOTS de captación (si aplica) ============== */
+  @column({ columnName: 'captacion_canal' }) declare captacionCanal: string | null
+  @column({ columnName: 'agente_comercial_nombre' }) declare agenteComercialNombre: string | null
+  @column({ columnName: 'asesor_convenio_nombre' }) declare asesorConvenioNombre: string | null
+  @column({ columnName: 'convenio_nombre' }) declare convenioNombre: string | null
+
   /* ============== Comprobante ============== */
   @column() declare prefijo: string | null
   @column() declare consecutivo: string | null
