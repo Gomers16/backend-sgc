@@ -271,7 +271,11 @@ export default class FacturacionTicketsController {
 
     // Duplicado por hash
     const dup = await FacturacionTicket.findBy('hash', hash)
-    if (dup) return response.conflict({ message: 'Este ticket ya fue cargado (hash duplicado)', id: dup.id })
+    if (dup)
+      return response.conflict({
+        message: 'Este ticket ya fue cargado (hash duplicado)',
+        id: dup.id,
+      })
 
     // Guardar archivo
     const now = DateTime.now()
@@ -511,7 +515,7 @@ export default class FacturacionTicketsController {
     return ticket
   }
 
-  /**
+   /**
    * POST /facturacion/tickets/:id/confirmar
    * Confirma y persiste snapshots del turno/servicio en la fila.
    * Genera comisiones según reglas RTM + dateo.
@@ -581,6 +585,17 @@ export default class FacturacionTicketsController {
     }
 
     await ticket.save()
+
+    // ✅ NUEVO: marcar el turno como facturado y guardar hora
+    if (ticket.turnoId) {
+      const turnoToUpdate = await TurnoRtm.find(ticket.turnoId)
+      if (turnoToUpdate) {
+        const nowBog = DateTime.local().setZone('America/Bogota')
+        turnoToUpdate.tieneFacturacion = true
+        turnoToUpdate.horaFacturacion = nowBog.toFormat('HH:mm:ss')
+        await turnoToUpdate.save()
+      }
+    }
 
     // Hook de comisiones (no bloqueante)
     try {

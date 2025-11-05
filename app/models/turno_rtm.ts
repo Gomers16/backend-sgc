@@ -1,7 +1,7 @@
 // app/models/turno_rtm.ts
 import { DateTime } from 'luxon'
-import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
-import type { BelongsTo } from '@adonisjs/lucid/types/relations'
+import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
+import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 
 import Usuario from '#models/usuario'
 import Sede from '#models/sede'
@@ -11,6 +11,8 @@ import Cliente from '#models/cliente'
 import ClaseVehiculo from '#models/clase_vehiculos'
 import AgenteCaptacion from '#models/agente_captacion'
 import CaptacionDateo from '#models/captacion_dateo'
+import FacturacionTicket from '#models/facturacion_ticket' // 👈 facturación
+import Certificacion from '#models/certificacion' // 👈 certificación
 
 export type TipoVehiculoUI =
   | 'Liviano Particular'
@@ -83,6 +85,13 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tiempo_servicio' })
   declare tiempoServicio: string | null
 
+  // Hora de facturación y bandera (para la etapa "Facturación")
+  @column({ columnName: 'hora_facturacion' })
+  declare horaFacturacion: string | null
+
+  @column({ columnName: 'tiene_facturacion' })
+  declare tieneFacturacion: boolean
+
   @column({ columnName: 'turno_numero' })
   declare turnoNumero: number
 
@@ -99,10 +108,9 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: TipoVehiculoUI
 
-  // ── Captación “plana” (LEGADO). **Ahora nullable y sin fallback.**
+  // ── Captación “plana” (LEGADO)
   @column({
     columnName: 'medio_entero',
-    // No serializar string vacío como 'Fachada'; respeta null.
     serialize: (value?: MedioEntero | null) => value ?? null,
   })
   declare medioEntero: MedioEntero | null
@@ -111,7 +119,7 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare observaciones: string | null
 
-  // ── Atribución final simple. **Ahora nullable y sin fallback.**
+  // ── Atribución final simple
   @column({
     columnName: 'canal_atribucion',
     serialize: (value?: CanalAtribucion | null) => value ?? null,
@@ -127,4 +135,12 @@ export default class TurnoRtm extends BaseModel {
 
   @column.dateTime({ autoCreate: true, autoUpdate: true, columnName: 'updated_at' })
   declare updatedAt: DateTime
+
+  // ── Relación con facturación (tickets de facturación asociados al turno)
+  @hasMany(() => FacturacionTicket, { foreignKey: 'turnoId' })
+  declare facturacionTickets: HasMany<typeof FacturacionTicket>
+
+  // ── Relación con certificaciones (pantallazos de FLUR asociados al turno)
+  @hasMany(() => Certificacion, { foreignKey: 'turnoId' })
+  declare certificaciones: HasMany<typeof Certificacion>
 }

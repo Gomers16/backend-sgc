@@ -639,35 +639,46 @@ router
       })
       .where('id', /^[0-9]+$/)
 
+    // start/routes.ts - SECCIÓN DE COMISIONES CORREGIDA
+
     /* =============================== COMISIONES ======================== */
+    // ⚠️ IMPORTANTE: Las rutas específicas deben ir ANTES de las rutas con :id
+
+    // Listado (debe ir primero)
     router.get('/comisiones', async (ctx) => {
       const { default: ComisionesController } = await import('#controllers/comisiones_controller')
       return new ComisionesController().index(ctx)
     })
+
+    // Rutas con :id (deben ir después del listado)
     router
       .get('/comisiones/:id', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().show(ctx)
       })
       .where('id', /^[0-9]+$/)
+
     router
       .patch('/comisiones/:id/valores', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().actualizarValores(ctx)
       })
       .where('id', /^[0-9]+$/)
+
     router
       .post('/comisiones/:id/aprobar', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().aprobar(ctx)
       })
       .where('id', /^[0-9]+$/)
+
     router
       .post('/comisiones/:id/pagar', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().pagar(ctx)
       })
       .where('id', /^[0-9]+$/)
+
     router
       .post('/comisiones/:id/anular', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
@@ -724,6 +735,25 @@ router
         return new Facturacion().confirmar(ctx)
       })
       .where('id', /^[0-9]+$/)
+
+    /* ============================ CERTIFICACIONES ====================== */
+    // Crear certificación (subir imagen + finalizar turno)
+    router.post('/certificaciones', async (ctx) => {
+      const { default: CertificacionesController } = await import(
+        '#controllers/certificaciones_controller'
+      )
+      return new CertificacionesController().store(ctx)
+    })
+
+    // Ver certificación por turno
+    router
+      .get('/certificaciones/turno/:turnoId', async (ctx) => {
+        const { default: CertificacionesController } = await import(
+          '#controllers/certificaciones_controller'
+        )
+        return new CertificacionesController().showByTurno(ctx)
+      })
+      .where('turnoId', /^[0-9]+$/)
 
     /* =============================== OCR (BACKEND) ===================== */
     router.post('/ocr/parse-ticket', async (ctx) => {

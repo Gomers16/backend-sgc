@@ -9,6 +9,7 @@ import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import Usuario from '#models/usuario'
+import TurnoRtm from '#models/turno_rtm' // 👈 NUEVO
 
 export type Canal = 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES'
 export type Origen = 'UI' | 'WHATSAPP' | 'IMPORT'
@@ -133,6 +134,10 @@ export default class CaptacionDateo extends BaseModel {
 
   @belongsTo(() => Cliente, { foreignKey: 'clienteId' })
   declare cliente: BelongsTo<typeof Cliente>
+
+  // 👇 NUEVA RELACIÓN para que el preload('turno') funcione
+  @belongsTo(() => TurnoRtm, { foreignKey: 'consumidoTurnoId' })
+  declare turno: BelongsTo<typeof TurnoRtm>
 
   // ===== Normalización =====
   @beforeSave()

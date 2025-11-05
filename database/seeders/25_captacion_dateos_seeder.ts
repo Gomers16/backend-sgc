@@ -51,8 +51,9 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
       // ===== Ventana para crear "recientes" =====
       const TTL_SIN_CONSUMIR = Number(process.env.TTL_SIN_CONSUMIR_DIAS ?? 7) // ej. 7
       const MAX_DIAS_ATRAS = Number(process.env.DATEOS_MAX_DIAS_ATRAS ?? 5) // ej. 5
-      // Nunca generes más atrás que el TTL-1, para que salgan vigentes
-      const WINDOW_DAYS = Math.max(0, Math.min(MAX_DIAS_ATRAS, TTL_SIN_CONSUMIR - 1))
+      // Nunca generes más atrás que el TTL-1, para que salgan vigentes.
+      // Forzamos que la ventana máxima sea 1 día (hoy o ayer) para el tema de vencimiento.
+      const WINDOW_DAYS = Math.min(1, Math.max(0, Math.min(MAX_DIAS_ATRAS, TTL_SIN_CONSUMIR - 1)))
 
       // ===== 1) Datos requeridos =====
       const conveniosActivos = await Convenio.query({ client: trx })
@@ -114,7 +115,7 @@ export default class CaptacionDateosSeeder extends BaseSeeder {
           convenioId = null
         }
 
-        // ⏱️ Fecha de creación **reciente** (dentro de la ventana calculada)
+        // ⏱️ Fecha de creación **reciente** (dentro de la ventana calculada: hoy o 1 día atrás)
         const createdAt = hoy.minus({
           days: rand(0, WINDOW_DAYS),
           hours: rand(0, 23),

@@ -10,6 +10,7 @@ import Servicio from '#models/servicio'
 import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
 import CaptacionDateo from '#models/captacion_dateo'
+import FacturacionTicket from '#models/facturacion_ticket' // 👈 NUEVO
 
 // ===== Helpers =====
 const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss') // DATETIME (sin ms/offset)
@@ -137,6 +138,7 @@ export default class TurnosRtmController {
         .preload('cliente')
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
+        .preload('certificaciones') // 👈 NUEVO
 
       // Fechas (columna DATE): usar yyyy-mm-dd
       if (fechaInicio && fechaFin) {
@@ -203,7 +205,32 @@ export default class TurnosRtmController {
 
       const turnos = await query.orderBy('fecha', 'desc').orderBy('turno_numero', 'desc')
 
-      return response.ok(turnos)
+      // 👇👇 NUEVO: calcular bandera tieneFacturacion por turno (estado CONFIRMADA)
+      const turnoIds = turnos.map((t) => t.id)
+
+      let payload: any[] = []
+      if (turnoIds.length > 0) {
+        const facturadas = await FacturacionTicket.query()
+          .whereIn('turno_id', turnoIds)
+          .where('estado', 'CONFIRMADA')
+          .select('turno_id')
+
+        const turnosConFactura = new Set<number>(
+          facturadas.map((f) => (f as any).turnoId ?? (f as any).turno_id)
+        )
+
+        payload = turnos.map((t) => {
+          const plain = t.serialize()
+          return {
+            ...plain,
+            tieneFacturacion: turnosConFactura.has(t.id),
+            // 👇 NUEVO: al menos una certificación asociada
+            tieneCertificacion: (t.certificaciones ?? []).length > 0,
+          }
+        })
+      }
+
+      return response.ok(payload)
     } catch (error) {
       console.error('Error en index turnos:', error)
       return response.internalServerError({ message: 'Error al obtener turnos' })
@@ -222,6 +249,8 @@ export default class TurnosRtmController {
         .preload('cliente')
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
+        .preload('facturacionTickets') // 👈 NUEVO
+        .preload('certificaciones') // 👈 NUEVO
         .first()
 
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
@@ -229,9 +258,9 @@ export default class TurnosRtmController {
     } catch (error) {
       console.error('Error en show turno:', error)
       return response.internalServerError({ message: 'Error al obtener el turno' })
-    }
- }
-   /**
+   }
+  }
+  /**
    * Crear turno (flujo corregido):
    * - Valida duplicado diario por placa+servicio+sede.
    * - Valida ventana de bloqueo por servicio si hubo un turno FINALIZADO previo.

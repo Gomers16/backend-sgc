@@ -74,6 +74,10 @@ export default class TurnosRtms extends BaseSchema {
       table.string('hora_salida').nullable()
       table.string('tiempo_servicio').nullable()
 
+      // ✅ NUEVO: facturación del turno
+      table.boolean('tiene_facturacion').notNullable().defaultTo(false)
+      table.string('hora_facturacion').nullable()
+
       // Consecutivos
       table.integer('turno_numero').notNullable() // consecutivo global por sede+día
       table.integer('turno_numero_servicio').notNullable() // ✅ consecutivo por servicio (sede+día)
