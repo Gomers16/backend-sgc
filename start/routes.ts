@@ -129,6 +129,7 @@ router
       { path: 'entidades-saluds', controller: '#controllers/entidades_saluds_controller' },
       { path: 'servicios', controller: '#controllers/servicios_controller' },
       { path: 'ciudades', controller: '#controllers/ciudades_controller' },
+      { path: 'cargos', controller: '#controllers/cargos_controller' }, // 👈 AGREGADO
     ] as const
 
     for (const { path, controller } of selectors) {

@@ -258,8 +258,9 @@ export default class TurnosRtmController {
     } catch (error) {
       console.error('Error en show turno:', error)
       return response.internalServerError({ message: 'Error al obtener el turno' })
-   }
+    }
   }
+
   /**
    * Crear turno (flujo corregido):
    * - Valida duplicado diario por placa+servicio+sede.
@@ -405,10 +406,13 @@ export default class TurnosRtmController {
       }
 
       // ===== 3) Calcular consecutivos en la MISMA transacción =====
+      // Solo cuentan turnos ACTIVO / FINALIZADO con número > 0
       const rowGlobal = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
         .where('fecha', hoyISO)
+        .where('turno_numero', '>', 0)
+        .whereIn('estado', ['activo', 'finalizado'])
         .max('turno_numero as max')
         .first()
       const nextGlobal: number = Number(rowGlobal?.max ?? 0) + 1
@@ -418,6 +422,8 @@ export default class TurnosRtmController {
         .where('sede_id', usuarioCreador.sedeId!)
         .where('servicio_id', servicio.id)
         .where('fecha', hoyISO)
+        .where('turno_numero_servicio', '>', 0)
+        .whereIn('estado', ['activo', 'finalizado'])
         .max('turno_numero_servicio as max')
         .first()
       const nextPorServicio: number = Number(rowSvc?.max ?? 0) + 1
@@ -746,7 +752,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Cancelar turno. */
+  /** Cancelar turno: cambia estado y libera consecutivos (los vuelve negativos). */
   public async cancelar({ params, response, request }: HttpContext) {
     try {
       const { usuarioId } = request.only(['usuarioId'])
@@ -762,7 +768,18 @@ export default class TurnosRtmController {
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
 
+      // Estado cancelado
       turno.estado = 'cancelado'
+
+      // 👉 LIBERAR consecutivos: pasarlos a negativos para que no bloqueen los positivos
+      if (turno.turnoNumero && turno.turnoNumero > 0) {
+        turno.turnoNumero = -turno.turnoNumero
+      }
+      const tAny = turno as any
+      if (tAny.turnoNumeroServicio && tAny.turnoNumeroServicio > 0) {
+        tAny.turnoNumeroServicio = -tAny.turnoNumeroServicio
+      }
+
       await turno.save()
       return response.ok({ message: 'Turno cancelado', turnoId: turno.id })
     } catch (error) {
@@ -869,10 +886,12 @@ export default class TurnosRtmController {
 
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
-      // Global (sede+día): max(turno_numero)+1
+      // Global (sede+día): max(turno_numero)+1 (solo activos/finalizados con número > 0)
       const rowGlobal = await Database.from('turnos_rtms')
         .where('fecha', hoy)
         .andWhere('sede_id', usuarioSolicitante.sedeId)
+        .where('turno_numero', '>', 0)
+        .whereIn('estado', ['activo', 'finalizado'])
         .max('turno_numero as max')
         .first()
       const siguiente = Number(rowGlobal?.max ?? 0) + 1
@@ -896,6 +915,8 @@ export default class TurnosRtmController {
           .where('fecha', hoy)
           .andWhere('sede_id', usuarioSolicitante.sedeId)
           .andWhere('servicio_id', sid!)
+          .where('turno_numero_servicio', '>', 0)
+          .whereIn('estado', ['activo', 'finalizado'])
           .max('turno_numero_servicio as max')
           .first()
 
@@ -1006,15 +1027,20 @@ export default class TurnosRtmController {
           ? `${(t as any).agenteCaptacion.nombre} (${(t as any).agenteCaptacion.tipo})`
           : '-'
 
-        const turnoServicio =
+        const isCancelOrInactive = t.estado === 'cancelado' || t.estado === 'inactivo'
+
+        const turnoGlobal = isCancelOrInactive ? '' : t.turnoNumero
+
+        const turnoServicioRaw =
           (t as any).turnoNumeroServicio ?? (t as any).turno_numero_servicio ?? ''
+        const turnoServicio = isCancelOrInactive ? '' : turnoServicioRaw
 
         worksheet.addRow({
           fecha: fechaExcel,
-          turnoGlobal: t.turnoNumero,
+          turnoGlobal,
           turnoServicio,
           servicio: t.servicio
-            ? `${t.servicio.codigoServicio} — ${t.servicio.nombreServicio}`
+            ? `${t.servicio.codigoServicio} — t.servicio.nombreServicio`
             : '-',
           horaIngreso: t.horaIngreso,
           horaSalida: t.horaSalida || '-',
