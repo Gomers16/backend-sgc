@@ -224,21 +224,71 @@ export default class CaptacionDateosController {
   /**
    * POST /captacion-dateos
    * body: { canal, agente_id?, placa, telefono?, origen, observacion?, imagen_*?, convenio_id? }
+   *
+   * Reglas de negocio:
+   *  - Si el usuario logueado tiene AgenteCaptacion y no mandan agente_id, se usa ese.
+   *  - Si canal = 'ASESOR':
+   *      * ASESOR_COMERCIAL => canal interno ASESOR_COMERCIAL
+   *      * ASESOR_CONVENIO  => canal interno ASESOR_CONVENIO
+   *  - Si el agente es ASESOR_CONVENIO:
+   *      * asesor_convenio_id = agente.id
+   *      * si no mandan convenio_id, se intenta buscar Convenio por nombre (1:1).
+   *  - Si el agente es ASESOR_COMERCIAL y viene convenio_id:
+   *      * se intenta buscar asesor_convenio 1:1 por nombre del Convenio.
    */
-  public async store({ request, response }: HttpContext) {
-    let canal = String(request.input('canal') || '').toUpperCase()
-    if (canal === 'ASESOR') canal = 'ASESOR_COMERCIAL'
-    if (!(CANALES_DB as readonly string[]).includes(canal)) {
+  public async store({ request, response, auth }: HttpContext) {
+    // =========== Agente (por body o por usuario logueado) ===========
+    let agenteId = readOptionalNumber(
+      (request.input('agente_id') ?? request.input('agenteId')) as unknown
+    )
+
+    let agente: AgenteCaptacion | null = null
+
+    if (agenteId === null && auth.user) {
+      // Buscar agente del usuario logueado
+      agente = await AgenteCaptacion.findBy('usuarioId', auth.user.id)
+      if (agente) {
+        agenteId = agente.id
+      }
+    }
+
+    // =========== Canal (resolviendo alias ASESOR según tipo agente) ===========
+    let canalRaw = String(request.input('canal') || '').toUpperCase()
+    if (!canalRaw) canalRaw = 'ASESOR' // por defecto en UI
+
+    let canal: CanalDb
+
+    if (canalRaw === 'ASESOR') {
+      // Necesitamos conocer el agente para decidir si es COMERCIAL o CONVENIO
+      if (!agente && agenteId !== null) {
+        agente = await AgenteCaptacion.find(agenteId)
+      }
+
+      const tipo = (agente?.tipo || '').toUpperCase()
+      if (tipo === 'ASESOR_CONVENIO') {
+        canal = 'ASESOR_CONVENIO'
+      } else {
+        // por defecto, comercial
+        canal = 'ASESOR_COMERCIAL'
+      }
+    } else if ((CANALES_DB as readonly string[]).includes(canalRaw)) {
+      canal = canalRaw as CanalDb
+    } else {
       return response.badRequest({ message: 'canal inválido' })
     }
 
-    const agenteId = readOptionalNumber(
-      (request.input('agente_id') ?? request.input('agenteId')) as unknown
-    )
-    const convenioId = readOptionalNumber(
+    // =========== Convenio (body) ===========
+    let convenioId = readOptionalNumber(
       (request.input('convenio_id') ?? request.input('convenioId')) as unknown
     )
+    let convenio: Convenio | null = null
 
+    if (convenioId !== null) {
+      convenio = await Convenio.find(convenioId)
+      if (!convenio) return response.badRequest({ message: 'convenio_id no existe' })
+    }
+
+    // =========== Campos básicos ===========
     const placa = normalizePlaca(request.input('placa') as string | undefined)
     const telefono = normalizePhone(request.input('telefono') as string | undefined)
     const origen = request.input('origen') as OrigenVal
@@ -263,25 +313,53 @@ export default class CaptacionDateosController {
     if (!placa) {
       return response.badRequest({ message: 'La placa es obligatoria' })
     }
+
+    // Necesidad de agente según canal
     if (
       (canal === 'ASESOR_COMERCIAL' || canal === 'ASESOR_CONVENIO' || canal === 'TELE') &&
       agenteId === null
     ) {
       return response.badRequest({ message: 'agente_id es requerido para canal ASESOR/TELE' })
     }
-    if (agenteId !== null) {
-      const ag = await AgenteCaptacion.find(agenteId)
-      if (!ag) return response.badRequest({ message: 'agente_id no existe' })
+
+    if (agenteId !== null && !agente) {
+      agente = await AgenteCaptacion.find(agenteId)
+      if (!agente) return response.badRequest({ message: 'agente_id no existe' })
     }
 
-    // ✅ Regla de negocio: si canal es asesor, convenio es obligatorio
+    // =========== LÓGICA nueva asesor / convenio ===========
+    let asesorConvenioId: number | null = null
+
+    // Caso C: el agente es ASESOR_CONVENIO → se lleva todo (dateo + placa)
+    if (agente && agente.tipo === 'ASESOR_CONVENIO') {
+      asesorConvenioId = agente.id
+
+      // Si no vino convenioId, intentamos buscar un convenio 1:1 por nombre
+      if (!convenio && convenioId === null) {
+        const convByName = await Convenio.query().where('nombre', agente.nombre).first()
+        if (convByName) {
+          convenio = convByName
+          convenioId = convByName.id
+        }
+      }
+    }
+
+    // Caso B: ASESOR_COMERCIAL + convenio → buscamos el asesor_convenio 1:1 por nombre
+    if (!asesorConvenioId && convenio) {
+      const asesorConv = await AgenteCaptacion.query()
+        .where('tipo', 'ASESOR_CONVENIO')
+        .where('nombre', convenio.nombre)
+        .first()
+
+      if (asesorConv) {
+        asesorConvenioId = asesorConv.id
+      }
+    }
+
+    // ✅ Regla de negocio: si canal es asesor (comercial o convenio), convenio es obligatorio
     const canalEsAsesor = canal === 'ASESOR_COMERCIAL' || canal === 'ASESOR_CONVENIO'
     if (canalEsAsesor && convenioId === null) {
       return response.badRequest({ message: 'convenio_id es requerido para canal ASESOR' })
-    }
-    if (convenioId !== null) {
-      const conv = await Convenio.find(convenioId)
-      if (!conv) return response.badRequest({ message: 'convenio_id no existe' })
     }
 
     // Exclusividad por placa/teléfono
@@ -311,6 +389,7 @@ export default class CaptacionDateosController {
       canal: canal as Canal,
       agenteId,
       convenioId,
+      asesorConvenioId, // 👈 NUEVO: engancha el asesor del convenio
       placa: placa!,
       telefono,
       origen: origen as Origen,

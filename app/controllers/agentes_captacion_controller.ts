@@ -7,6 +7,11 @@ import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
 import Prospecto from '#models/prospecto'
 
+// 👇 nuevos imports para la ficha comercial
+import CaptacionDateo from '#models/captacion_dateo'
+import Comision from '#models/comision'
+import TurnoRtm from '#models/turno_rtm'
+
 /* ========= Helpers ========= */
 function normalizePhone(value?: string) {
   return value ? value.replace(/\D/g, '') : value
@@ -30,7 +35,6 @@ const ACTIVO_CALC_SQL = `
 
 function rowToPlainWithActivo(model: AgenteCaptacion) {
   const base = model.serialize() as any
-  // 👇 usar $extras para el alias del raw
   const extra = (model as any).$extras?.activo_calc
   const activo = Number(extra) === 1
   return { ...base, activo }
@@ -110,7 +114,6 @@ export default class AgentesCaptacionController {
 
     const paginator = await qbuilder.paginate(page, perPage)
 
-    // ⚠️ No usar serialize() directo; convertimos modelo→plain con $extras
     const data = paginator.all().map(rowToPlainWithActivo)
     const meta = paginator.getMeta()
 
@@ -416,5 +419,97 @@ export default class AgentesCaptacionController {
       .orderBy('convenios.nombre', 'asc')
 
     return rows
+  }
+
+  /** ✅ NUEVO:
+   * GET /agentes-captacion/:id/dateos-detalle?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
+   * Devuelve los dateos del asesor + info del turno + monto de comisiones.
+   */
+  public async dateosDetalle({ params, request }: HttpContext) {
+    const asesorId = Number(params.id)
+
+    const desdeStr = request.input('desde') as string | undefined
+    const hastaStr = request.input('hasta') as string | undefined
+
+    let desdeSql: string | null = null
+    let hastaSql: string | null = null
+
+    if (desdeStr) {
+      const d = DateTime.fromISO(desdeStr + 'T00:00:00')
+      if (d.isValid) desdeSql = d.toSQL()
+    }
+    if (hastaStr) {
+      const h = DateTime.fromISO(hastaStr + 'T23:59:59')
+      if (h.isValid) hastaSql = h.toSQL()
+    }
+
+    // Dateos relacionados al asesor (por distintas columnas posibles)
+    const q = CaptacionDateo.query()
+      .where((qb) => {
+        qb
+          .where('asesor_id', asesorId)
+          .orWhere('agente_id', asesorId)
+          .orWhere('creado_por', asesorId)
+          .orWhere('user_id', asesorId)
+      })
+
+    if (desdeSql) q.where('created_at', '>=', desdeSql)
+    if (hastaSql) q.where('created_at', '<=', hastaSql)
+
+    const dateos = await q
+
+    const result = await Promise.all(
+      dateos.map(async (d) => {
+        // Suma de comisiones del propio asesor para ese dateo
+        const sumRow = await Comision.query()
+          .where('captacion_dateo_id', d.id)
+          .where('asesor_id', asesorId)
+          .sum('monto as total')
+          .first()
+
+        const montoComision = Number(sumRow?.$extras.total || 0)
+
+        // Turno que está usando este dateo (si existe)
+        const turno = await TurnoRtm.query()
+          .where('captacion_dateo_id', d.id)
+          .select(['id', 'turno_numero', 'turno_codigo', 'placa', 'estado'])
+          .first()
+
+        const tAny = turno as any
+        const turnoId = turno?.id ?? null
+        const turnoNumero = tAny?.turnoNumero ?? tAny?.turno_numero ?? null
+        const turnoCodigo = tAny?.turnoCodigo ?? tAny?.turno_codigo ?? null
+        const turnoEstado = tAny?.estado ?? null
+        const turnoPlaca = tAny?.placa ?? null
+
+        const r = String((d as any).resultado || '').toUpperCase()
+        const exitosoFlag =
+          (d as any).exitoso === true ||
+          (d as any).consumidoExitoso === true ||
+          ['EXITOSO', 'COMPLETADO', 'ATENDIDO', 'CONVERTIDO'].includes(r) ||
+          montoComision > 0
+
+        const createdAtIso = (d as any).createdAt?.toISO?.() ?? (d as any).created_at ?? null
+
+        return {
+          id: d.id,
+          canal: (d as any).canal ?? null,
+          placa: (d as any).placa ?? turnoPlaca ?? null,
+          telefono: (d as any).telefono ?? null,
+          resultado: (d as any).resultado ?? null,
+          exitoso: exitosoFlag,
+          // info de turno
+          turno_id: turnoId,
+          turno_numero: turnoNumero,
+          turno_codigo: turnoCodigo,
+          turno_estado: turnoEstado,
+          // monto desde comisiones
+          monto: montoComision,
+          created_at: createdAtIso,
+        }
+      })
+    )
+
+    return { data: result }
   }
 }

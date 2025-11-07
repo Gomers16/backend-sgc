@@ -640,18 +640,41 @@ router
       })
       .where('id', /^[0-9]+$/)
 
-    // start/routes.ts - SECCIÓN DE COMISIONES CORREGIDA
-
     /* =============================== COMISIONES ======================== */
-    // ⚠️ IMPORTANTE: Las rutas específicas deben ir ANTES de las rutas con :id
+    // ⚠️ IMPORTANTE: Rutas de configuración primero (antes de /comisiones/:id)
 
-    // Listado (debe ir primero)
+    // Configuración de comisiones (es_config = true)
+    router.get('/comisiones/config', async (ctx) => {
+      const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+      return new ComisionesController().configsIndex(ctx)
+    })
+
+    router.post('/comisiones/config', async (ctx) => {
+      const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+      return new ComisionesController().configsUpsert(ctx)
+    })
+
+    router
+      .patch('/comisiones/config/:id', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().configsUpdate(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
+    router
+      .delete('/comisiones/config/:id', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().configsDestroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
+    // Listado de comisiones reales
     router.get('/comisiones', async (ctx) => {
       const { default: ComisionesController } = await import('#controllers/comisiones_controller')
       return new ComisionesController().index(ctx)
     })
 
-    // Rutas con :id (deben ir después del listado)
+    // Rutas con :id para comisiones reales
     router
       .get('/comisiones/:id', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')

@@ -109,6 +109,10 @@ function medioFromCanal(
 
 export default class TurnosRtmController {
   /** Lista turnos con filtros (incluye servicioId/servicioCodigo y canal/agente). */
+  // app/controllers/turnos_rtms_controller.ts
+
+  // app/controllers/turnos_rtms_controller.ts
+
   public async index({ request, response }: HttpContext) {
     const {
       fecha,
@@ -121,10 +125,9 @@ export default class TurnosRtmController {
       servicioId,
       servicioCodigo,
 
-      // 🔎 Nuevos filtros
       canalAtribucion,
       agenteId,
-      agenteTipo, // 'ASESOR_INTERNO' | 'ASESOR_EXTERNO' | 'TELEMERCADEO'
+      agenteTipo,
       clienteId,
       vehiculoId,
     } = request.qs()
@@ -138,9 +141,9 @@ export default class TurnosRtmController {
         .preload('cliente')
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
-        .preload('certificaciones') // 👈 NUEVO
+        .preload('certificaciones')
 
-      // Fechas (columna DATE): usar yyyy-mm-dd
+      // ====== FILTROS ======
       if (fechaInicio && fechaFin) {
         const fi = DateTime.fromISO(String(fechaInicio), { zone: 'America/Bogota' }).startOf('day')
         const ff = DateTime.fromISO(String(fechaFin), { zone: 'America/Bogota' }).endOf('day')
@@ -175,8 +178,7 @@ export default class TurnosRtmController {
       // Servicio
       if (servicioId) {
         const sid = Number(servicioId)
-        if (Number.isNaN(sid))
-          return response.badRequest({ message: 'servicioId debe ser numérico' })
+        if (Number.isNaN(sid)) return response.badRequest({ message: 'servicioId debe ser numérico' })
         query.where('servicio_id', sid)
       } else if (servicioCodigo) {
         const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
@@ -185,50 +187,116 @@ export default class TurnosRtmController {
         query.where('servicio_id', s.id)
       }
 
-      // 🔎 Nuevos filtros
+      // Filtros adicionales
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
         const c = String(canalAtribucion).toUpperCase() as CanalAtrib
-        if (!allowed.includes(c))
-          return response.badRequest({ message: 'canalAtribucion inválido' })
+        if (!allowed.includes(c)) return response.badRequest({ message: 'canalAtribucion inválido' })
         query.where('canal_atribucion', c)
       }
       if (agenteId) query.where('agente_captacion_id', Number(agenteId))
       if (agenteTipo) {
-        query.whereHas('agenteCaptacion', (q) => {
-          q.where('tipo', String(agenteTipo))
-        })
+        query.whereHas('agenteCaptacion', (q) => q.where('tipo', String(agenteTipo)))
       }
-
       if (clienteId) query.where('cliente_id', Number(clienteId))
       if (vehiculoId) query.where('vehiculo_id', Number(vehiculoId))
 
       const turnos = await query.orderBy('fecha', 'desc').orderBy('turno_numero', 'desc')
 
-      // 👇👇 NUEVO: calcular bandera tieneFacturacion por turno (estado CONFIRMADA)
+      // ====== FACTURACIÓN CONFIRMADA ======
       const turnoIds = turnos.map((t) => t.id)
-
-      let payload: any[] = []
+      let turnosConFactura = new Set<number>()
       if (turnoIds.length > 0) {
         const facturadas = await FacturacionTicket.query()
           .whereIn('turno_id', turnoIds)
           .where('estado', 'CONFIRMADA')
           .select('turno_id')
 
-        const turnosConFactura = new Set<number>(
+        turnosConFactura = new Set<number>(
           facturadas.map((f) => (f as any).turnoId ?? (f as any).turno_id)
         )
-
-        payload = turnos.map((t) => {
-          const plain = t.serialize()
-          return {
-            ...plain,
-            tieneFacturacion: turnosConFactura.has(t.id),
-            // 👇 NUEVO: al menos una certificación asociada
-            tieneCertificacion: (t.certificaciones ?? []).length > 0,
-          }
-        })
       }
+
+      // ====== HISTORIAL COMPLETO POR PLACA ======
+      // DESPUÉS
+      type HistItem = {
+        id: number
+        fechaStr: string
+        clienteNombre: string | null
+        servicioCodigo: string | null
+      }
+
+      const placasUnicas = Array.from(new Set(turnos.map((t) => t.placa)))
+      const historialPorPlaca: Record<string, HistItem[]> = {}
+
+      const getClienteNombre = (c: Cliente | null | undefined): string | null => {
+        if (!c) return null
+        const any = c as any
+        if (any.nombreCompleto) return String(any.nombreCompleto)
+        if (any.nombre) return String(any.nombre)
+        const partes = [any.nombres, any.apellidos].filter(Boolean).join(' ').trim()
+        if (partes) return partes
+        if (any.razonSocial) return String(any.razonSocial)
+        return null
+      }
+
+      for (const p of placasUnicas) {
+        const rows = await TurnoRtm.query()
+          .where('placa', p)
+          .whereNot('estado', 'inactivo')
+          .orderBy('fecha', 'asc')
+          .orderBy('hora_ingreso', 'asc')
+          .preload('cliente')
+          .preload('servicio') // 👈 NUEVO
+
+        historialPorPlaca[p] = rows.map((r) => ({
+          id: r.id,
+          fechaStr: toMySQLDate(r.fecha as DateTime),
+          clienteNombre: getClienteNombre(r.cliente),
+          servicioCodigo: r.servicio ? (r.servicio as any).codigoServicio ?? null : null, // 👈 NUEVO
+        }))
+      }
+      const visitaLabel = (n: number | null): string => {
+        if (!n || n <= 0) return '—'
+        if (n === 1) return 'Primera vez'
+        if (n === 2) return 'Segunda vez'
+        if (n === 3) return 'Tercera vez'
+        return `${n}ª vez`
+      }
+
+      // ====== ARMAR PAYLOAD FINAL ======
+      const payload = turnos.map((t) => {
+        const plain = t.serialize()
+        const hist = historialPorPlaca[t.placa] ?? []
+
+        let visitaNumero: number | null = null
+        const ultimasFechas: string[] = []
+        let visitasDetalle: HistItem[] = []
+
+        if (hist.length) {
+          const idxFound = hist.findIndex((h) => h.id === t.id)
+          const idx = idxFound >= 0 ? idxFound : hist.length - 1
+
+          visitaNumero = idx + 1
+
+          // Últimas 2 fechas anteriores (por si las quieres seguir usando)
+          if (idx > 0) ultimasFechas.push(hist[idx - 1].fechaStr)
+          if (idx > 1) ultimasFechas.push(hist[idx - 2].fechaStr)
+
+          visitasDetalle = hist
+        }
+
+        return {
+          ...plain,
+          tieneFacturacion: turnosConFactura.has(t.id),
+          tieneCertificacion: (t.certificaciones ?? []).length > 0,
+
+          visitaVehiculoNumero: visitaNumero,
+          visitaVehiculoTexto: visitaLabel(visitaNumero),
+          visitaVehiculoUltimasFechas: ultimasFechas,
+          visitasVehiculoDetalle: visitasDetalle,
+        }
+      })
 
       return response.ok(payload)
     } catch (error) {
@@ -237,23 +305,30 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Mostrar un turno con relaciones. */
+  /** 👇 NUEVO: obtener un turno por ID (usado por Vue para "Turno asociado") */
   public async show({ params, response }: HttpContext) {
     try {
+      const id = Number(params.id)
+      if (Number.isNaN(id)) {
+        return response.badRequest({ message: 'id inválido' })
+      }
+
       const turno = await TurnoRtm.query()
-        .where('id', params.id)
+        .where('id', id)
         .preload('usuario')
         .preload('sede')
         .preload('servicio')
-        .preload('vehiculo')
+        .preload('vehiculo', (q) => q.preload('clase'))
         .preload('cliente')
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
-        .preload('facturacionTickets') // 👈 NUEVO
-        .preload('certificaciones') // 👈 NUEVO
+        .preload('certificaciones')
         .first()
 
-      if (!turno) return response.notFound({ message: 'Turno no encontrado' })
+      if (!turno) {
+        return response.notFound({ message: 'Turno no encontrado' })
+      }
+
       return response.ok(turno)
     } catch (error) {
       console.error('Error en show turno:', error)
@@ -1012,7 +1087,6 @@ export default class TurnosRtmController {
         { header: 'Tiempo Servicio', key: 'tiempoServicio', width: 16 },
         { header: 'Placa', key: 'placa', width: 12 },
         { header: 'Tipo Vehículo', key: 'tipoVehiculo', width: 18 },
-        { header: 'Medio (BD)', key: 'medioEntero', width: 16 },
         { header: 'Canal Atribución', key: 'canalAtribucion', width: 16 },
         { header: 'Agente', key: 'agente', width: 28 },
         { header: 'Observaciones', key: 'observaciones', width: 40 },
@@ -1039,15 +1113,13 @@ export default class TurnosRtmController {
           fecha: fechaExcel,
           turnoGlobal,
           turnoServicio,
-          servicio: t.servicio
-            ? `${t.servicio.codigoServicio} — t.servicio.nombreServicio`
-            : '-',
+          servicio: t.servicio ? t.servicio.codigoServicio : '-',
+
           horaIngreso: t.horaIngreso,
           horaSalida: t.horaSalida || '-',
           tiempoServicio: t.tiempoServicio || '-',
           placa: t.placa,
           tipoVehiculo: t.tipoVehiculo,
-          medioEntero: t.medioEntero ?? '-', // si no hubo canal, puede venir null/undefined
           canalAtribucion: (t as any).canalAtribucion ?? '-',
           agente,
           observaciones: t.observaciones || '-',
