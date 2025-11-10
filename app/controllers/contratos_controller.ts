@@ -10,6 +10,8 @@ import EntidadSalud from '#models/entidad_salud'
 import Sede from '#models/sede'
 import Cargo from '#models/cargo'
 import RazonSocial from '#models/razon_social'
+import AgenteCaptacion from '#models/agente_captacion'
+import Convenio from '#models/convenio'
 
 import app from '@adonisjs/core/services/app'
 import { DateTime } from 'luxon'
@@ -28,7 +30,7 @@ type TipoContrato = 'prestacion' | 'temporal' | 'laboral' | 'aprendizaje'
 export default class ContratosController {
   /* ============================
    Helpers base (fechas, json, normalización, etc.)
-============================ */
+  ============================ */
 
   private toIsoDate(value: any): string | null {
     if (!value) return null
@@ -179,7 +181,7 @@ export default class ContratosController {
 
   /* ============================
    Helpers de archivos (MIME, ext, tamaño, nombres, paths)
-============================ */
+  ============================ */
 
   /** Content-Type robusto desde el UploadedFile de Adonis */
   private getContentType(file: any): string {
@@ -292,7 +294,7 @@ export default class ContratosController {
 
   /* ============================
    Helpers de LOG / tracking de cambios
-============================ */
+  ============================ */
 
   private async logArchivoSubido(
     contrato: Contrato,
@@ -388,7 +390,7 @@ export default class ContratosController {
 
   /* ============================
    Helpers para Afiliación (nombres de campos/dirs)
-============================ */
+  ============================ */
 
   private static readonly TIPOS_AFILIACION = ['eps', 'arl', 'afp', 'afc', 'ccf'] as const
 
@@ -471,6 +473,110 @@ export default class ContratosController {
     }
   }
 
+  /**
+   * Garantiza que, si el usuario del contrato es ASESOR CONVENIO,
+   * exista:
+   *  - un AgenteCaptacion tipo ASESOR_CONVENIO ligado al usuario
+   *  - un Convenio ligado lógicamente al usuario (vía documento del contrato)
+   *
+   * Se llama DESPUÉS de crear el contrato (store / anexarFisico).
+   */
+  private async ensureAgenteYConvenioParaContrato(contrato: Contrato) {
+    // Si el contrato no tiene usuario, no hay nada que hacer
+    if (!contrato.usuarioId) return
+
+    // Traemos usuario + cargo para saber si es ASESOR CONVENIO
+    const usuario = await Usuario.find(contrato.usuarioId)
+    if (!usuario) return
+
+    const cargo = usuario.cargoId ? await Cargo.find(usuario.cargoId) : null
+    const nombreCargo = cargo?.nombre?.toUpperCase()?.trim() ?? ''
+
+    // Solo aplica para usuarios cuyo cargo es ASESOR CONVENIO
+    if (nombreCargo !== 'ASESOR CONVENIO') {
+      return
+    }
+
+    // ============================
+    // 1) AgenteCaptacion ASESOR_CONVENIO
+    // ============================
+
+    // OJO: aquí asumo que la tabla agentes_captacion SÍ tiene columna usuario_id
+    // (es lo habitual en tu contexto). Si diera error, me lo pasas y lo ajustamos.
+    let agente = await AgenteCaptacion.query()
+      .where('usuario_id', usuario.id)
+      .where('tipo', 'ASESOR_CONVENIO')
+      .first()
+
+    if (!agente) {
+      const nombreAgente =
+        (usuario as any).nombreCompleto ||
+        (usuario as any).nombre ||
+        `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
+        `Usuario #${usuario.id}`
+
+      agente = await AgenteCaptacion.create({
+        usuarioId: usuario.id, // Lucid lo mapea a usuario_id en la tabla
+        tipo: 'ASESOR_CONVENIO',
+        nombre: nombreAgente,
+      } as any)
+    }
+
+    // ============================
+    // 2) Convenio ligado al usuario (vía doc_numero)
+    // ============================
+
+    // Usamos el documento del contrato como clave natural del convenio.
+    // Ojo: ajusta este campo si tu modelo Contrato lo llama distinto.
+    const docNumero = (contrato as any).identificacion
+      ? String((contrato as any).identificacion)
+      : null
+
+    let convenio: Convenio | null = null
+
+    if (docNumero) {
+      convenio = await Convenio.query().where('doc_numero', docNumero).first()
+    }
+
+    if (!convenio) {
+      const nombreConvenio =
+        (usuario as any).nombreComercial ||
+        (usuario as any).nombreCompleto ||
+        (usuario as any).nombre ||
+        `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
+        `Convenio usuario #${usuario.id}`
+
+      convenio = await Convenio.create({
+        // tipo es NOT NULL (enum PERSONA | TALLER). Para ASESOR_CONVENIO asumimos PERSONA.
+        tipo: 'PERSONA',
+        nombre: nombreConvenio,
+        docTipo: null, // si luego tienes campo tipoDocumento en Usuario, se puede mapear aquí
+        docNumero: docNumero, // importante para poder encontrarlo después
+        telefono:
+          (usuario as any).telefono ||
+          (usuario as any).celular ||
+          (usuario as any).telefono1 ||
+          null,
+        whatsapp:
+          (usuario as any).whatsapp ||
+          (usuario as any).telefono ||
+          (usuario as any).celular ||
+          null,
+        email: (usuario as any).email || null,
+        // ciudadId, direccion, notas, etc. los puedes poblar luego si quieres
+        activo: true,
+      } as any)
+    }
+
+    // Si más adelante quieres amarrar el convenio al agente (si la tabla tiene agente_id),
+    // podrías hacer algo así:
+    //
+    // if ((convenio as any).agenteId == null && agente) {
+    //   ;(convenio as any).agenteId = agente.id
+    //   await convenio.save()
+    // }
+  }
+
   /* ============================
      CRUD contratos — index/show/usuario
   ============================ */
@@ -500,7 +606,8 @@ export default class ContratosController {
       return response.ok(contrato)
     } catch (error: any) {
       console.error('Error al obtener contrato por ID:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       return response.internalServerError({
         message: 'Error al obtener contrato',
         error: error.message,
@@ -652,7 +759,9 @@ export default class ContratosController {
       let pasosRecibidos: any[] = []
       if (Array.isArray(pasos)) pasosRecibidos = pasos
       else if (typeof pasos === 'string' && pasos.trim()) {
-        try { pasosRecibidos = JSON.parse(pasos) } catch {}
+        try {
+          pasosRecibidos = JSON.parse(pasos)
+        } catch {}
       }
 
       const pasosParaGuardar: any[] = []
@@ -699,6 +808,9 @@ export default class ContratosController {
 
       await trx.commit()
       await this.syncUsuarioTrasGuardarContrato(contrato)
+      // NUEVO: Garantizar agente + convenio si el usuario es ASESOR CONVENIO
+      await this.ensureAgenteYConvenioParaContrato(contrato)
+
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.created(contrato)
     } catch (error: any) {
@@ -746,7 +858,9 @@ export default class ContratosController {
         // borra anterior si había
         if (contrato.rutaArchivoContratoFisico) {
           try {
-            await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoContratoFisico.replace(/^\//, '')))
+            await fs.unlink(
+              path.join(app.publicPath(), contrato.rutaArchivoContratoFisico.replace(/^\//, ''))
+            )
           } catch (e: any) {
             if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo anterior:', e)
           }
@@ -765,7 +879,12 @@ export default class ContratosController {
         const observacionArchivo = String(request.input('observacionArchivo') ?? '').trim()
         await contrato.save({ client: trx })
 
-        await this.logContratoFisicoCambio(contrato, oldMeta, { nombre: fileName, url: `/${uploadDir}/${fileName}` }, actorId)
+        await this.logContratoFisicoCambio(
+          contrato,
+          oldMeta,
+          { nombre: fileName, url: `/${uploadDir}/${fileName}` },
+          actorId
+        )
         await this.logContratoFisicoObservacion(contrato, observacionArchivo, actorId)
 
         // Recomendación médica opcional (SIN extnames, validación manual)
@@ -787,7 +906,9 @@ export default class ContratosController {
           const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
           const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
           if (!(recMimeOk || recExtOk)) {
-            throw new Error('Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.')
+            throw new Error(
+              'Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.'
+            )
           }
 
           const oldMetaRec = this.fileMetaFromRelPath(contrato.rutaArchivoRecomendacionMedica)
@@ -804,7 +925,12 @@ export default class ContratosController {
           await contrato.save({ client: trx })
 
           if (oldMetaRec) {
-            await this.logArchivoReemplazado(contrato, oldMetaRec, { nombre: recName, url: `/${recDir}/${recName}` }, actorId)
+            await this.logArchivoReemplazado(
+              contrato,
+              oldMetaRec,
+              { nombre: recName, url: `/${recDir}/${recName}` },
+              actorId
+            )
           } else {
             await this.logArchivoSubido(contrato, recName, `/${recDir}/${recName}`, actorId)
           }
@@ -812,6 +938,9 @@ export default class ContratosController {
 
         await trx.commit()
         await this.syncUsuarioTrasGuardarContrato(contrato)
+        // Aunque aquí no se "crea" el contrato, por consistencia podemos asegurar agente+convenio
+        await this.ensureAgenteYConvenioParaContrato(contrato)
+
         await contrato.load((loader) => this.preloadRelations(loader))
         return response.ok({ message: 'Archivo anexado correctamente', contrato })
       }
@@ -837,7 +966,7 @@ export default class ContratosController {
       } = allRequestData
 
       const tipo: TipoContrato = contratoData.tipoContrato
-      const allowedTipos: TipoContrato[] = ['prestacion','temporal','laboral','aprendizaje']
+      const allowedTipos: TipoContrato[] = ['prestacion', 'temporal', 'laboral', 'aprendizaje']
       if (!allowedTipos.includes(tipo)) {
         await trx.rollback()
         return response.badRequest({ message: "Valor inválido para 'tipoContrato'." })
@@ -847,7 +976,9 @@ export default class ContratosController {
       const baseNum = Number(baseRaw)
       if (!Number.isFinite(baseNum)) {
         await trx.rollback()
-        return response.badRequest({ message: "El campo 'salarioBasico' es obligatorio y debe ser numérico." })
+        return response.badRequest({
+          message: "El campo 'salarioBasico' es obligatorio y debe ser numérico.",
+        })
       }
 
       if (!contratoData.sedeId) {
@@ -862,29 +993,34 @@ export default class ContratosController {
         return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
       }
 
-      const terminoNorm = (contratoData.terminoContrato === 'obra_o_labor'
-        ? 'obra_o_labor_determinada'
-        : contratoData.terminoContrato) ?? null
+      const terminoNorm =
+        (contratoData.terminoContrato === 'obra_o_labor'
+          ? 'obra_o_labor_determinada'
+          : contratoData.terminoContrato) ?? null
       let terminoEff: string | null = terminoNorm
       if (!terminoEff && tipo === 'laboral') terminoEff = 'indefinido'
 
-      const allowedByTipo: Record<TipoContrato, string[]> = {
-        prestacion: ['fijo','obra_o_labor_determinada'],
+      const allowedByTipo2: Record<TipoContrato, string[]> = {
+        prestacion: ['fijo', 'obra_o_labor_determinada'],
         temporal: ['obra_o_labor_determinada'],
-        laboral: ['fijo','obra_o_labor_determinada','indefinido'],
+        laboral: ['fijo', 'obra_o_labor_determinada', 'indefinido'],
         aprendizaje: ['fijo'],
       }
-      if (terminoEff && !allowedByTipo[tipo].includes(terminoEff)) {
+      if (terminoEff && !allowedByTipo2[tipo].includes(terminoEff)) {
         await trx.rollback()
         return response.badRequest({ message: `'terminoContrato' inválido para tipo '${tipo}'.` })
       }
 
       const needsEnd =
-        (tipo === 'prestacion' || tipo === 'aprendizaje' || tipo === 'temporal') ||
+        tipo === 'prestacion' ||
+        tipo === 'aprendizaje' ||
+        tipo === 'temporal' ||
         (tipo === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
       if (needsEnd && !aliasFechaTerm) {
         await trx.rollback()
-        return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para el tipo de contrato enviado." })
+        return response.badRequest({
+          message: "La 'fechaTerminacion' es obligatoria para el tipo de contrato enviado.",
+        })
       }
 
       // PDF del contrato (obligatorio)
@@ -938,9 +1074,9 @@ export default class ContratosController {
       await this.logContratoFisicoObservacion(contrato, String(observacionArchivo ?? ''), actorId)
 
       // Recomendación médica opcional
-      const tieneRecRaw = tieneRecomendacionesMedicas
-      const tieneRec = tieneRecRaw === true || String(tieneRecRaw).toLowerCase() === 'true'
-      if (tieneRec) {
+      const tieneRecRaw2 = tieneRecomendacionesMedicas
+      const tieneRec2 = tieneRecRaw2 === true || String(tieneRecRaw2).toLowerCase() === 'true'
+      if (tieneRec2) {
         const archivoRecomendacion =
           request.file('archivoRecomendacionMedica') ||
           request.file('archivoRecomendacion') ||
@@ -948,7 +1084,9 @@ export default class ContratosController {
 
         if (!archivoRecomendacion || !archivoRecomendacion.tmpPath) {
           await trx.rollback()
-          return response.badRequest({ message: 'Archivo de recomendación médica inválido o no adjunto.' })
+          return response.badRequest({
+            message: 'Archivo de recomendación médica inválido o no adjunto.',
+          })
         }
 
         const recCT = this.getContentType(archivoRecomendacion).toLowerCase()
@@ -957,7 +1095,10 @@ export default class ContratosController {
         const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
         if (!(recMimeOk || recExtOk)) {
           await trx.rollback()
-          return response.badRequest({ message: 'Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.' })
+          return response.badRequest({
+            message:
+              'Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.',
+          })
         }
 
         const recDir = 'uploads/recomendaciones_medicas'
@@ -1001,12 +1142,17 @@ export default class ContratosController {
 
       await trx.commit()
       await this.syncUsuarioTrasGuardarContrato(contrato)
+      // NUEVO: Garantizar agente + convenio si el usuario es ASESOR CONVENIO
+      await this.ensureAgenteYConvenioParaContrato(contrato)
+
       await contrato.load((loader) => this.preloadRelations(loader))
       return response.created({ message: 'Contrato creado y anexado correctamente.', contrato })
     } catch (error: any) {
       await trx.rollback()
       console.error('Error en anexarFisico (crear y/o anexar):', error)
-      return response.badRequest({ message: error.message || 'Error al crear y anexar contrato físico' })
+      return response.badRequest({
+        message: error.message || 'Error al crear y anexar contrato físico',
+      })
     }
   }
 
@@ -1018,25 +1164,31 @@ export default class ContratosController {
       const contrato = await Contrato.findOrFail(params.id)
 
       const estadoRaw = String(request.input('estado') ?? '').toLowerCase()
-      const nuevoEstado: Estado = estadoRaw === 'activo' ? 'activo' : estadoRaw === 'inactivo' ? 'inactivo' : (null as any)
-      if (!nuevoEstado) return response.badRequest({ message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'." })
+      const nuevoEstado: Estado =
+        estadoRaw === 'activo' ? 'activo' : estadoRaw === 'inactivo' ? 'inactivo' : (null as any)
+      if (!nuevoEstado)
+        return response.badRequest({ message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'." })
 
       const oldEstado = contrato.estado
 
       if (nuevoEstado === 'inactivo') {
         const aliasFechaTerm =
-          request.input('fechaTerminacion') ?? request.input('fechaFin') ?? request.input('fechaFinalizacion') ?? null
+          request.input('fechaTerminacion') ??
+          request.input('fechaFin') ??
+          request.input('fechaFinalizacion') ??
+          null
 
         const tipoEff: TipoContrato = contrato.tipoContrato as TipoContrato
-        const incomingTerm = (contrato as any).terminoContrato === 'obra_o_labor'
-          ? 'obra_o_labor_determinada'
-          : (contrato as any).terminoContrato
+        const incomingTerm =
+          (contrato as any).terminoContrato === 'obra_o_labor'
+            ? 'obra_o_labor_determinada'
+            : (contrato as any).terminoContrato
         const terminoEff = incomingTerm ?? (tipoEff === 'laboral' ? 'indefinido' : null)
 
         const allowedByTipo: Record<TipoContrato, string[]> = {
-          prestacion: ['fijo','obra_o_labor_determinada'],
+          prestacion: ['fijo', 'obra_o_labor_determinada'],
           temporal: ['obra_o_labor_determinada'],
-          laboral: ['fijo','obra_o_labor_determinada','indefinido'],
+          laboral: ['fijo', 'obra_o_labor_determinada', 'indefinido'],
           aprendizaje: ['fijo'],
         }
         if (terminoEff && !allowedByTipo[tipoEff].includes(terminoEff)) {
@@ -1045,17 +1197,23 @@ export default class ContratosController {
         }
 
         const requiereFin =
-          (tipoEff === 'prestacion' || tipoEff === 'aprendizaje' || tipoEff === 'temporal') ||
+          tipoEff === 'prestacion' ||
+          tipoEff === 'aprendizaje' ||
+          tipoEff === 'temporal' ||
           (tipoEff === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
 
-        const fechaTermLuxon = this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
+        const fechaTermLuxon =
+          this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
         if (requiereFin && !fechaTermLuxon) {
           await trx.rollback()
-          return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para este contrato." })
+          return response.badRequest({
+            message: "La 'fechaTerminacion' es obligatoria para este contrato.",
+          })
         }
 
         contrato.fechaTerminacion = fechaTermLuxon
-        contrato.motivoFinalizacion = request.input('motivoFinalizacion') ?? contrato.motivoFinalizacion ?? null
+        contrato.motivoFinalizacion =
+          request.input('motivoFinalizacion') ?? contrato.motivoFinalizacion ?? null
       }
 
       contrato.estado = nuevoEstado
@@ -1084,10 +1242,15 @@ export default class ContratosController {
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al cambiar estado del contrato:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
-      return response.internalServerError({ message: 'Error al cambiar estado del contrato', error: error.message })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
+      return response.internalServerError({
+        message: 'Error al cambiar estado del contrato',
+        error: error.message,
+      })
     }
   }
+
   /* =========================
      UPDATE (con early-exit para solo estado)
   ========================= */
@@ -1106,48 +1269,62 @@ export default class ContratosController {
       const soloEstado =
         keys.length > 0 &&
         keys.every((k) =>
-          ['estado', 'motivoFinalizacion', 'fechaTerminacion', 'fechaFin', 'fechaFinalizacion'].includes(k)
+          ['estado', 'motivoFinalizacion', 'fechaTerminacion', 'fechaFin', 'fechaFinalizacion'].includes(
+            k
+          )
         )
 
       if (soloEstado) {
         const estadoRaw = String(raw.estado ?? '').toLowerCase()
         if (!['activo', 'inactivo'].includes(estadoRaw)) {
           await trx.rollback()
-          return response.badRequest({ message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'." })
+          return response.badRequest({
+            message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'.",
+          })
         }
         const nuevoEstado = estadoRaw as Estado
 
         if (nuevoEstado === 'inactivo') {
-          const aliasFechaTerm = raw.fechaTerminacion ?? raw.fechaFin ?? raw.fechaFinalizacion ?? null
+          const aliasFechaTerm =
+            raw.fechaTerminacion ?? raw.fechaFin ?? raw.fechaFinalizacion ?? null
           const tipoEff: TipoContrato = contrato.tipoContrato as TipoContrato
-          const incomingTerm = (contrato as any).terminoContrato === 'obra_o_labor'
-            ? 'obra_o_labor_determinada'
-            : (contrato as any).terminoContrato
+          const incomingTerm =
+            (contrato as any).terminoContrato === 'obra_o_labor'
+              ? 'obra_o_labor_determinada'
+              : (contrato as any).terminoContrato
           const terminoEff = incomingTerm ?? (tipoEff === 'laboral' ? 'indefinido' : null)
 
           const allowedByTipo: Record<TipoContrato, string[]> = {
-            prestacion: ['fijo','obra_o_labor_determinada'],
+            prestacion: ['fijo', 'obra_o_labor_determinada'],
             temporal: ['obra_o_labor_determinada'],
-            laboral: ['fijo','obra_o_labor_determinada','indefinido'],
+            laboral: ['fijo', 'obra_o_labor_determinada', 'indefinido'],
             aprendizaje: ['fijo'],
           }
           if (terminoEff && !allowedByTipo[tipoEff].includes(terminoEff)) {
             await trx.rollback()
-            return response.badRequest({ message: `'terminoContrato' inválido para tipo '${tipoEff}'.` })
+            return response.badRequest({
+              message: `'terminoContrato' inválido para tipo '${tipoEff}'.`,
+            })
           }
 
           const requiereFin =
-            (tipoEff === 'prestacion' || tipoEff === 'aprendizaje' || tipoEff === 'temporal') ||
+            tipoEff === 'prestacion' ||
+            tipoEff === 'aprendizaje' ||
+            tipoEff === 'temporal' ||
             (tipoEff === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
 
-          const fechaTermLuxon = this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
+          const fechaTermLuxon =
+            this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
           if (requiereFin && !fechaTermLuxon) {
             await trx.rollback()
-            return response.badRequest({ message: "La 'fechaTerminacion' es obligatoria para este contrato." })
+            return response.badRequest({
+              message: "La 'fechaTerminacion' es obligatoria para este contrato.",
+            })
           }
 
           contrato.fechaTerminacion = fechaTermLuxon
-          contrato.motivoFinalizacion = raw.motivoFinalizacion ?? contrato.motivoFinalizacion ?? null
+          contrato.motivoFinalizacion =
+            raw.motivoFinalizacion ?? contrato.motivoFinalizacion ?? null
         }
 
         contrato.estado = nuevoEstado
@@ -1200,7 +1377,9 @@ export default class ContratosController {
         ccfId: contrato.ccfId ?? null,
         estado: contrato.estado,
         motivoFinalizacion: contrato.motivoFinalizacion ?? null,
-        tieneRecomendacionesMedicas: this.toBoolOrNull((contrato as any).tieneRecomendacionesMedicas),
+        tieneRecomendacionesMedicas: this.toBoolOrNull(
+          (contrato as any).tieneRecomendacionesMedicas
+        ),
         salarioBasico: currentSalario?.salarioBasico ?? null,
         bonoSalarial: currentSalario?.bonoSalarial ?? null,
         auxilioTransporte: currentSalario?.auxilioTransporte ?? null,
@@ -1237,45 +1416,63 @@ export default class ContratosController {
 
       const aliasFechaTerm = raw.fechaTerminacion ?? raw.fechaFin ?? raw.fechaFinalizacion
 
-      const tipoEff: TipoContrato = (payload.tipoContrato as TipoContrato) ?? (contrato.tipoContrato as TipoContrato)
-      const allowedTipos: TipoContrato[] = ['prestacion','temporal','laboral','aprendizaje']
+      const tipoEff: TipoContrato =
+        (payload.tipoContrato as TipoContrato) ?? (contrato.tipoContrato as TipoContrato)
+      const allowedTipos: TipoContrato[] = ['prestacion', 'temporal', 'laboral', 'aprendizaje']
       if (!allowedTipos.includes(tipoEff)) {
         await trx.rollback()
         return response.badRequest({ message: "Valor inválido para 'tipoContrato'." })
       }
 
       // término
-      const incomingTerm = (payload.terminoContrato ?? (contrato as any).terminoContrato) === 'obra_o_labor'
-        ? 'obra_o_labor_determinada'
-        : (payload.terminoContrato ?? (contrato as any).terminoContrato)
+      const incomingTerm =
+        (payload.terminoContrato ?? (contrato as any).terminoContrato) === 'obra_o_labor'
+          ? 'obra_o_labor_determinada'
+          : (payload.terminoContrato ?? (contrato as any).terminoContrato)
       let terminoEff: string | null = incomingTerm ?? null
       if (!terminoEff && tipoEff === 'laboral') {
         terminoEff = 'indefinido'
       }
       const allowedByTipo: Record<TipoContrato, string[]> = {
-        prestacion: ['fijo','obra_o_labor_determinada'],
+        prestacion: ['fijo', 'obra_o_labor_determinada'],
         temporal: ['obra_o_labor_determinada'],
-        laboral: ['fijo','obra_o_labor_determinada','indefinido'],
+        laboral: ['fijo', 'obra_o_labor_determinada', 'indefinido'],
         aprendizaje: ['fijo'],
       }
       if (terminoEff && !allowedByTipo[tipoEff].includes(terminoEff)) {
         await trx.rollback()
-        return response.badRequest({ message: `'terminoContrato' inválido para tipo '${tipoEff}'.` })
+        return response.badRequest({
+          message: `'terminoContrato' inválido para tipo '${tipoEff}'.`,
+        })
       }
 
       // fechas
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
-        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd').startOf('day').toUTC()
+        contrato.fechaInicio = DateTime.fromFormat(
+          payload.fechaInicio,
+          'yyyy-MM-dd'
+        )
+          .startOf('day')
+          .toUTC()
       }
       if (aliasFechaTerm !== undefined && typeof aliasFechaTerm === 'string') {
-        contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day').toUTC()
+        contrato.fechaTerminacion = DateTime.fromFormat(
+          aliasFechaTerm,
+          'yyyy-MM-dd'
+        )
+          .startOf('day')
+          .toUTC()
       }
 
       const fechaTermDef =
-        aliasFechaTerm !== undefined ? this.toDateTime(aliasFechaTerm) : contrato.fechaTerminacion ?? null
+        aliasFechaTerm !== undefined
+          ? this.toDateTime(aliasFechaTerm)
+          : contrato.fechaTerminacion ?? null
 
       const requiresEnd =
-        (tipoEff === 'prestacion' || tipoEff === 'aprendizaje' || tipoEff === 'temporal') ||
+        tipoEff === 'prestacion' ||
+        tipoEff === 'aprendizaje' ||
+        tipoEff === 'temporal' ||
         (tipoEff === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
       if (requiresEnd && !fechaTermDef) {
         await trx.rollback()
@@ -1284,19 +1481,32 @@ export default class ContratosController {
         })
       }
 
-      const { salarioBasico, bonoSalarial, auxilioTransporte, auxilioNoSalarial, ...contratoPayload } = payload
+      const {
+        salarioBasico,
+        bonoSalarial,
+        auxilioTransporte,
+        auxilioNoSalarial,
+        ...contratoPayload
+      } = payload
       ;(contratoPayload as any).terminoContrato = terminoEff
 
       contrato.merge(contratoPayload)
       await contrato.save({ client: trx })
 
       // Recomendación médica en UPDATE (borrar / mantener)
-      const reqQuiereEliminarRec = String((raw.eliminarRecomendacionMedica ?? '')).toLowerCase() === 'true'
+      const reqQuiereEliminarRec =
+        String(raw.eliminarRecomendacionMedica ?? '').toLowerCase() === 'true'
       if (reqQuiereEliminarRec && contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+          await fs.unlink(
+            path.join(
+              app.publicPath(),
+              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
+            )
+          )
         } catch (e: any) {
-          if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación (update):', e)
+          if (e.code !== 'ENOENT')
+            console.error('No se pudo eliminar recomendación (update):', e)
         }
         contrato.rutaArchivoRecomendacionMedica = null
         ;(contrato as any).tieneRecomendacionesMedicas = false
@@ -1320,7 +1530,12 @@ export default class ContratosController {
 
       const salarioFueEnviado = sbSent || bsSent || atSent || ansSent
       let nuevoSalario:
-        | { salarioBasico: number; bonoSalarial: number; auxilioTransporte: number; auxilioNoSalarial: number }
+        | {
+            salarioBasico: number
+            bonoSalarial: number
+            auxilioTransporte: number
+            auxilioNoSalarial: number
+          }
         | null = null
 
       if (salarioFueEnviado) {
@@ -1407,27 +1622,66 @@ export default class ContratosController {
         ccfId: contrato.ccfId ?? null,
         estado: contrato.estado,
         motivoFinalizacion: contrato.motivoFinalizacion ?? null,
-        tieneRecomendacionesMedicas: this.toBoolOrNull((contrato as any).tieneRecomendacionesMedicas),
-        salarioBasico: nuevoSalario ? nuevoSalario.salarioBasico : currentSalario?.salarioBasico ?? null,
-        bonoSalarial: nuevoSalario ? nuevoSalario.bonoSalarial : currentSalario?.bonoSalarial ?? null,
-        auxilioTransporte: nuevoSalario ? nuevoSalario.auxilioTransporte : currentSalario?.auxilioTransporte ?? null,
-        auxilioNoSalarial: nuevoSalario ? nuevoSalario.auxilioNoSalarial : currentSalario?.auxilioNoSalarial ?? null,
+        tieneRecomendacionesMedicas: this.toBoolOrNull(
+          (contrato as any).tieneRecomendacionesMedicas
+        ),
+        salarioBasico: nuevoSalario
+          ? nuevoSalario.salarioBasico
+          : currentSalario?.salarioBasico ?? null,
+        bonoSalarial: nuevoSalario
+          ? nuevoSalario.bonoSalarial
+          : currentSalario?.bonoSalarial ?? null,
+        auxilioTransporte: nuevoSalario
+          ? nuevoSalario.auxilioTransporte
+          : currentSalario?.auxilioTransporte ?? null,
+        auxilioNoSalarial: nuevoSalario
+          ? nuevoSalario.auxilioNoSalarial
+          : currentSalario?.auxilioNoSalarial ?? null,
       }
 
       const camposTrackeables: (keyof typeof after)[] = [
-        'razonSocialId', 'sedeId', 'cargoId', 'funcionesCargo', 'tipoContrato', 'terminoContrato',
-        'fechaInicio', 'fechaTerminacion', 'periodoPrueba', 'horarioTrabajo', 'centroCosto',
-        'epsId', 'arlId', 'afpId', 'afcId', 'ccfId', 'estado', 'motivoFinalizacion',
-        'tieneRecomendacionesMedicas', 'salarioBasico', 'bonoSalarial', 'auxilioTransporte', 'auxilioNoSalarial',
+        'razonSocialId',
+        'sedeId',
+        'cargoId',
+        'funcionesCargo',
+        'tipoContrato',
+        'terminoContrato',
+        'fechaInicio',
+        'fechaTerminacion',
+        'periodoPrueba',
+        'horarioTrabajo',
+        'centroCosto',
+        'epsId',
+        'arlId',
+        'afpId',
+        'afcId',
+        'ccfId',
+        'estado',
+        'motivoFinalizacion',
+        'tieneRecomendacionesMedicas',
+        'salarioBasico',
+        'bonoSalarial',
+        'auxilioTransporte',
+        'auxilioNoSalarial',
       ]
 
-      const cambios: Array<{ contratoId: number; usuarioId: number | null; campo: string; oldValue: any; newValue: any }> = []
+      const cambios: Array<{
+        contratoId: number
+        usuarioId: number | null
+        campo: string
+        oldValue: any
+        newValue: any
+      }> = []
 
       const vinoEnPayloadFor = (campo: string) => {
-        if (campo === 'salarioBasico') return Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
-        if (campo === 'bonoSalarial') return Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
-        if (campo === 'auxilioTransporte') return Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
-        if (campo === 'auxilioNoSalarial') return Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
+        if (campo === 'salarioBasico')
+          return Object.prototype.hasOwnProperty.call(raw, 'salarioBasico')
+        if (campo === 'bonoSalarial')
+          return Object.prototype.hasOwnProperty.call(raw, 'bonoSalarial')
+        if (campo === 'auxilioTransporte')
+          return Object.prototype.hasOwnProperty.call(raw, 'auxilioTransporte')
+        if (campo === 'auxilioNoSalarial')
+          return Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
         if (campo === 'fechaTerminacion')
           return (
             Object.prototype.hasOwnProperty.call(raw, 'fechaTerminacion') ||
@@ -1439,10 +1693,14 @@ export default class ContratosController {
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
-      const estadoSeVolvioInactivo = oldEstado !== contrato.estado && contrato.estado === 'inactivo'
+      const estadoSeVolvioInactivo =
+        oldEstado !== contrato.estado && contrato.estado === 'inactivo'
 
       for (const campo of camposTrackeables) {
-        if (estadoSeVolvioInactivo && (campo === 'fechaTerminacion' || campo === 'motivoFinalizacion')) {
+        if (
+          estadoSeVolvioInactivo &&
+          (campo === 'fechaTerminacion' || campo === 'motivoFinalizacion')
+        ) {
           continue
         }
 
@@ -1476,11 +1734,14 @@ export default class ContratosController {
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al actualizar contrato:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado para actualizar' })
-      return response.internalServerError({ message: 'Error al actualizar contrato', error: error.message })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado para actualizar' })
+      return response.internalServerError({
+        message: 'Error al actualizar contrato',
+        error: error.message,
+      })
     }
   }
-
   /* =========================
      Actualizar SOLO archivo de recomendación (reemplazo) — sin extnames
   ========================= */
@@ -1505,16 +1766,24 @@ export default class ContratosController {
       const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
       const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
       if (!(recMimeOk || recExtOk)) {
-        throw new Error('Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.')
+        throw new Error(
+          'Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.'
+        )
       }
 
       const oldMeta = this.fileMetaFromRelPath(contrato.rutaArchivoRecomendacionMedica)
 
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+          await fs.unlink(
+            path.join(
+              app.publicPath(),
+              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
+            )
+          )
         } catch (e: any) {
-          if (e.code !== 'ENOENT') console.error('Error al eliminar archivo de recomendación anterior en update:', e)
+          if (e.code !== 'ENOENT')
+            console.error('Error al eliminar archivo de recomendación anterior en update:', e)
         }
       }
 
@@ -1530,7 +1799,12 @@ export default class ContratosController {
       await contrato.save({ client: trx })
 
       if (oldMeta) {
-        await this.logArchivoReemplazado(contrato, oldMeta, { nombre: recName, url: `/${recDir}/${recName}` }, actorId)
+        await this.logArchivoReemplazado(
+          contrato,
+          oldMeta,
+          { nombre: recName, url: `/${recDir}/${recName}` },
+          actorId
+        )
       } else {
         await this.logArchivoSubido(contrato, recName, `/${recDir}/${recName}`, actorId)
       }
@@ -1541,7 +1815,8 @@ export default class ContratosController {
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al actualizar el archivo de recomendación médica:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       return response.internalServerError({
         message: 'Error al actualizar el archivo de recomendación médica',
         error: error.message,
@@ -1560,8 +1835,12 @@ export default class ContratosController {
       return response.ok({ message: 'Contrato eliminado correctamente' })
     } catch (error: any) {
       console.error('Error al eliminar contrato:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado para eliminar' })
-      return response.internalServerError({ message: 'Error al eliminar contrato', error: error.message })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado para eliminar' })
+      return response.internalServerError({
+        message: 'Error al eliminar contrato',
+        error: error.message,
+      })
     }
   }
 
@@ -1573,9 +1852,7 @@ export default class ContratosController {
     try {
       const paso = await ContratoPaso.query().where('id', params.pasoId).firstOrFail()
 
-      const archivo =
-        request.file('archivo') ||
-        request.file('recomendacion')
+      const archivo = request.file('archivo') || request.file('recomendacion')
 
       if (!archivo || !archivo.tmpPath) {
         throw new Error('Archivo de recomendación inválido.')
@@ -1584,21 +1861,24 @@ export default class ContratosController {
       const ct = this.getContentType(archivo).toLowerCase()
       const ext = this.safeExtFrom(archivo, 'bin')
       const mimeOk = !ct || ContratosController.REC_ALLOWED_MIMES.has(ct) // reutilizamos set de recomendación
-      const extOk  = ContratosController.REC_ALLOWED_EXTS.has(ext)
+      const extOk = ContratosController.REC_ALLOWED_EXTS.has(ext)
       if (!(mimeOk || extOk)) {
-        throw new Error('Tipo de archivo no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.')
+        throw new Error(
+          'Tipo de archivo no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.'
+        )
       }
 
       if (paso.archivoUrl) {
         try {
           await fs.unlink(path.join(app.publicPath(), paso.archivoUrl.replace(/^\//, '')))
         } catch (unlinkError: any) {
-          if (unlinkError.code !== 'ENOENT') console.error('Error al eliminar archivo anterior del paso:', unlinkError)
+          if (unlinkError.code !== 'ENOENT')
+            console.error('Error al eliminar archivo anterior del paso:', unlinkError)
         }
       }
 
       const uploadDir = `uploads/pasos/${paso.contratoId}`
-      const fileName = `${cuid()}.${(extOk ? ext : ((mime.extension(ct) as string) || 'bin'))}`
+      const fileName = `${cuid()}.${extOk ? ext : (mime.extension(ct) as string) || 'bin'}`
       const publicPathDir = path.join(app.publicPath(), uploadDir)
       await fs.mkdir(publicPathDir, { recursive: true })
 
@@ -1611,9 +1891,13 @@ export default class ContratosController {
 
       return response.ok(paso)
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Paso de contrato no encontrado.' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Paso de contrato no encontrado.' })
       console.error('Error al subir recomendación (paso):', error)
-      return response.internalServerError({ message: 'Error al subir recomendación', error: error.message })
+      return response.internalServerError({
+        message: 'Error al subir recomendación',
+        error: error.message,
+      })
     }
   }
 
@@ -1634,7 +1918,10 @@ export default class ContratosController {
       return response.ok(salarios)
     } catch (error: any) {
       console.error('Error al listar salarios:', error)
-      return response.internalServerError({ message: 'Error al listar salarios', error: error.message })
+      return response.internalServerError({
+        message: 'Error al listar salarios',
+        error: error.message,
+      })
     }
   }
 
@@ -1649,11 +1936,19 @@ export default class ContratosController {
         auxilioTransporte = 0,
         auxilioNoSalarial = 0,
         fechaEfectiva,
-      } = request.only(['salarioBasico','bonoSalarial','auxilioTransporte','auxilioNoSalarial','fechaEfectiva'])
+      } = request.only([
+        'salarioBasico',
+        'bonoSalarial',
+        'auxilioTransporte',
+        'auxilioNoSalarial',
+        'fechaEfectiva',
+      ])
 
       const baseNum = Number(salarioBasico)
       if (!Number.isFinite(baseNum)) {
-        return response.badRequest({ message: "El campo 'salarioBasico' es obligatorio y debe ser numérico." })
+        return response.badRequest({
+          message: "El campo 'salarioBasico' es obligatorio y debe ser numérico.",
+        })
       }
 
       const fecha = fechaEfectiva ? DateTime.fromISO(fechaEfectiva) : DateTime.now()
@@ -1673,7 +1968,8 @@ export default class ContratosController {
       return response.created(registro)
     } catch (error: any) {
       console.error('Error al crear salario:', error)
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       return response.badRequest({ message: error.message || 'Error al crear salario' })
     }
   }
@@ -1698,12 +1994,17 @@ export default class ContratosController {
     const contentType = (mime.lookup(absPath) as string) || 'application/octet-stream'
     const fileName = path.basename(absPath)
 
-    const inlineRaw = String(request.input('inline') ?? (request.qs() as any)?.inline ?? '').toLowerCase()
-    const viewInline = ['1','true','inline','si','sí'].includes(inlineRaw)
+    const inlineRaw = String(
+      request.input('inline') ?? (request.qs() as any)?.inline ?? ''
+    ).toLowerCase()
+    const viewInline = ['1', 'true', 'inline', 'si', 'sí'].includes(inlineRaw)
 
     response.header('Content-Type', contentType)
     response.header('Content-Length', String(st.size))
-    response.header('Content-Disposition', `${viewInline ? 'inline' : 'attachment'}; filename="${fileName}"`)
+    response.header(
+      'Content-Disposition',
+      `${viewInline ? 'inline' : 'attachment'}; filename="${fileName}"`
+    )
 
     return response.stream(createReadStream(absPath))
   }
@@ -1734,9 +2035,13 @@ export default class ContratosController {
         data: { url: relativo, nombreOriginal: fileName, mime: contentType, size: st.size },
       })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error al obtener meta del archivo de contrato:', error)
-      return response.internalServerError({ message: 'Error al obtener meta del archivo de contrato', error: error.message })
+      return response.internalServerError({
+        message: 'Error al obtener meta del archivo de contrato',
+        error: error.message,
+      })
     }
   }
 
@@ -1762,13 +2067,21 @@ export default class ContratosController {
       await contrato.save()
 
       await this.logContratoFisicoCambio(contrato, old, null, actorId)
-      await this.logContratoFisicoObservacion(contrato, String(request.input('observacionArchivo') ?? ''), actorId)
+      await this.logContratoFisicoObservacion(
+        contrato,
+        String(request.input('observacionArchivo') ?? ''),
+        actorId
+      )
 
       return response.ok({ message: 'Archivo del contrato eliminado.' })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error al eliminar archivo del contrato:', error)
-      return response.internalServerError({ message: 'Error al eliminar archivo del contrato', error: error.message })
+      return response.internalServerError({
+        message: 'Error al eliminar archivo del contrato',
+        error: error.message,
+      })
     }
   }
 
@@ -1801,9 +2114,13 @@ export default class ContratosController {
         data: { url: relativo, nombreOriginal: fileName, mime: contentType, size: st.size },
       })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error al obtener meta de recomendación médica:', error)
-      return response.internalServerError({ message: 'Error al obtener meta de recomendación médica', error: error.message })
+      return response.internalServerError({
+        message: 'Error al obtener meta de recomendación médica',
+        error: error.message,
+      })
     }
   }
 
@@ -1818,7 +2135,9 @@ export default class ContratosController {
         request.file('recomendacion')
 
       if (!archivo || !archivo.tmpPath) {
-        return response.badRequest({ message: 'Archivo de recomendación inválido o no adjunto.' })
+        return response.badRequest({
+          message: 'Archivo de recomendación inválido o no adjunto.',
+        })
       }
 
       const recCT = this.getContentType(archivo).toLowerCase()
@@ -1826,14 +2145,22 @@ export default class ContratosController {
       const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
       const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
       if (!(recMimeOk || recExtOk)) {
-        return response.badRequest({ message: 'Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.' })
+        return response.badRequest({
+          message:
+            'Tipo de archivo de recomendación no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.',
+        })
       }
 
       const oldMeta = this.fileMetaFromRelPath(contrato.rutaArchivoRecomendacionMedica)
 
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+          await fs.unlink(
+            path.join(
+              app.publicPath(),
+              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
+            )
+          )
         } catch (e: any) {
           if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación anterior:', e)
         }
@@ -1853,7 +2180,12 @@ export default class ContratosController {
       await contrato.save()
 
       if (oldMeta) {
-        await this.logArchivoReemplazado(contrato, oldMeta, { nombre: name, url: `/${dir}/${name}` }, actorId)
+        await this.logArchivoReemplazado(
+          contrato,
+          oldMeta,
+          { nombre: name, url: `/${dir}/${name}` },
+          actorId
+        )
       } else {
         await this.logArchivoSubido(contrato, name, `/${dir}/${name}`, actorId)
       }
@@ -1868,9 +2200,13 @@ export default class ContratosController {
         data: { url: `/${dir}/${name}`, nombreOriginal: name, mime: contentType, size: st.size },
       })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error al subir recomendación médica:', error)
-      return response.internalServerError({ message: 'Error al subir recomendación médica', error: error.message })
+      return response.internalServerError({
+        message: 'Error al subir recomendación médica',
+        error: error.message,
+      })
     }
   }
 
@@ -1883,22 +2219,35 @@ export default class ContratosController {
 
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
-          await fs.unlink(path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')))
+          await fs.unlink(
+            path.join(
+              app.publicPath(),
+              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
+            )
+          )
         } catch (e: any) {
-          if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo de recomendación:', e)
+          if (e.code !== 'ENOENT')
+            console.error('No se pudo eliminar archivo de recomendación:', e)
         }
       }
 
-      contrato.merge({ rutaArchivoRecomendacionMedica: null, tieneRecomendacionesMedicas: false })
+      contrato.merge({
+        rutaArchivoRecomendacionMedica: null,
+        tieneRecomendacionesMedicas: false,
+      })
       await contrato.save()
 
       await this.logArchivoEliminado(contrato, oldMeta, actorId)
 
       return response.ok({ message: 'Archivo de recomendación médica eliminado.' })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error al eliminar recomendación médica:', error)
-      return response.internalServerError({ message: 'Error al eliminar recomendación médica', error: error.message })
+      return response.internalServerError({
+        message: 'Error al eliminar recomendación médica',
+        error: error.message,
+      })
     }
   }
 
@@ -1907,7 +2256,9 @@ export default class ContratosController {
       const contrato = await Contrato.findOrFail(params.id)
       const relativo = contrato.rutaArchivoRecomendacionMedica
       if (!relativo) {
-        return response.notFound({ message: 'El contrato no tiene archivo de recomendación médica.' })
+        return response.notFound({
+          message: 'El contrato no tiene archivo de recomendación médica.',
+        })
       }
 
       const absPath = path.join(app.publicPath(), relativo.replace(/^\//, ''))
@@ -1925,9 +2276,13 @@ export default class ContratosController {
 
       return response.stream(createReadStream(absPath))
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error al descargar recomendación médica:', error)
-      return response.internalServerError({ message: 'Error al descargar recomendación médica', error: error.message })
+      return response.internalServerError({
+        message: 'Error al descargar recomendación médica',
+        error: error.message,
+      })
     }
   }
 
@@ -1944,11 +2299,17 @@ export default class ContratosController {
 
       const c = this.camposAfiContrato(tipo)
       const rel = (contrato as any)[c.path] as string | null
-      if (!rel) return response.ok({ contratoId: contrato.id, tipo, tieneArchivo: false, data: null })
+      if (!rel)
+        return response.ok({ contratoId: contrato.id, tipo, tieneArchivo: false, data: null })
 
       const absPath = path.join(app.publicPath(), rel.replace(/^\//, ''))
       if (!existsSync(absPath)) {
-        contrato.merge({ [c.path]: null, [c.nombre]: null, [c.mime]: null, [c.size]: null } as any)
+        contrato.merge({
+          [c.path]: null,
+          [c.nombre]: null,
+          [c.mime]: null,
+          [c.size]: null,
+        } as any)
         await contrato.save()
         return response.ok({ contratoId: contrato.id, tipo, tieneArchivo: false, data: null })
       }
@@ -1964,9 +2325,13 @@ export default class ContratosController {
         data: { url: rel, nombreOriginal: fileName, mime: contentType, size: st.size },
       })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error meta afiliación:', error)
-      return response.internalServerError({ message: 'Error al obtener meta de afiliación', error: error.message })
+      return response.internalServerError({
+        message: 'Error al obtener meta de afiliación',
+        error: error.message,
+      })
     }
   }
 
@@ -2000,7 +2365,9 @@ export default class ContratosController {
 
       if ((contrato as any)[c.path]) {
         try {
-          await fs.unlink(path.join(app.publicPath(), String((contrato as any)[c.path]).replace(/^\//, '')))
+          await fs.unlink(
+            path.join(app.publicPath(), String((contrato as any)[c.path]).replace(/^\//, ''))
+          )
         } catch (e: any) {
           if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo anterior:', e)
         }
@@ -2029,12 +2396,21 @@ export default class ContratosController {
         contratoId: contrato.id,
         tipo,
         tieneArchivo: true,
-        data: { url: `/${rel}`, nombreOriginal: archivo.clientName, mime: contentType, size: st.size },
+        data: {
+          url: `/${rel}`,
+          nombreOriginal: archivo.clientName,
+          mime: contentType,
+          size: st.size,
+        },
       })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error subir afiliación:', error)
-      return response.internalServerError({ message: 'Error al subir archivo de afiliación', error: error.message })
+      return response.internalServerError({
+        message: 'Error al subir archivo de afiliación',
+        error: error.message,
+      })
     }
   }
 
@@ -2065,13 +2441,23 @@ export default class ContratosController {
       ;(contrato as any)[c.size] = null
       await contrato.save()
 
-      await this.logCambioArchivo(contrato, `${tipo}_afiliacion_archivo`, old, null, actorId)
+      await this.logCambioArchivo(
+        contrato,
+        `${tipo}_afiliacion_archivo`,
+        old,
+        null,
+        actorId
+      )
 
       return response.ok({ message: `Archivo de ${tipo.toUpperCase()} eliminado.` })
     } catch (error: any) {
-      if (error.code === 'E_ROW_NOT_FOUND') return response.notFound({ message: 'Contrato no encontrado' })
+      if (error.code === 'E_ROW_NOT_FOUND')
+        return response.notFound({ message: 'Contrato no encontrado' })
       console.error('Error eliminar afiliación:', error)
-      return response.internalServerError({ message: 'Error al eliminar archivo de afiliación', error: error.message })
+      return response.internalServerError({
+        message: 'Error al eliminar archivo de afiliación',
+        error: error.message,
+      })
     }
   }
 }
