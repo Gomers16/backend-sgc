@@ -5,12 +5,10 @@ import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 
 import CaptacionDateo from '#models/captacion_dateo'
 import Convenio from '#models/convenio'
-// 👇 Ajusta este import si tu modelo se llama distinto
 import AgenteCaptacion from '#models/agente_captacion'
 
 export type ComisionEstado = 'PENDIENTE' | 'APROBADA' | 'PAGADA' | 'ANULADA'
 export type ComisionTipoServicio = 'RTM' | 'TECNOMECANICA' | 'PREVENTIVA' | 'SOAT' | 'OTRO'
-
 export type ComisionTipoVehiculo = 'MOTO' | 'VEHICULO'
 
 export default class Comision extends BaseModel {
@@ -76,13 +74,50 @@ export default class Comision extends BaseModel {
   @column()
   declare monto: string
 
+  /**
+   * Meta mensual de RTM (cantidad de RTM) para filas de CONFIGURACIÓN.
+   *
+   * Uso típico:
+   *  - es_config = true
+   *  - asesor_id = NULL  => meta global para todos
+   *  - asesor_id = X     => meta específica para ese asesor
+   *
+   * Para comisiones reales se deja en 0.
+   */
+  @column({ columnName: 'meta_rtm' })
+  declare metaRtm: number
+
+  /**
+   * Valores de referencia de RTM (solo filas de META MENSUAL):
+   *  - valorRtmMoto      → tarifa usada para RTM de motos.
+   *  - valorRtmVehiculo  → tarifa usada para RTM de vehículos.
+   *
+   * Para comisiones reales o reglas de placa/dateo normalmente queda en 0.
+   */
+  @column({ columnName: 'valor_rtm_moto' })
+  declare valorRtmMoto: number
+
+  @column({ columnName: 'valor_rtm_vehiculo' })
+  declare valorRtmVehiculo: number
+
+  /**
+   * Porcentaje de comisión sobre la META mensual de RTM.
+   * Se usa sólo en filas de CONFIGURACIÓN.
+   *
+   * Ejemplo:
+   *  - 5.00  => 5% de comisión sobre la facturación RTM del mes,
+   *             si se cumple o supera la meta.
+   */
+  @column({ columnName: 'porcentaje_comision_meta' })
+  declare porcentajeComisionMeta: string
+
   @column()
   declare estado: ComisionEstado
 
   /**
    * esConfig:
    *  - false => comisión real (lo que ves en la vista 💸 Comisiones)
-   *  - true  => fila de configuración (reglas globales / por asesor)
+   *  - true  => fila de configuración (reglas globales / por asesor / metas)
    */
   @column({ columnName: 'es_config' })
   declare esConfig: boolean

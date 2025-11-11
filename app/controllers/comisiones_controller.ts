@@ -1,7 +1,10 @@
 // app/controllers/comisiones_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
+import Database from '@adonisjs/lucid/services/db'
+
 import Comision from '#models/comision'
+import AgenteCaptacion from '#models/agente_captacion'
 
 /* ========= Helpers ========= */
 function toNumber(v: any): number {
@@ -97,13 +100,13 @@ function mapComisionToDto(c: Comision) {
           id: turno.id,
           numero_global: numeroGlobal,
           numero_servicio: numeroServicio,
-          fecha: turno.fecha || turno.createdAt,
-          placa: turno.placa,
+          fecha: (turno as any).fecha || turno.createdAt,
+          placa: (turno as any).placa,
           servicio: servicio
             ? {
                 id: servicio.id,
-                codigo: servicio.codigoServicio,
-                nombre: servicio.nombreServicio,
+                codigo: (servicio as any).codigoServicio,
+                nombre: (servicio as any).nombreServicio,
               }
             : null,
         }
@@ -113,7 +116,7 @@ function mapComisionToDto(c: Comision) {
 
 /**
  * Mapea una FILA DE CONFIGURACIÓN (es_config = true) a DTO
- * para la vista de parámetros de comisiones.
+ * para la vista de parámetros de comisiones (reglas de placa/dateo).
  */
 function mapConfigToDto(c: Comision) {
   return {
@@ -125,7 +128,29 @@ function mapConfigToDto(c: Comision) {
     valor_placa: toNumber(c.base),
     // monto = comisión por dateo
     valor_dateo: toNumber(c.monto),
+    // metas / % meta (solo tiene sentido en configs de meta, pero no estorba aquí)
+    meta_rtm: c.metaRtm ?? 0,
+    porcentaje_comision_meta: toNumber(c.porcentajeComisionMeta ?? 0),
     fecha_calculo: c.fechaCalculo ? c.fechaCalculo.toISO() : null,
+  }
+}
+
+/**
+ * Mapea una fila de CONFIG (es_config = true) vista como "meta mensual"
+ */
+function mapMetaToDto(c: Comision) {
+  return {
+    id: c.id,
+    asesor_id: c.asesorId,
+    tipo_vehiculo: (c as any).tipoVehiculo ?? null,
+    // meta mensual de RTM (cantidad)
+    meta_mensual: c.metaRtm ?? 0,
+    // % extra de comisión si cumple la meta
+    porcentaje_extra: toNumber(c.porcentajeComisionMeta ?? 0),
+    // valores de referencia de RTM (moto / vehículo)
+    valor_rtm_moto: c.valorRtmMoto ?? 0,
+    valor_rtm_vehiculo: c.valorRtmVehiculo ?? 0,
+    fecha_actualizacion: c.updatedAt?.toISO() ?? c.createdAt?.toISO() ?? null,
   }
 }
 
@@ -197,6 +222,172 @@ export default class ComisionesController {
   }
 
   /**
+   * GET /api/comisiones/metas-mensuales
+   * Resumen mensual por asesor:
+   *  - rtm_motos
+   *  - rtm_vehiculos
+   *  - meta_global_rtm
+   *  - porcentaje_comision_meta
+   *
+   * (Este endpoint es para la vista de resumen, NO para editar metas)
+   */
+  public async metasMensuales({ request, response }: HttpContext) {
+    const mes = request.input('mes') as string | undefined // "YYYY-MM"
+    const asesorIdParam = request.input('asesorId') as number | string | undefined
+
+    // Mes a usar (por defecto, mes actual)
+    let year: number
+    let month: number
+
+    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+      const [y, m] = mes.split('-').map(Number)
+      year = y
+      month = m
+    } else {
+      const now = DateTime.now()
+      year = now.year
+      month = now.month
+    }
+
+    const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
+    const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
+
+    const asesorId =
+      asesorIdParam !== undefined && asesorIdParam !== null
+        ? Number(asesorIdParam)
+        : undefined
+
+    // 1️⃣ Agregamos RTM por asesor (motos / vehículos)
+    const baseQ = Database.from('comisiones')
+      .where((q) => {
+        q.where('es_config', false).orWhereNull('es_config')
+      })
+      .andWhere('tipo_servicio', 'RTM')
+      .whereIn('estado', ['PENDIENTE', 'APROBADA', 'PAGADA'])
+      .whereNotNull('asesor_id')
+
+    if (start && end) {
+      baseQ.whereBetween('fecha_calculo', [start, end])
+    }
+
+    if (asesorId) {
+      baseQ.andWhere('asesor_id', asesorId)
+    }
+
+    const agregados = await baseQ
+      .select('asesor_id')
+      .select(
+        Database.raw(
+          "SUM(CASE WHEN tipo_vehiculo = 'MOTO' THEN 1 ELSE 0 END) AS rtm_motos"
+        )
+      )
+      .select(
+        Database.raw(
+          "SUM(CASE WHEN tipo_vehiculo = 'VEHICULO' OR tipo_vehiculo IS NULL THEN 1 ELSE 0 END) AS rtm_vehiculos"
+        )
+      )
+      .groupBy('asesor_id')
+
+    const countsByAsesor = new Map<
+      number,
+      { rtm_motos: number; rtm_vehiculos: number }
+    >()
+    for (const row of agregados as any[]) {
+      const id = Number(row.asesor_id)
+      if (!Number.isFinite(id)) continue
+      countsByAsesor.set(id, {
+        rtm_motos: Number(row.rtm_motos || 0),
+        rtm_vehiculos: Number(row.rtm_vehiculos || 0),
+      })
+    }
+
+    // 2️⃣ Configs de meta (es_config = true, meta_rtm > 0)
+    const cfgRows = await Comision.query()
+      .where('es_config', true)
+      .where('meta_rtm', '>', 0)
+
+    let cfgGlobal: Comision | null = null
+    const cfgByAsesor = new Map<number, Comision>()
+
+    for (const c of cfgRows) {
+      if (c.asesorId == null) {
+        if (!cfgGlobal) cfgGlobal = c
+      } else {
+        cfgByAsesor.set(c.asesorId, c)
+      }
+    }
+
+    // Set de asesores a mostrar:
+    //  - los que tienen RTM
+    //  - los que tienen una meta específica
+    const allIds = new Set<number>()
+    countsByAsesor.forEach((_v, id) => allIds.add(id))
+    cfgByAsesor.forEach((_v, id) => allIds.add(id))
+
+    const asesorIds = Array.from(allIds)
+    const asesoresMap = new Map<
+      number,
+      { nombre: string; tipo: string | null }
+    >()
+
+    if (asesorIds.length > 0) {
+      const asesores = await AgenteCaptacion.query().whereIn('id', asesorIds)
+      for (const a of asesores) {
+        asesoresMap.set(a.id, {
+          nombre: a.nombre,
+          tipo: (a as any).tipo ?? null,
+        })
+      }
+    }
+
+    const rows = asesorIds.map((id) => {
+      const counts = countsByAsesor.get(id) ?? { rtm_motos: 0, rtm_vehiculos: 0 }
+      const cfg = cfgByAsesor.get(id) ?? cfgGlobal
+
+      const metaRtm = cfg ? cfg.metaRtm ?? 0 : 0
+      const pctMeta = cfg ? toNumber(cfg.porcentajeComisionMeta ?? 0) : 0
+
+      // 💵 Valores unitarios de referencia para RTM
+      const valorRtmMoto = cfg ? cfg.valorRtmMoto ?? 0 : 0
+      const valorRtmVehiculo = cfg ? cfg.valorRtmVehiculo ?? 0 : 0
+
+      // 📈 Facturación real estimada según las unidades y los valores de RTM
+      const totalFacturacionMotos = counts.rtm_motos * valorRtmMoto
+      const totalFacturacionVehiculos = counts.rtm_vehiculos * valorRtmVehiculo
+      const totalFacturacionGlobal = totalFacturacionMotos + totalFacturacionVehiculos
+
+      const info = asesoresMap.get(id)
+
+      return {
+        asesor_id: id,
+        asesor_nombre: info?.nombre ?? '—',
+        asesor_tipo: info?.tipo ?? null,
+
+        // Cantidades
+        rtm_motos: counts.rtm_motos,
+        rtm_vehiculos: counts.rtm_vehiculos,
+        total_rtm_motos: counts.rtm_motos,
+        total_rtm_vehiculos: counts.rtm_vehiculos,
+
+        // Meta y % meta (en cantidad)
+        meta_global_rtm: metaRtm,
+        porcentaje_comision_meta: pctMeta,
+
+        // Valores unitarios configurados para RTM
+        valor_rtm_moto: valorRtmMoto,
+        valor_rtm_vehiculo: valorRtmVehiculo,
+
+        // Facturación calculada
+        total_facturacion_motos: totalFacturacionMotos,
+        total_facturacion_vehiculos: totalFacturacionVehiculos,
+        total_facturacion_global: totalFacturacionGlobal,
+      }
+    })
+
+    return response.ok({ data: rows })
+  }
+
+  /**
    * GET /api/comisiones/:id
    * Detalle de una comisión REAL (no config) con todas sus relaciones
    */
@@ -254,7 +445,7 @@ export default class ComisionesController {
 
     const { cantidad, valor_unitario } = request.only(['cantidad', 'valor_unitario'])
     const cant = toNumber(cantidad || 1)
-    const vu = toNumber(valor_unituario || 0)
+    const vu = toNumber(valor_unitario || 0)
 
     // Recalcular monto (asesor)
     comision.monto = String(cant * vu)
@@ -334,8 +525,7 @@ export default class ComisionesController {
   }
 
   /* ============================================================
-   *          SECCIÓN NUEVA: CONFIGURACIONES DE COMISIONES
-   *          (usa la MISMA tabla comisiones con es_config = true)
+   *          CONFIGURACIONES DE COMISIONES (es_config = true)
    * ============================================================*/
 
   /**
@@ -372,16 +562,18 @@ export default class ComisionesController {
    * POST /api/comisiones/config
    * Crea o actualiza (UPSERT) una regla de comisión:
    *  - combinación (asesor_id, tipo_vehiculo)
-   * Body:
-   *  {
-   *    asesor_id?: number | null,   // null => regla global
-   *    tipo_vehiculo: 'MOTO' | 'VEHICULO',
-   *    valor_placa: number,
-   *    valor_dateo: number
-   *  }
+   *
+   * (Reglas de comisión por placa/dateo, NO metas mensuales)
    */
   public async configsUpsert({ request, response }: HttpContext) {
-    const payload = request.only(['asesor_id', 'tipo_vehiculo', 'valor_placa', 'valor_dateo'])
+    const payload = request.only([
+      'asesor_id',
+      'tipo_vehiculo',
+      'valor_placa',
+      'valor_dateo',
+      'meta_rtm',
+      'porcentaje_comision_meta',
+    ])
 
     const asesorIdRaw = payload.asesor_id
     const asesorId = asesorIdRaw ? Number(asesorIdRaw) : null
@@ -415,13 +607,28 @@ export default class ComisionesController {
       comision.convenioId = null
       comision.tipoServicio = 'OTRO' // para reglas no depende del servicio
       ;(comision as any).tipoVehiculo = tipoVehiculo
-      comision.porcentaje = 0
+      comision.porcentaje = '0'
       comision.estado = 'PENDIENTE'
       comision.fechaCalculo = DateTime.now()
+      comision.metaRtm = 0
+      comision.porcentajeComisionMeta = '0'
+      // valores RTM no aplican aquí, se quedan en 0
+      comision.valorRtmMoto = 0
+      comision.valorRtmVehiculo = 0
     }
 
     comision.base = String(valorPlaca) // placa
     comision.monto = String(valorDateo) // dateo
+
+    // Meta y % de comisión de meta (si vienen)
+    if (payload.meta_rtm !== undefined) {
+      comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
+    }
+    if (payload.porcentaje_comision_meta !== undefined) {
+      comision.porcentajeComisionMeta = String(
+        Math.max(0, toNumber(payload.porcentaje_comision_meta))
+      )
+    }
 
     await comision.save()
 
@@ -439,7 +646,14 @@ export default class ComisionesController {
       return response.notFound({ message: 'Configuración no encontrada' })
     }
 
-    const payload = request.only(['asesor_id', 'tipo_vehiculo', 'valor_placa', 'valor_dateo'])
+    const payload = request.only([
+      'asesor_id',
+      'tipo_vehiculo',
+      'valor_placa',
+      'valor_dateo',
+      'meta_rtm',
+      'porcentaje_comision_meta',
+    ])
 
     if (payload.asesor_id !== undefined) {
       const asesorIdRaw = payload.asesor_id
@@ -462,6 +676,16 @@ export default class ComisionesController {
       comision.monto = String(Math.max(0, toNumber(payload.valor_dateo)))
     }
 
+    if (payload.meta_rtm !== undefined) {
+      comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
+    }
+
+    if (payload.porcentaje_comision_meta !== undefined) {
+      comision.porcentajeComisionMeta = String(
+        Math.max(0, toNumber(payload.porcentaje_comision_meta))
+      )
+    }
+
     await comision.save()
 
     return response.ok(mapConfigToDto(comision))
@@ -481,5 +705,214 @@ export default class ComisionesController {
     await comision.delete()
 
     return response.ok({ message: 'Configuración eliminada correctamente' })
+  }
+
+  /* ============================================================
+   *          NUEVA SECCIÓN: CRUD DE METAS MENSUALES
+   *          usando la MISMA tabla comisiones (es_config = true)
+   * ============================================================*/
+
+  /**
+   * GET /api/comisiones/metas
+   * Lista metas mensuales configuradas.
+   * Filtros opcionales:
+   *  - asesorId
+   *  - tipoVehiculo ('MOTO' | 'VEHICULO' | null para global)
+   *
+   * Usa:
+   *  - meta_rtm                 → meta_mensual
+   *  - porcentaje_comision_meta → porcentaje_extra
+   *  - valor_rtm_moto           → valor_rtm_moto
+   *  - valor_rtm_vehiculo       → valor_rtm_vehiculo
+   */
+  public async metasIndex({ request, response }: HttpContext) {
+    const asesorId = request.input('asesorId') as number | undefined
+    const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
+
+    const q = Comision.query()
+      .where('es_config', true)
+      .where('meta_rtm', '>', 0)
+
+    if (asesorId) {
+      q.where('asesor_id', asesorId)
+    }
+
+    if (tipoVehiculo) {
+      q.where('tipo_vehiculo', tipoVehiculo)
+    }
+
+    q.orderBy('asesor_id', 'asc').orderBy('tipo_vehiculo', 'asc')
+
+    const rows = await q
+
+    return response.ok({
+      data: rows.map((c) => mapMetaToDto(c)),
+    })
+  }
+
+  /**
+   * POST /api/comisiones/metas
+   * Crea o actualiza (UPSERT) una meta mensual:
+   *  combinación (asesor_id, tipo_vehiculo) en la MISMA tabla comisiones.
+   *
+   * Body esperado:
+   *  - asesor_id
+   *  - tipo_vehiculo ('MOTO' | 'VEHICULO' | null/'' para Global)
+   *  - meta_mensual
+   *  - porcentaje_extra
+   *  - valor_rtm_moto
+   *  - valor_rtm_vehiculo
+   */
+  public async metasUpsert({ request, response }: HttpContext) {
+    const payload = request.only([
+      'asesor_id',
+      'tipo_vehiculo',
+      'meta_mensual',
+      'porcentaje_extra',
+      'valor_rtm_moto',
+      'valor_rtm_vehiculo',
+    ])
+
+    const asesorIdRaw = payload.asesor_id
+    const asesorId = asesorIdRaw ? Number(asesorIdRaw) : null
+
+    const rawTipo = payload.tipo_vehiculo
+    let tipoVehiculo: string | null = null
+    if (rawTipo !== undefined && rawTipo !== null && String(rawTipo).trim() !== '') {
+      const tv = String(rawTipo).toUpperCase()
+      if (!['MOTO', 'VEHICULO'].includes(tv)) {
+        return response.badRequest({ message: 'tipo_vehiculo inválido (MOTO o VEHICULO o vacío para Global)' })
+      }
+      tipoVehiculo = tv
+    }
+
+    const metaMensual = Math.max(0, toNumber(payload.meta_mensual))
+    const porcentajeExtra = Math.max(0, toNumber(payload.porcentaje_extra))
+    const valorRtmMoto = Math.max(0, toNumber(payload.valor_rtm_moto))
+    const valorRtmVehiculo = Math.max(0, toNumber(payload.valor_rtm_vehiculo))
+
+    const existingQuery = Comision.query()
+      .where('es_config', true)
+
+    if (tipoVehiculo === null) {
+      existingQuery.whereNull('tipo_vehiculo')
+    } else {
+      existingQuery.where('tipo_vehiculo', tipoVehiculo)
+    }
+
+    if (asesorId === null) {
+      existingQuery.whereNull('asesor_id')
+    } else {
+      existingQuery.where('asesor_id', asesorId)
+    }
+
+    let comision = await existingQuery.first()
+
+    if (!comision) {
+      comision = new Comision()
+      comision.esConfig = true
+      comision.captacionDateoId = null
+      comision.asesorId = asesorId
+      comision.convenioId = null
+      comision.tipoServicio = 'OTRO'
+      ;(comision as any).tipoVehiculo = tipoVehiculo
+      comision.base = '0'
+      comision.monto = '0'
+      comision.porcentaje = '0'
+      comision.estado = 'PENDIENTE'
+      comision.fechaCalculo = DateTime.now()
+      comision.metaRtm = 0
+      comision.porcentajeComisionMeta = '0'
+      comision.valorRtmMoto = 0
+      comision.valorRtmVehiculo = 0
+    }
+
+    comision.metaRtm = metaMensual
+    comision.porcentajeComisionMeta = String(porcentajeExtra)
+    comision.valorRtmMoto = valorRtmMoto
+    comision.valorRtmVehiculo = valorRtmVehiculo
+
+    await comision.save()
+
+    return response.ok(mapMetaToDto(comision))
+  }
+
+  /**
+   * PATCH /api/comisiones/metas/:id
+   * Actualiza una meta existente (fila es_config = true).
+   */
+  public async metasUpdate({ params, request, response }: HttpContext) {
+    const comision = await Comision.find(params.id)
+
+    if (!comision || !comision.esConfig) {
+      return response.notFound({ message: 'Meta mensual no encontrada' })
+    }
+
+    const payload = request.only([
+      'asesor_id',
+      'tipo_vehiculo',
+      'meta_mensual',
+      'porcentaje_extra',
+      'valor_rtm_moto',
+      'valor_rtm_vehiculo',
+    ])
+
+    if (payload.asesor_id !== undefined) {
+      const asesorIdRaw = payload.asesor_id
+      comision.asesorId = asesorIdRaw ? Number(asesorIdRaw) : null
+    }
+
+    if (payload.tipo_vehiculo !== undefined) {
+      const rawTipo = payload.tipo_vehiculo
+      if (rawTipo === null || String(rawTipo).trim() === '') {
+        // Global
+        ;(comision as any).tipoVehiculo = null
+      } else {
+        const tv = String(rawTipo).toUpperCase()
+        if (!['MOTO', 'VEHICULO'].includes(tv)) {
+          return response.badRequest({
+            message: 'tipo_vehiculo inválido (MOTO o VEHICULO o vacío para Global)',
+          })
+        }
+        ;(comision as any).tipoVehiculo = tv
+      }
+    }
+
+    if (payload.meta_mensual !== undefined) {
+      comision.metaRtm = Math.max(0, toNumber(payload.meta_mensual))
+    }
+
+    if (payload.porcentaje_extra !== undefined) {
+      comision.porcentajeComisionMeta = String(
+        Math.max(0, toNumber(payload.porcentaje_extra))
+      )
+    }
+
+    if (payload.valor_rtm_moto !== undefined) {
+      comision.valorRtmMoto = Math.max(0, toNumber(payload.valor_rtm_moto))
+    }
+
+    if (payload.valor_rtm_vehiculo !== undefined) {
+      comision.valorRtmVehiculo = Math.max(0, toNumber(payload.valor_rtm_vehiculo))
+    }
+
+    await comision.save()
+
+    return response.ok(mapMetaToDto(comision))
+  }
+
+  /**
+   * DELETE /api/comisiones/metas/:id
+   * Elimina una meta mensual (fila de configuración).
+   */
+  public async metasDestroy({ params, response }: HttpContext) {
+    const comision = await Comision.find(params.id)
+    if (!comision || !comision.esConfig) {
+      return response.notFound({ message: 'Meta mensual no encontrada' })
+    }
+
+    await comision.delete()
+
+    return response.ok({ success: true })
   }
 }

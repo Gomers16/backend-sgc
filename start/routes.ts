@@ -674,6 +674,37 @@ router
       return new ComisionesController().index(ctx)
     })
 
+    // 🔹 Metas mensuales de comisiones por asesor
+    router.get('/comisiones/metas-mensuales', async (ctx) => {
+      const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+      return new ComisionesController().metasMensuales(ctx)
+    })
+
+    // 🔹 CRUD de metas mensuales (configuración)
+    router.get('/comisiones/metas', async (ctx) => {
+      const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+      return new ComisionesController().metasIndex(ctx)
+    })
+
+    router.post('/comisiones/metas', async (ctx) => {
+      const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+      return new ComisionesController().metasUpsert(ctx)
+    })
+
+    router
+      .patch('/comisiones/metas/:id', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().metasUpdate(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
+    router
+      .delete('/comisiones/metas/:id', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().metasDestroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
     // Rutas con :id para comisiones reales
     router
       .get('/comisiones/:id', async (ctx) => {

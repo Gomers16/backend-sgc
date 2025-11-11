@@ -2441,13 +2441,7 @@ export default class ContratosController {
       ;(contrato as any)[c.size] = null
       await contrato.save()
 
-      await this.logCambioArchivo(
-        contrato,
-        `${tipo}_afiliacion_archivo`,
-        old,
-        null,
-        actorId
-      )
+      await this.logCambioArchivo(contrato, `${tipo}_afiliacion_archivo`, old, null, actorId)
 
       return response.ok({ message: `Archivo de ${tipo.toUpperCase()} eliminado.` })
     } catch (error: any) {

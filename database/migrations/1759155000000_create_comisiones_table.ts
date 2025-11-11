@@ -15,7 +15,7 @@ export default class extends BaseSchema {
        * Si es una comisión generada:
        *  - captacion_dateo_id: obligatorio (FK al dateo original)
        *
-       * Si es una FILA DE CONFIGURACIÓN (regla estándar / por asesor):
+       * Si es una FILA DE CONFIGURACIÓN (regla estándar / por asesor / meta):
        *  - captacion_dateo_id: NULL
        */
       table
@@ -66,6 +66,8 @@ export default class extends BaseSchema {
        *
        * Para comisiones generadas, puedes rellenarlo o dejarlo NULL y deducirlo
        * desde el turno/vehículo cuando calcules.
+       *
+       * Para metas globales, se puede dejar en NULL.
        */
       table
         .enu('tipo_vehiculo', ['MOTO', 'VEHICULO'], {
@@ -96,6 +98,36 @@ export default class extends BaseSchema {
       table.decimal('monto', 12, 2).notNullable().defaultTo(0)
 
       /**
+       * META_RTM:
+       *  - Meta mensual de RTM (cantidad de RTM) para filas de CONFIGURACIÓN.
+       *  - Uso típico:
+       *      es_config = true
+       *      asesor_id = NULL  => meta global
+       *      asesor_id = X     => meta individual del asesor X
+       *  - Para comisiones reales se deja en 0.
+       */
+      table.integer('meta_rtm').unsigned().notNullable().defaultTo(0)
+
+      /**
+       * Valores de referencia de RTM (solo filas de META MENSUAL):
+       *  - valor_rtm_moto      → tarifa usada para RTM de motos.
+       *  - valor_rtm_vehiculo  → tarifa usada para RTM de vehículos.
+       *
+       * Para comisiones reales o reglas de placa/dateo pueden quedar en 0.
+       */
+      table.decimal('valor_rtm_moto', 12, 2).notNullable().defaultTo(0)
+      table.decimal('valor_rtm_vehiculo', 12, 2).notNullable().defaultTo(0)
+
+      /**
+       * PORCENTAJE_COMISION_META:
+       *  - % de comisión sobre la facturación RTM del mes cuando se cumple
+       *    o supera la meta_rtm.
+       *  - Solo se usa en filas de CONFIGURACIÓN (es_config = true).
+       *  - Para comisiones reales queda en 0.
+       */
+      table.decimal('porcentaje_comision_meta', 5, 2).notNullable().defaultTo(0)
+
+      /**
        * Estado de la comisión:
        *  - En comisiones generadas: flujo normal (PENDIENTE/APROBADA/PAGADA/ANULADA).
        *  - En filas de configuración: puedes dejar siempre en 'PENDIENTE' o ignorarlo,
@@ -112,7 +144,8 @@ export default class extends BaseSchema {
       /**
        * es_config:
        *  - false => fila corresponde a una comisión generada real (lo que ya usas hoy).
-       *  - true  => fila es una REGLA de configuración (global o por asesor + tipo_vehiculo).
+       *  - true  => fila es una REGLA de configuración (global o por asesor + tipo_vehiculo)
+       *             o una META mensual por asesor.
        */
       table.boolean('es_config').notNullable().defaultTo(false)
 
