@@ -7,7 +7,6 @@ import Convenio from '#models/convenio'
 import Prospecto from '#models/prospecto'
 import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
-import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import Usuario from '#models/usuario'
 import TurnoRtm from '#models/turno_rtm' // 👈 NUEVO
 
@@ -120,8 +119,9 @@ export default class CaptacionDateo extends BaseModel {
   @belongsTo(() => Convenio, { foreignKey: 'convenioId' })
   declare convenio: BelongsTo<typeof Convenio>
 
-  @belongsTo(() => AsesorConvenioAsignacion, { foreignKey: 'asesorConvenioId' })
-  declare asesorConvenio: BelongsTo<typeof AsesorConvenioAsignacion>
+  // 👇 AHORA asesor_convenio_id apunta a agentes_captacions
+  @belongsTo(() => AgenteCaptacion, { foreignKey: 'asesorConvenioId' })
+  declare asesorConvenio: BelongsTo<typeof AgenteCaptacion>
 
   @belongsTo(() => Usuario, { foreignKey: 'asesorConvenioUsuarioId' })
   declare asesorConvenioUsuario: BelongsTo<typeof Usuario>
@@ -135,7 +135,7 @@ export default class CaptacionDateo extends BaseModel {
   @belongsTo(() => Cliente, { foreignKey: 'clienteId' })
   declare cliente: BelongsTo<typeof Cliente>
 
-  // 👇 NUEVA RELACIÓN para que el preload('turno') funcione
+  // 👇 RELACIÓN para que el preload('turno') funcione
   @belongsTo(() => TurnoRtm, { foreignKey: 'consumidoTurnoId' })
   declare turno: BelongsTo<typeof TurnoRtm>
 

@@ -66,12 +66,13 @@ export default class CaptacionDateos extends BaseSchema {
         .inTable('convenios')
         .onDelete('SET NULL')
 
+      // 👇 AHORA referencia agentes_captacions (asesor convenio)
       table
         .integer('asesor_convenio_id')
         .unsigned()
         .nullable()
         .references('id')
-        .inTable('asesor_convenio_asignaciones')
+        .inTable('agentes_captacions')
         .onDelete('SET NULL')
 
       table
@@ -134,6 +135,44 @@ export default class CaptacionDateos extends BaseSchema {
       table.index(['asesor_convenio_id'])
       table.index(['prospecto_id'])
     })
+
+    // 🔧 CORRECCIÓN DE DATOS: Asignar convenio_id a dateos existentes
+    console.log('🔧 Corrigiendo convenio_id en dateos existentes...')
+
+    // 1️⃣ Actualizar dateos donde asesor_convenio_id tiene valor pero convenio_id está NULL
+    const result1 = await this.db.rawQuery(`
+      UPDATE captacion_dateos cd
+      INNER JOIN agentes_captacions ac ON cd.asesor_convenio_id = ac.id
+      INNER JOIN convenios c ON ac.nombre = c.nombre
+      SET cd.convenio_id = c.id
+      WHERE cd.convenio_id IS NULL
+        AND cd.asesor_convenio_id IS NOT NULL
+        AND ac.tipo = 'ASESOR_CONVENIO'
+    `)
+
+    console.log(`✅ ${result1[0]?.affectedRows || 0} dateos actualizados desde asesor_convenio_id`)
+
+    // 2️⃣ Actualizar dateos donde el agente_id es de tipo ASESOR_CONVENIO
+    const result2 = await this.db.rawQuery(`
+      UPDATE captacion_dateos cd
+      INNER JOIN agentes_captacions ac ON cd.agente_id = ac.id
+      INNER JOIN convenios c ON ac.nombre = c.nombre
+      SET
+        cd.convenio_id = c.id,
+        cd.asesor_convenio_id = ac.id
+      WHERE cd.convenio_id IS NULL
+        AND ac.tipo = 'ASESOR_CONVENIO'
+    `)
+
+    console.log(`✅ ${result2[0]?.affectedRows || 0} dateos actualizados desde agente_id`)
+
+    // 3️⃣ Verificación
+    const [verificacion] = await this.db
+      .from('captacion_dateos')
+      .whereNotNull('convenio_id')
+      .count('* as total')
+
+    console.log(`🎉 Total dateos con convenio_id: ${verificacion.total}`)
   }
 
   public async down() {

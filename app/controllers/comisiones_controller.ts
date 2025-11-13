@@ -160,6 +160,7 @@ export default class ComisionesController {
    * Lista comisiones (SOLO reales, es_config = false / null) con filtros:
    * - mes (YYYY-MM)
    * - asesorId
+   * - convenioId
    * - estado
    * - sortBy, order
    */
@@ -168,6 +169,7 @@ export default class ComisionesController {
     const perPage = Math.min(Number(request.input('perPage') || 10), 100)
     const mes = request.input('mes') as string | undefined // "YYYY-MM"
     const asesorId = request.input('asesorId') as number | undefined
+    const convenioId = request.input('convenioId') as number | undefined
     const estado = request.input('estado') as string | undefined
     const sortBy = (request.input('sortBy') || 'id') as string
     const order = (request.input('order') || 'desc') as 'asc' | 'desc'
@@ -196,7 +198,14 @@ export default class ComisionesController {
     }
 
     // Filtro por asesor
-    if (asesorId) query.where('asesor_id', asesorId)
+    if (asesorId) {
+      query.where('asesor_id', asesorId)
+    }
+
+    // Filtro por convenio (para fichas de asesor convenio)
+    if (convenioId) {
+      query.where('convenio_id', convenioId)
+    }
 
     // Filtro por estado
     if (estado) query.where('estado', estado)
