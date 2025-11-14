@@ -5,6 +5,8 @@ import CaptacionDateo, { Canal, Origen } from '#models/captacion_dateo'
 import AgenteCaptacion from '#models/agente_captacion'
 import Convenio from '#models/convenio'
 import TurnoRtm from '#models/turno_rtm' // ✅ para armar turnoInfo
+import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion' // ✅
+import Prospecto from '#models/prospecto' // ✅ NUEVO: para archivar prospectos
 
 /* ======================= Constantes / Tipos ======================= */
 const CANALES_DB = ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'] as const
@@ -89,8 +91,6 @@ function serializeTurnoInfo(t: any | null) {
 export default class CaptacionDateosController {
   /**
    * GET /captacion-dateos
-   * Soporta filtros por placa, teléfono, canal=ASESOR, agente, convenio, resultado, consumido, desde/hasta.
-   * Devuelve cada item con: convenio (id/nombre) y, si aplica, turnoInfo (fecha, #global, #servicio, estado).
    */
   public async index({ request }: HttpContext) {
     const page = Number(request.input('page', 1))
@@ -167,7 +167,7 @@ export default class CaptacionDateosController {
       const uniq = Array.from(new Set(turnoIds))
       const turnos = await TurnoRtm.query()
         .whereIn('id', uniq)
-        .preload('servicio') // para servicioCodigo si quieres mostrarlo
+        .preload('servicio')
         .select(['id', 'fecha', 'turnoNumero', 'turno_numero_servicio', 'estado', 'servicio_id'])
       turnosById = Object.fromEntries(turnos.map((t) => [t.id, t]))
     }
@@ -181,7 +181,6 @@ export default class CaptacionDateosController {
       }
       const snake = toSnake(base)
       const t = snake.consumido_turno_id ? turnosById[snake.consumido_turno_id] : null
-      // Adjuntamos bloque turnoInfo (lo usa la UI)
       return {
         ...snake,
         turnoInfo: serializeTurnoInfo(t),
@@ -223,18 +222,6 @@ export default class CaptacionDateosController {
 
   /**
    * POST /captacion-dateos
-   * body: { canal, agente_id?, placa, telefono?, origen, observacion?, imagen_*?, convenio_id? }
-   *
-   * Reglas de negocio:
-   *  - Si el usuario logueado tiene AgenteCaptacion y no mandan agente_id, se usa ese.
-   *  - Si canal = 'ASESOR':
-   *      * ASESOR_COMERCIAL => canal interno ASESOR_COMERCIAL
-   *      * ASESOR_CONVENIO  => canal interno ASESOR_CONVENIO
-   *  - Si el agente es ASESOR_CONVENIO:
-   *      * asesor_convenio_id = agente.id
-   *      * si no mandan convenio_id, se intenta buscar Convenio por nombre (1:1).
-   *  - Si el agente es ASESOR_COMERCIAL y viene convenio_id:
-   *      * se intenta buscar asesor_convenio 1:1 por nombre del Convenio.
    */
   public async store({ request, response, auth }: HttpContext) {
     // =========== Agente (por body o por usuario logueado) ===========
@@ -327,39 +314,66 @@ export default class CaptacionDateosController {
       if (!agente) return response.badRequest({ message: 'agente_id no existe' })
     }
 
-    // =========== LÓGICA nueva asesor / convenio ===========
+    // =========== Reglas negocio ASESOR_COMERCIAL / ASESOR_CONVENIO + convenio ===========
     let asesorConvenioId: number | null = null
 
-    // Caso C: el agente es ASESOR_CONVENIO → se lleva todo (dateo + placa)
     if (agente && agente.tipo === 'ASESOR_CONVENIO') {
-      asesorConvenioId = agente.id
+      // 🔒 Un asesor convenio solo puede datear para SU convenio
+      canal = 'ASESOR_CONVENIO'
 
-      // Si no vino convenioId, intentamos buscar un convenio 1:1 por nombre
-      if (!convenio && convenioId === null) {
-        const convByName = await Convenio.query().where('nombre', agente.nombre).first()
-        if (convByName) {
-          convenio = convByName
-          convenioId = convByName.id
-        }
-      }
-    }
-
-    // Caso B: ASESOR_COMERCIAL + convenio → buscamos el asesor_convenio 1:1 por nombre
-    if (!asesorConvenioId && convenio) {
-      const asesorConv = await AgenteCaptacion.query()
-        .where('tipo', 'ASESOR_CONVENIO')
-        .where('nombre', convenio.nombre)
+      const convenioDelAsesor = await Convenio.query()
+        .where('asesor_convenio_id', agente.id)
         .first()
 
-      if (asesorConv) {
-        asesorConvenioId = asesorConv.id
+      if (!convenioDelAsesor) {
+        return response.unprocessableEntity({
+          message: 'El asesor convenio no tiene un convenio asociado para datear.',
+        })
       }
-    }
 
-    // ✅ Regla de negocio: si canal es asesor (comercial o convenio), convenio es obligatorio
-    const canalEsAsesor = canal === 'ASESOR_COMERCIAL' || canal === 'ASESOR_CONVENIO'
-    if (canalEsAsesor && convenioId === null) {
-      return response.badRequest({ message: 'convenio_id es requerido para canal ASESOR' })
+      // Si viene un convenioId distinto, no se permite
+      if (convenioId !== null && convenioId !== convenioDelAsesor.id) {
+        return response.forbidden({
+          message:
+            'No puede datear para un convenio distinto al que tiene asociado como asesor convenio.',
+        })
+      }
+
+      convenioId = convenioDelAsesor.id
+      convenio = convenioDelAsesor
+      asesorConvenioId = agente.id
+    } else if (agente && canal === 'ASESOR_COMERCIAL') {
+      // 💼 Comercial: puede datear sin convenio, pero si viene convenioId debe estar asignado
+      if (convenioId !== null) {
+        const asignacion = await AsesorConvenioAsignacion.query()
+          .where('asesor_id', agente.id)
+          .where('convenio_id', convenioId)
+          .where('activo', true)
+          .whereNull('fecha_fin')
+          .first()
+
+        if (!asignacion) {
+          return response.forbidden({
+            message:
+              'Este asesor comercial no tiene asignado el convenio seleccionado. No puede datear para él.',
+          })
+        }
+
+        // Si el convenio tiene asesorConvenioId, lo usamos para llenar el campo
+        if (!convenio) {
+          convenio = await Convenio.find(convenioId)
+        }
+        if (convenio && convenio.asesorConvenioId) {
+          asesorConvenioId = convenio.asesorConvenioId
+        }
+      }
+    } else {
+      // Otros canales (TELE, FACHADA, REDES...) → no tocamos convenio ni asesorConvenioId
+      if (convenio) {
+        if (convenio.asesorConvenioId) {
+          asesorConvenioId = convenio.asesorConvenioId
+        }
+      }
     }
 
     // Exclusividad por placa/teléfono
@@ -385,11 +399,12 @@ export default class CaptacionDateosController {
       }
     }
 
+    // ===== Crear Dateo =====
     const created = await CaptacionDateo.create({
       canal: canal as Canal,
       agenteId,
       convenioId,
-      asesorConvenioId, // 👈 NUEVO: engancha el asesor del convenio
+      asesorConvenioId, // 👈 sigue llenando el asesor del convenio
       placa: placa!,
       telefono,
       origen: origen as Origen,
@@ -403,6 +418,17 @@ export default class CaptacionDateosController {
       imagenSubidaPor,
     })
 
+    // ===== 🗂 Archivar prospecto con misma placa (si existe y no está archivado) =====
+    try {
+      await Prospecto.query()
+        .where('archivado', false)
+        .whereRaw("REPLACE(UPPER(placa), '-', '') = ?", [placa!])
+        .update({ archivado: true })
+    } catch (err) {
+      // No rompemos la creación del dateo por esto, solo lo dejamos en logs
+      console.error('No se pudo archivar prospecto asociado a la placa', placa, err)
+    }
+
     const out = created.serialize() as any
     out.canal = (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const).includes(out.canal)
       ? 'ASESOR'
@@ -412,7 +438,6 @@ export default class CaptacionDateosController {
 
   /**
    * PUT /captacion-dateos/:id
-   * Actualiza: observacion, imagen_*, consumido_turno_id y resultado
    */
   public async update({ params, request, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
@@ -474,7 +499,7 @@ export default class CaptacionDateosController {
       ? 'ASESOR'
       : out.canal
 
-    // turnoInfo después de actualizar (p.ej. si acabas de vincular el turno)
+    // turnoInfo después de actualizar
     let turnoInfo = null
     if (item.consumidoTurnoId) {
       const t = await TurnoRtm.query()

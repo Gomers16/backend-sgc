@@ -291,6 +291,34 @@ export default class ConveniosController {
   }
 
   /**
+   * 🔹 GET /convenios/asignados?asesor_id=3
+   * Devuelve SOLO los convenios activos asignados a un asesor comercial.
+   */
+  public async asignadosPorAsesor({ request, response }: HttpContext) {
+    const raw = request.input('asesor_id') ?? request.input('asesorId')
+    const asesorId = Number(raw)
+
+    if (!Number.isFinite(asesorId) || asesorId <= 0) {
+      return response.badRequest({ message: 'asesor_id inválido' })
+    }
+
+    const asignaciones = await AsesorConvenioAsignacion.query()
+      .where('asesor_id', asesorId)
+      .where('activo', true)
+      .whereNull('fecha_fin')
+      .preload('convenio', (q) => q.select(['id', 'nombre']).where('activo', true))
+
+    const convenios = asignaciones.map((a) => a.convenio).filter((c): c is Convenio => !!c)
+
+    return response.ok(
+      convenios.map((c) => ({
+        id: c.id,
+        nombre: c.nombre,
+      }))
+    )
+  }
+
+  /**
    * GET /convenios/light?activo=1&select=id,nombre&perPage=100
    * Respuesta: { data: [{ id, nombre, ...}] }
    */

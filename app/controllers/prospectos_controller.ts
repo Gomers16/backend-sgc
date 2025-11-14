@@ -7,6 +7,7 @@ import Prospecto from '#models/prospecto'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
 import AgenteCaptacion from '#models/agente_captacion'
+import CaptacionDateo from '#models/captacion_dateo'
 
 function normPlaca(raw?: string | null): string | null {
   if (!raw) return null
@@ -145,7 +146,8 @@ export default class ProspectosController {
     if (!placa) return response.badRequest({ message: 'placa es requerida' })
 
     const p = await Prospecto.query()
-      .whereRaw('REPLACE(UPPER(placa), \'-\', \'\') = ?', [placa])
+      .where('archivado', false)
+      .whereRaw("REPLACE(UPPER(placa), '-', '') = ?", [placa])
       .orderBy('updated_at', 'desc')
       .preload('creador')
       .preload('convenio')
@@ -165,9 +167,14 @@ export default class ProspectosController {
     const hoy = DateTime.now().startOf('day')
 
     const preventiva: DocResumen = !p.preventivaVencimiento
-      ? { estado: p.preventivaVigente ? 'vigente' : 'sin_datos', vencimiento: null, dias_restantes: null }
+      ? {
+          estado: p.preventivaVigente ? 'vigente' : 'sin_datos',
+          vencimiento: null,
+          dias_restantes: null,
+        }
       : {
-          estado: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days) >= 0 ? 'vigente' : 'vencido',
+          estado:
+            Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days) >= 0 ? 'vigente' : 'vencido',
           vencimiento: p.preventivaVencimiento.toISODate()!,
           dias_restantes: Math.ceil(p.preventivaVencimiento.diff(hoy, 'days').days),
         }
@@ -203,7 +210,7 @@ export default class ProspectosController {
     })
   }
 
-  /** POST /api/prospectos  (placa requerida) */
+  /** POST /api/prospectos  (placa requerida y única) */
   public async store({ request, response, auth }: HttpContext) {
     const body = request.only([
       'placa',
@@ -236,6 +243,15 @@ export default class ProspectosController {
       })
     }
 
+    // ⛔ Validar placa única (a nivel de negocio)
+    const existente = await Prospecto.query().where('placa', placa).first()
+    if (existente) {
+      return response.status(409).send({
+        message: 'Ya existe un prospecto con esta placa',
+        id: existente.id,
+      })
+    }
+
     const soatVenc = body.soatVencimiento ? DateTime.fromISO(body.soatVencimiento) : null
     const tecnoVenc = body.tecnoVencimiento ? DateTime.fromISO(body.tecnoVencimiento) : null
     const prevVenc = body.preventivaVencimiento
@@ -249,7 +265,9 @@ export default class ProspectosController {
 
     // ✅ Regla: el asesor asignado inicial DEBE ser el agente del usuario creador
     if (!creadoPor) {
-      return response.badRequest({ message: 'No se pudo determinar el usuario creador (creadoPor).' })
+      return response.badRequest({
+        message: 'No se pudo determinar el usuario creador (creadoPor).',
+      })
     }
     const agenteCreador = await AgenteCaptacion.query()
       .where('usuario_id', creadoPor)
@@ -281,6 +299,7 @@ export default class ProspectosController {
           preventivaVencimiento: prevVenc && prevVenc.isValid ? prevVenc : null,
           peritajeUltimaFecha: periUlt && periUlt.isValid ? periUlt : null,
           observaciones: body.observaciones ?? null,
+          // archivado: false se coloca por default en DB
         } as any,
         { client: trx }
       )
@@ -320,7 +339,7 @@ export default class ProspectosController {
     }
   }
 
-  /** PATCH /api/prospectos/:id  (no permite vaciar la placa) */
+  /** PATCH /api/prospectos/:id  (no permite vaciar la placa, ni duplicarla) */
   public async update({ request, params, response }: HttpContext) {
     const id = Number(params.id)
     const prospecto = await Prospecto.find(id)
@@ -344,7 +363,25 @@ export default class ProspectosController {
 
     if (body.placa !== undefined) {
       const nueva = normPlaca(body.placa)
-      if (!nueva) return response.badRequest({ message: 'placa es obligatoria y no puede ser vacía' })
+      if (!nueva) {
+        return response.badRequest({ message: 'placa es obligatoria y no puede ser vacía' })
+      }
+
+      // ⛔ Validar que la nueva placa no exista en otro prospecto
+      if (nueva !== prospecto.placa) {
+        const duplicado = await Prospecto.query()
+          .where('placa', nueva)
+          .whereNot('id', prospecto.id)
+          .first()
+
+        if (duplicado) {
+          return response.status(409).send({
+            message: 'Ya existe otro prospecto con esta placa',
+            id: duplicado.id,
+          })
+        }
+      }
+
       prospecto.placa = nueva
     }
 
@@ -383,42 +420,109 @@ export default class ProspectosController {
   public async index({ request }: HttpContext) {
     const q = request.qs()
 
+    // 🔹 filtros nuevos desde la vista
+    const placaRaw = q.placa ? String(q.placa).trim() : ''
+    const telefonoRaw = q.telefono ? String(q.telefono).trim() : ''
+    const nombreRaw = q.nombre ? String(q.nombre).trim() : ''
     const convenioId = q.convenioId ?? q.convenio_id
+    const asesorId = q.asesorId ?? q.asesor_id
+    const desdeStr = q.desde ? String(q.desde) : ''
+    const hastaStr = q.hasta ? String(q.hasta) : ''
+
+    // 🔹 filtros legacy que ya usabas en otras partes
     const creadoPor = q.creadoPor ?? q.creado_por
     const vencenEnDias = Number(q.vencenEnDias)
     const soat = String(q.soat ?? '').toLowerCase() === 'true'
     const tecno = String(q.tecno ?? '').toLowerCase() === 'true'
-    const term = String(q.q ?? '').trim()
+    const term = String(q.q ?? '').trim() // buscador libre opcional
 
-    const page = Number(q.page ?? 1)
-    const perPage = Math.min(Number(q.perPage ?? 20), 200)
-    const sortBy = String(q.sortBy ?? 'updated_at')
-    const order: 'asc' | 'desc' = String(q.order ?? 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc'
-
-    const asesorId = q.asesorId ?? q.asesor_id
     const vigenteRaw = q.vigente ?? q.vigente_num
     const vigente =
       vigenteRaw === undefined
         ? undefined
         : String(vigenteRaw) === 'true' || String(vigenteRaw) === '1'
 
+    const page = Number(q.page ?? 1)
+    const perPage = Math.min(Number(q.perPage ?? 20), 200)
+    const sortBy = String(q.sortBy ?? 'updated_at')
+    const order: 'asc' | 'desc' = String(q.order ?? 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc'
+
     const hoy = DateTime.now().startOf('day')
-    const hasta =
+    const hastaVence =
       !Number.isNaN(vencenEnDias) && vencenEnDias > 0 ? hoy.plus({ days: vencenEnDias }) : null
 
     const query = Prospecto.query()
+      .where('archivado', false) // 👈 NO mostramos archivados
+      // 👇 AQUI PRELOADEAMOS LA ASIGNACIÓN ACTIVA CON SU ASESOR
+      .preload('asignaciones', (qAsig) =>
+        qAsig
+          .where('activo', true)
+          .whereNull('fecha_fin')
+          .orderBy('fecha_asignacion', 'desc')
+          .preload('asesor')
+      )
 
-    if (convenioId) query.where('convenio_id', Number(convenioId))
-    if (creadoPor) query.where('creado_por', Number(creadoPor))
+    /* =========================
+     FILTROS BÁSICOS
+  ========================== */
 
-    if (hasta && (soat || tecno)) {
+    // placa normalizada (ABC123 → ABC123 / ab c-123 etc)
+    if (placaRaw) {
+      const placaNorm = normPlaca(placaRaw)
+      if (placaNorm) {
+        query.whereRaw("REPLACE(UPPER(placa), '-', '') = ?", [placaNorm])
+      }
+    }
+
+    // teléfono: solo dígitos y like
+    if (telefonoRaw) {
+      const tel = normTel(telefonoRaw)
+      if (tel) {
+        query.where('telefono', 'like', `%${tel}%`)
+      }
+    }
+
+    // nombre del cliente
+    if (nombreRaw) {
+      const like = `%${nombreRaw.toUpperCase()}%`
+      query.whereRaw('UPPER(nombre) LIKE ?', [like])
+    }
+
+    // convenio directo en el prospecto
+    if (convenioId) {
+      query.where('convenio_id', Number(convenioId))
+    }
+
+    // prospectos creados por un usuario concreto
+    if (creadoPor) {
+      query.where('creado_por', Number(creadoPor))
+    }
+
+    // rango de fechas por created_at (desde / hasta)
+    if (desdeStr) {
+      const d = DateTime.fromISO(desdeStr, { zone: 'local' })
+      if (d.isValid) {
+        query.where('created_at', '>=', d.startOf('day').toSQL()!)
+      }
+    }
+    if (hastaStr) {
+      const h = DateTime.fromISO(hastaStr, { zone: 'local' })
+      if (h.isValid) {
+        query.where('created_at', '<=', h.endOf('day').toSQL()!)
+      }
+    }
+
+    /* =========================
+     VENCEN SOAT / RTM EN N DÍAS
+  ========================== */
+    if (hastaVence && (soat || tecno)) {
       query.where((grp) => {
         if (soat) {
           grp.where((sub) => {
             sub
               .where('soat_vigente', true)
               .whereNotNull('soat_vencimiento')
-              .whereBetween('soat_vencimiento', [hoy.toISODate()!, hasta.toISODate()!])
+              .whereBetween('soat_vencimiento', [hoy.toISODate()!, hastaVence.toISODate()!])
           })
         }
         if (tecno) {
@@ -426,21 +530,29 @@ export default class ProspectosController {
             sub
               .where('tecno_vigente', true)
               .whereNotNull('tecno_vencimiento')
-              .whereBetween('tecno_vencimiento', [hoy.toISODate()!, hasta.toISODate()!])
+              .whereBetween('tecno_vencimiento', [hoy.toISODate()!, hastaVence.toISODate()!])
           })
         }
       })
     }
 
+    /* =========================
+    BUSCADOR LIBRE (q)
+  ========================== */
     if (term) {
       const like = `%${term.toUpperCase()}%`
+      const telTerm = term.replace(/\D+/g, '')
       query.where((sub) => {
-        sub
-          .whereRaw('UPPER(placa) LIKE ?', [like])
-          .orWhereRaw('UPPER(nombre) LIKE ?', [like])
-          .orWhere('telefono', 'like', `%${term.replace(/\D+/g, '')}%`)
+        sub.whereRaw('UPPER(placa) LIKE ?', [like]).orWhereRaw('UPPER(nombre) LIKE ?', [like])
+        if (telTerm) {
+          sub.orWhere('telefono', 'like', `%${telTerm}%`)
+        }
       })
     }
+
+    /* =========================
+     ASIGNACIONES (asesor / vigente)
+  ========================== */
 
     if (vigente !== undefined) {
       if (vigente) {
@@ -473,6 +585,9 @@ export default class ProspectosController {
       })
     }
 
+    /* =========================
+     ORDEN Y PAGINACIÓN
+  ========================== */
     query.orderBy(sortBy, order)
 
     const paginator = await query.paginate(page, perPage)
@@ -535,6 +650,7 @@ export default class ProspectosController {
     const q = Prospecto.query()
       .join('asesor_prospecto_asignaciones as apa', 'apa.prospecto_id', 'prospectos.id')
       .where('apa.asesor_id', asesorId)
+      .where('prospectos.archivado', false)
       .select('prospectos.*')
       .orderBy('prospectos.updated_at', 'desc')
       .limit(500)
@@ -549,7 +665,8 @@ export default class ProspectosController {
     const prospectoId = Number(params.id)
     const asesorId = Number(request.input('asesor_id') ?? request.input('asesorId'))
     const motivoFin = request.input('motivo_fin') as string | undefined
-    if (!prospectoId || !asesorId) return response.badRequest({ message: 'prospecto_id y asesor_id son requeridos' })
+    if (!prospectoId || !asesorId)
+      return response.badRequest({ message: 'prospecto_id y asesor_id son requeridos' })
 
     const trx = await db.transaction()
     try {
@@ -607,5 +724,87 @@ export default class ProspectosController {
     } as any)
     await activa.save()
     return { message: 'Asignación cerrada' }
+  }
+
+  /** POST /api/prospectos/:id/datear
+   *  Convierte el prospecto en un Dateo y lo marca como archivado.
+   */
+  public async datear({ params, auth, response }: HttpContext) {
+    const prospectoId = Number(params.id)
+    if (!Number.isFinite(prospectoId)) {
+      return response.badRequest({ message: 'ID inválido' })
+    }
+
+    const prospecto = await Prospecto.query()
+      .where('id', prospectoId)
+      .where('archivado', false)
+      .preload('asignaciones', (q) =>
+        q.where('activo', true).whereNull('fecha_fin').orderBy('fecha_asignacion', 'desc')
+      )
+      .first()
+
+    if (!prospecto) {
+      return response.notFound({ message: 'Prospecto no encontrado o ya archivado' })
+    }
+
+    // Validar RTM vencida (opcionalmente puedes relajar esto)
+    const hoy = DateTime.now().startOf('day')
+    const tecno = prospecto.tecnoVencimiento
+    if (!tecno || !tecno.isValid || tecno.diff(hoy, 'days').days >= 0) {
+      return response.badRequest({
+        message: 'La RTM aún no está vencida; no se puede datear este prospecto.',
+      })
+    }
+
+    const asignacionActiva = (prospecto.asignaciones || []).find((a) => a.activo && !a.fechaFin)
+
+    if (!asignacionActiva) {
+      return response.badRequest({
+        message: 'El prospecto no tiene un asesor asignado actualmente.',
+      })
+    }
+
+    const asesorId = asignacionActiva.asesorId
+    const asesor = await AgenteCaptacion.find(asesorId)
+    if (!asesor) {
+      return response.badRequest({
+        message: 'No se encontró el agente de captación asignado al prospecto.',
+      })
+    }
+
+    const trx = await db.transaction()
+    try {
+      // Crear el Dateo a partir del prospecto
+      const dateo = await CaptacionDateo.create(
+        {
+          prospectoId: prospecto.id,
+          placa: prospecto.placa,
+          telefono: prospecto.telefono,
+          clienteNombre: prospecto.nombre,
+          convenioId: prospecto.convenioId ?? null,
+          agenteId: asesor.id,
+          canal: asesor.tipo || 'ASESOR_COMERCIAL', // ajusta a tus enums reales
+          resultado: 'PENDIENTE', // ajusta al enum real de tu columna
+          creadoPor: auth?.user?.id ?? null,
+        } as any,
+        { client: trx }
+      )
+
+      // Archivar el prospecto para que no aparezca más en la tabla
+      prospecto.archivado = true
+      await prospecto.useTransaction(trx).save()
+
+      await trx.commit()
+      return response.created({
+        message: 'Prospecto dateado correctamente',
+        dateo_id: dateo.id,
+      })
+    } catch (e) {
+      await trx.rollback()
+      return response.internalServerError({
+        message: 'Error al datear prospecto',
+        error: String(e),
+      })
+    }
   }
 }

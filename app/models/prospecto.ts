@@ -1,4 +1,3 @@
-// app/models/prospecto.ts
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo, hasMany, computed } from '@adonisjs/lucid/orm'
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
@@ -63,6 +62,10 @@ export default class Prospecto extends BaseModel {
   // 👤 Creador (Usuario/Asesor que lo creó)
   @belongsTo(() => Usuario, { foreignKey: 'creadoPor' })
   declare creador: BelongsTo<typeof Usuario>
+
+  // 📦 Archivado (cuando ya se convirtió en dateo y no debe salir en la tabla)
+  @column()
+  declare archivado: boolean
 
   // ⏱️ Timestamps
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })

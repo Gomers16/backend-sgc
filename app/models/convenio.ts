@@ -5,7 +5,7 @@ import type { HasMany } from '@adonisjs/lucid/types/relations'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import CaptacionDateo from '#models/captacion_dateo'
 
-export type ConvenioTipo = 'PERSONA' | 'TALLER'
+export type ConvenioTipo = 'PERSONA' | 'TALLER' | 'PARQUEADERO' | 'LAVADERO'
 
 export default class Convenio extends BaseModel {
   public static table = 'convenios'
@@ -48,6 +48,9 @@ export default class Convenio extends BaseModel {
 
   @column()
   declare activo: boolean
+
+  @column({ columnName: 'asesor_convenio_id' })
+  declare asesorConvenioId: number | null
 
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })
   declare createdAt: DateTime

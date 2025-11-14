@@ -3,6 +3,7 @@ import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import Usuario from '#models/usuario'
 import Cargo from '#models/cargo'
 import Convenio from '#models/convenio'
+import AgenteCaptacion from '#models/agente_captacion'
 
 type TipoConvenio = 'PERSONA' | 'TALLER' | 'PARQUEADERO' | 'LAVADERO'
 
@@ -47,6 +48,12 @@ export default class ConveniosSeeder extends BaseSeeder {
       const tipo = tipoPorIndice(i)
       const { docTipo, docNumero } = docPara(tipo, u.id)
 
+      // 🔥 Vincular convenio con su agente ASESOR_CONVENIO (1:1)
+      const agente = await AgenteCaptacion.query()
+        .where('usuario_id', u.id)
+        .where('tipo', 'ASESOR_CONVENIO')
+        .first()
+
       await Convenio.updateOrCreate(
         { docTipo, docNumero },
         {
@@ -60,6 +67,8 @@ export default class ConveniosSeeder extends BaseSeeder {
           direccion: (u as any).direccion ?? null,
           notas: 'Convenio creado 1:1 desde usuario ASESOR CONVENIO',
           activo: true,
+          // 👇 clave para reglas de comisiones (escenarios 1, 3 y 4)
+          asesorConvenioId: agente?.id ?? null,
         }
       )
 

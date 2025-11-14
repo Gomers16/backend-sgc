@@ -11,7 +11,10 @@ export default class CreateConveniosTable extends BaseSchema {
     await this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
       table
-        .enu('tipo', ['PERSONA', 'TALLER'], { useNative: true, enumName: 'convenio_tipo_enum' })
+        .enu('tipo', ['PERSONA', 'TALLER', 'PARQUEADERO', 'LAVADERO'], {
+          useNative: true,
+          enumName: 'convenio_tipo_enum',
+        })
         .notNullable()
 
       table.string('codigo', 64).nullable()
@@ -33,6 +36,15 @@ export default class CreateConveniosTable extends BaseSchema {
       table.string('direccion', 180).nullable()
       table.text('notas').nullable()
       table.boolean('activo').notNullable().defaultTo(true)
+
+      // 👇 relación 1:1 con agente de captación (asesor convenio)
+      table
+        .integer('asesor_convenio_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('agentes_captacions') // 🔥 AQUI EL CAMBIO: nombre correcto de la tabla
+        .onDelete('SET NULL')
 
       table.unique(['doc_tipo', 'doc_numero'])
       table.index(['activo', 'tipo'])

@@ -17,7 +17,9 @@ export default class CreateProspectosTable extends BaseSchema {
         .inTable('convenios')
         .onDelete('SET NULL')
 
-      table.string('placa', 12).nullable()
+      // ⛔ Placa única y obligatoria
+      table.string('placa', 12).notNullable().unique()
+
       table.string('telefono', 20).nullable()
       table.string('nombre', 120).nullable()
       table.string('observaciones', 255).nullable()
@@ -53,6 +55,9 @@ export default class CreateProspectosTable extends BaseSchema {
         .inTable('usuarios')
         .onDelete('SET NULL')
 
+      // 👇 marca de archivado (cuando ya se convirtió en dateo)
+      table.boolean('archivado').notNullable().defaultTo(false)
+
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
       table.dateTime('updated_at', { precision: 0 }).notNullable().defaultTo(this.now())
 
@@ -63,6 +68,7 @@ export default class CreateProspectosTable extends BaseSchema {
       table.index(['tecno_vigente', 'tecno_vencimiento'])
       table.index(['preventiva_vigente', 'preventiva_vencimiento'])
       table.index(['origen'])
+      table.index(['archivado']) // 👈 para filtrar rápido los archivados
     })
   }
 

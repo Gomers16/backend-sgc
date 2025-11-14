@@ -544,7 +544,7 @@ router
       return new CaptacionUtilController().crearAutoPorConvenio(ctx)
     })
 
-    /* =============================== PROSPECTOS ======================== */
+       /* =============================== PROSPECTOS ======================== */
     router.get('/prospectos', async (ctx) => {
       const { default: ProspectosController } = await import('#controllers/prospectos_controller')
       return new ProspectosController().index(ctx)
@@ -585,6 +585,14 @@ router
       })
       .where('id', /^[0-9]+$/)
 
+    // 👇 NUEVA RUTA: datear prospecto (lo pasa a Dateo y lo archiva)
+    router
+      .post('/prospectos/:id/datear', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().datear(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
     router
       .get('/asesores/:id/resumen', async (ctx) => {
         const { default: ProspectosController } = await import('#controllers/prospectos_controller')
@@ -606,14 +614,29 @@ router
       })
       .where('id', /^[0-9]+$/)
 
+
     /* =============================== CONVENIOS ========================= */
     router.get('/convenios', async (ctx) => {
       const { default: ConveniosController } = await import('#controllers/convenios_controller')
       return new ConveniosController().index(ctx)
     })
+
+    // 👇 ESTA RUTA FALTABA (detalle por ID)
+    router
+      .get('/convenios/:id', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+
     router.post('/convenios', async (ctx) => {
       const { default: ConveniosController } = await import('#controllers/convenios_controller')
       return new ConveniosController().store(ctx)
+    })
+    /** 🔹 Convenios asignados a un asesor comercial */
+    router.get('/convenios/asignados', async (ctx) => {
+      const { default: ConveniosController } = await import('#controllers/convenios_controller')
+      return new ConveniosController().asignadosPorAsesor(ctx)
     })
     router
       .patch('/convenios/:id', async (ctx) => {
