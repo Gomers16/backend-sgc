@@ -473,11 +473,11 @@ export default class ContratosController {
     }
   }
 
-  /**
-   * Garantiza que, si el usuario del contrato es ASESOR CONVENIO,
+ /**
+   * Garantiza que, si el usuario del contrato es ASESOR,
    * exista:
-   *  - un AgenteCaptacion tipo ASESOR_CONVENIO ligado al usuario
-   *  - un Convenio ligado lógicamente al usuario (vía documento del contrato)
+   *  - un AgenteCaptacion ligado al usuario (COMERCIAL / CONVENIO / TELEMERCADEO)
+   *  - y, si es ASESOR_CONVENIO, un Convenio ligado lógicamente al usuario
    *
    * Se llama DESPUÉS de crear el contrato (store / anexarFisico).
    */
@@ -485,55 +485,124 @@ export default class ContratosController {
     // Si el contrato no tiene usuario, no hay nada que hacer
     if (!contrato.usuarioId) return
 
-    // Traemos usuario + cargo para saber si es ASESOR CONVENIO
-    const usuario = await Usuario.find(contrato.usuarioId)
-    if (!usuario) return
+    // Cargamos usuario y cargo DESDE el contrato
+    await contrato.load('usuario')
+    await contrato.load('cargo')
+    const usuario = contrato.usuario
+    const cargo = contrato.cargo
+    if (!usuario || !cargo) return
 
-    const cargo = usuario.cargoId ? await Cargo.find(usuario.cargoId) : null
-    const nombreCargo = cargo?.nombre?.toUpperCase()?.trim() ?? ''
+    const nombreCargo = (cargo.nombre || '').toUpperCase().trim()
 
-    // Solo aplica para usuarios cuyo cargo es ASESOR CONVENIO
-    if (nombreCargo !== 'ASESOR CONVENIO') {
+    type TipoAsesor = 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'ASESOR_TELEMERCADEO'
+    let tipo: TipoAsesor | null = null
+
+    if (nombreCargo.includes('ASESOR COMERCIAL') || nombreCargo === 'COMERCIAL') {
+      tipo = 'ASESOR_COMERCIAL'
+    } else if (nombreCargo.includes('ASESOR CONVENIO')) {
+      tipo = 'ASESOR_CONVENIO'
+    } else if (nombreCargo.includes('TELEMERCADEO') || nombreCargo.includes('TELEMARKETING')) {
+      tipo = 'ASESOR_TELEMERCADEO'
+    }
+
+    // Si el cargo NO es de asesor, salimos
+    if (!tipo) return
+
+    // ============================
+    // 1) Crear / actualizar AgenteCaptacion (para CUALQUIER asesor)
+    // ============================
+
+    const telefonoUsuario =
+      (usuario as any).celularPersonal ||
+      (usuario as any).celularCorporativo ||
+      (usuario as any).telefono ||
+      (usuario as any).celular ||
+      (usuario as any).telefono1 ||
+      null
+
+    const nombreAgente =
+      (usuario as any).nombreCompleto ||
+      (usuario as any).nombre ||
+      `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
+      `Usuario #${usuario.id}`
+
+    const agente = await AgenteCaptacion.firstOrCreate(
+      { usuarioId: usuario.id, tipo },
+      {
+        usuarioId: usuario.id,
+        tipo,
+        nombre: nombreAgente,
+        telefono: telefonoUsuario,
+        activo: true,
+      } as any
+    )
+
+    agente.merge({
+      nombre: nombreAgente,
+      telefono: telefonoUsuario,
+      activo: true,
+    })
+
+    await agente.save()
+
+    // ============================
+    // 2) SOLO para ASESOR_CONVENIO: garantizar Convenio ligado al usuario
+    // ============================
+    if (tipo !== 'ASESOR_CONVENIO') {
+      // Para ASESOR_COMERCIAL y TELEMERCADEO no hacemos nada más aquí
       return
     }
 
-    // ============================
-    // 1) AgenteCaptacion ASESOR_CONVENIO
-    // ============================
+    // ---------- CÉDULA / DOCUMENTO ----------
+    // Preferimos el documento del USUARIO (cédula) y, si no existe, usamos el del contrato
+    const docNumeroUsuario =
+      (usuario as any).numeroDocumento || // si tu modelo se llama así
+      (usuario as any).numeroCedula ||
+      (usuario as any).cedula ||
+      (usuario as any).documento ||
+      (usuario as any).identificacion ||
+      null
 
-    // OJO: aquí asumo que la tabla agentes_captacion SÍ tiene columna usuario_id
-    // (es lo habitual en tu contexto). Si diera error, me lo pasas y lo ajustamos.
-    let agente = await AgenteCaptacion.query()
-      .where('usuario_id', usuario.id)
-      .where('tipo', 'ASESOR_CONVENIO')
-      .first()
-
-    if (!agente) {
-      const nombreAgente =
-        (usuario as any).nombreCompleto ||
-        (usuario as any).nombre ||
-        `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
-        `Usuario #${usuario.id}`
-
-      agente = await AgenteCaptacion.create({
-        usuarioId: usuario.id, // Lucid lo mapea a usuario_id en la tabla
-        tipo: 'ASESOR_CONVENIO',
-        nombre: nombreAgente,
-      } as any)
-    }
-
-    // ============================
-    // 2) Convenio ligado al usuario (vía doc_numero)
-    // ============================
-
-    // Usamos el documento del contrato como clave natural del convenio.
-    // Ojo: ajusta este campo si tu modelo Contrato lo llama distinto.
-    const docNumero = (contrato as any).identificacion
+    const docNumeroContrato = (contrato as any).identificacion
       ? String((contrato as any).identificacion)
       : null
 
+    const docNumero = docNumeroUsuario || docNumeroContrato || null
+
+    // Tipo de documento: por defecto 'CC' (puedes cambiarlo si manejas otros)
+    const docTipoUsuario =
+      (usuario as any).tipoDocumento ||
+      (usuario as any).docTipo ||
+      'CC'
+
+    // Dirección tomada del usuario (perfil)
+    const direccionUsuario =
+      (usuario as any).direccion ||
+      (usuario as any).direccionResidencia ||
+      (usuario as any).direccionDomicilio ||
+      null
+
+    // Teléfono / whatsapp / email para el convenio
+    const telefonoConvenio =
+      (usuario as any).telefono ||
+      (usuario as any).celular ||
+      (usuario as any).celularPersonal ||
+      (usuario as any).celularCorporativo ||
+      null
+
+    const whatsappConvenio =
+      (usuario as any).whatsapp ||
+      (usuario as any).telefono ||
+      (usuario as any).celular ||
+      (usuario as any).celularPersonal ||
+      (usuario as any).celularCorporativo ||
+      null
+
+    const emailConvenio = (usuario as any).email || (usuario as any).correo || null
+
     let convenio: Convenio | null = null
 
+    // Si tenemos documento, lo usamos como clave natural
     if (docNumero) {
       convenio = await Convenio.query().where('doc_numero', docNumero).first()
     }
@@ -547,31 +616,52 @@ export default class ContratosController {
         `Convenio usuario #${usuario.id}`
 
       convenio = await Convenio.create({
-        // tipo es NOT NULL (enum PERSONA | TALLER). Para ASESOR_CONVENIO asumimos PERSONA.
         tipo: 'PERSONA',
         nombre: nombreConvenio,
-        docTipo: null, // si luego tienes campo tipoDocumento en Usuario, se puede mapear aquí
-        docNumero: docNumero, // importante para poder encontrarlo después
-        telefono:
-          (usuario as any).telefono ||
-          (usuario as any).celular ||
-          (usuario as any).telefono1 ||
-          null,
-        whatsapp:
-          (usuario as any).whatsapp ||
-          (usuario as any).telefono ||
-          (usuario as any).celular ||
-          null,
-        email: (usuario as any).email || null,
-        // ciudadId, direccion, notas, etc. los puedes poblar luego si quieres
+        docTipo: docTipoUsuario,      // 👈 aquí va 'CC' + lo que tengas
+        docNumero: docNumero,         // 👈 aquí va la CÉDULA
+        telefono: telefonoConvenio,
+        whatsapp: whatsappConvenio,
+        email: emailConvenio,
+        direccion: direccionUsuario,
         activo: true,
       } as any)
+    } else {
+      // Si ya existía, rellenamos los campos vacíos con la info del usuario
+      let dirty = false
+
+      if (!convenio.docTipo && docTipoUsuario) {
+        ;(convenio as any).docTipo = docTipoUsuario
+        dirty = true
+      }
+      if (!convenio.docNumero && docNumero) {
+        ;(convenio as any).docNumero = docNumero
+        dirty = true
+      }
+      if (!convenio.telefono && telefonoConvenio) {
+        ;(convenio as any).telefono = telefonoConvenio
+        dirty = true
+      }
+      if (!convenio.whatsapp && whatsappConvenio) {
+        ;(convenio as any).whatsapp = whatsappConvenio
+        dirty = true
+      }
+      if (!convenio.email && emailConvenio) {
+        ;(convenio as any).email = emailConvenio
+        dirty = true
+      }
+      if (!convenio.direccion && direccionUsuario) {
+        ;(convenio as any).direccion = direccionUsuario
+        dirty = true
+      }
+
+      if (dirty) {
+        await convenio.save()
+      }
     }
 
-    // Si más adelante quieres amarrar el convenio al agente (si la tabla tiene agente_id),
-    // podrías hacer algo así:
-    //
-    // if ((convenio as any).agenteId == null && agente) {
+    // Si luego quieres amarrar el convenio al agente:
+    // if ((convenio as any).agenteId == null) {
     //   ;(convenio as any).agenteId = agente.id
     //   await convenio.save()
     // }

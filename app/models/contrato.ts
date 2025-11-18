@@ -62,12 +62,6 @@ export default class Contrato extends BaseModel {
   declare estado: 'activo' | 'inactivo'
 
   @column()
-  declare periodoPrueba?: number | null
-
-  @column()
-  declare horarioTrabajo?: string | null
-
-  @column()
   declare centroCosto?: string | null
 
   /** Salario reflejado en el contrato (NOT NULL en DB) */
@@ -129,32 +123,32 @@ export default class Contrato extends BaseModel {
   // EPS
   @column({ columnName: 'eps_doc_path' }) declare epsDocPath?: string | null
   @column({ columnName: 'eps_doc_nombre' }) declare epsDocNombre?: string | null
-  @column({ columnName: 'eps_doc_mime' })   declare epsDocMime?: string | null
-  @column({ columnName: 'eps_doc_size' })   declare epsDocSize?: number | null
+  @column({ columnName: 'eps_doc_mime' }) declare epsDocMime?: string | null
+  @column({ columnName: 'eps_doc_size' }) declare epsDocSize?: number | null
 
   // ARL
-  @column({ columnName: 'arl_doc_path' })   declare arlDocPath?: string | null
+  @column({ columnName: 'arl_doc_path' }) declare arlDocPath?: string | null
   @column({ columnName: 'arl_doc_nombre' }) declare arlDocNombre?: string | null
-  @column({ columnName: 'arl_doc_mime' })   declare arlDocMime?: string | null
-  @column({ columnName: 'arl_doc_size' })   declare arlDocSize?: number | null
+  @column({ columnName: 'arl_doc_mime' }) declare arlDocMime?: string | null
+  @column({ columnName: 'arl_doc_size' }) declare arlDocSize?: number | null
 
   // AFP
-  @column({ columnName: 'afp_doc_path' })   declare afpDocPath?: string | null
+  @column({ columnName: 'afp_doc_path' }) declare afpDocPath?: string | null
   @column({ columnName: 'afp_doc_nombre' }) declare afpDocNombre?: string | null
-  @column({ columnName: 'afp_doc_mime' })   declare afpDocMime?: string | null
-  @column({ columnName: 'afp_doc_size' })   declare afpDocSize?: number | null
+  @column({ columnName: 'afp_doc_mime' }) declare afpDocMime?: string | null
+  @column({ columnName: 'afp_doc_size' }) declare afpDocSize?: number | null
 
   // AFC (cesantías)
-  @column({ columnName: 'afc_doc_path' })   declare afcDocPath?: string | null
+  @column({ columnName: 'afc_doc_path' }) declare afcDocPath?: string | null
   @column({ columnName: 'afc_doc_nombre' }) declare afcDocNombre?: string | null
-  @column({ columnName: 'afc_doc_mime' })   declare afcDocMime?: string | null
-  @column({ columnName: 'afc_doc_size' })   declare afcDocSize?: number | null
+  @column({ columnName: 'afc_doc_mime' }) declare afcDocMime?: string | null
+  @column({ columnName: 'afc_doc_size' }) declare afcDocSize?: number | null
 
   // CCF
-  @column({ columnName: 'ccf_doc_path' })   declare ccfDocPath?: string | null
+  @column({ columnName: 'ccf_doc_path' }) declare ccfDocPath?: string | null
   @column({ columnName: 'ccf_doc_nombre' }) declare ccfDocNombre?: string | null
-  @column({ columnName: 'ccf_doc_mime' })   declare ccfDocMime?: string | null
-  @column({ columnName: 'ccf_doc_size' })   declare ccfDocSize?: number | null
+  @column({ columnName: 'ccf_doc_mime' }) declare ccfDocMime?: string | null
+  @column({ columnName: 'ccf_doc_size' }) declare ccfDocSize?: number | null
 
   // ===== Relaciones =====
   @column.dateTime({ autoCreate: true })
