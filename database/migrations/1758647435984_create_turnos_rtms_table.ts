@@ -57,6 +57,15 @@ export default class TurnosRtms extends BaseSchema {
         .onDelete('SET NULL')
         .onUpdate('CASCADE')
 
+      // 🟢 NUEVO: Conductor opcional del turno
+      table
+        .integer('conductor_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('conductores')
+        .onDelete('SET NULL')
+
       // Agente opcional
       table
         .integer('agente_captacion_id')
@@ -74,13 +83,13 @@ export default class TurnosRtms extends BaseSchema {
       table.string('hora_salida').nullable()
       table.string('tiempo_servicio').nullable()
 
-      // ✅ NUEVO: facturación del turno
+      // ✅ facturación del turno
       table.boolean('tiene_facturacion').notNullable().defaultTo(false)
       table.string('hora_facturacion').nullable()
 
       // Consecutivos
       table.integer('turno_numero').notNullable() // consecutivo global por sede+día
-      table.integer('turno_numero_servicio').notNullable() // ✅ consecutivo por servicio (sede+día)
+      table.integer('turno_numero_servicio').notNullable() // consecutivo por servicio (sede+día)
 
       table.string('turno_codigo').notNullable().unique()
 
@@ -94,7 +103,7 @@ export default class TurnosRtms extends BaseSchema {
         )
         .notNullable()
 
-      // Medio de captación “plano” (derivado del canal; se conserva por compat de esquema)
+      // Medio de captación “plano” (derivado del canal; ahora puede ser NULL)
       table
         .enu('medio_entero', [
           'Redes Sociales',
@@ -104,16 +113,13 @@ export default class TurnosRtms extends BaseSchema {
           'Referido Interno',
           'Asesor Comercial',
         ])
-        .notNullable()
+        .nullable()
 
       // Observaciones del turno
       table.text('observaciones').nullable()
 
-      // Canal final: FACHADA | ASESOR | TELE | REDES
-      table
-        .enu('canal_atribucion', ['FACHADA', 'ASESOR', 'TELE', 'REDES'])
-        .notNullable()
-        .defaultTo('FACHADA')
+      // Canal final: FACHADA | ASESOR | TELE | REDES (puede ser NULL si no hay canal)
+      table.enu('canal_atribucion', ['FACHADA', 'ASESOR', 'TELE', 'REDES']).nullable()
 
       table
         .enu('estado', ['activo', 'inactivo', 'cancelado', 'finalizado'])
@@ -124,7 +130,7 @@ export default class TurnosRtms extends BaseSchema {
       table.unique(['sede_id', 'fecha', 'turno_numero'], 'uq_turno_por_dia_y_sede')
       table.unique(
         ['sede_id', 'fecha', 'servicio_id', 'turno_numero_servicio'],
-        'uq_turno_por_servicio_dia_sede' // ✅ evita duplicados en el consecutivo por servicio
+        'uq_turno_por_servicio_dia_sede'
       )
 
       // Índices útiles
@@ -133,6 +139,7 @@ export default class TurnosRtms extends BaseSchema {
       table.index(['fecha', 'sede_id'], 'idx_turno_fecha_sede')
       table.index(['vehiculo_id'], 'idx_turno_vehiculo')
       table.index(['cliente_id'], 'idx_turno_cliente')
+      table.index(['conductor_id'], 'idx_turno_conductor') // 🟢 nuevo índice
       table.index(['canal_atribucion'], 'idx_turno_canal')
       table.index(['captacion_dateo_id'], 'idx_turno_dateo')
 

@@ -10,6 +10,7 @@ import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
 import AgenteCaptacion from '#models/agente_captacion'
 import CaptacionDateo from '#models/captacion_dateo'
+import Conductor from '#models/conductor' // 👈 NUEVO: para asociar conductor al turno
 
 type TipoVehiculo = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 
@@ -51,6 +52,7 @@ export default class TurnosRtmsSeeder extends BaseSeeder {
       const agentes = await AgenteCaptacion.query({ client: trx })
       const agentesCom = agentes.filter((a) => a.tipo === 'ASESOR_COMERCIAL')
       const agentesConv = agentes.filter((a) => a.tipo === 'ASESOR_CONVENIO')
+      const conductores = await Conductor.query({ client: trx }) // 👈 conductores ya existentes
 
       if (!usuarios.length || !servicios.length || !vehiculos.length) {
         await trx.commit()
@@ -104,6 +106,17 @@ export default class TurnosRtmsSeeder extends BaseSeeder {
         const next = (consecServicio.get(key) || 0) + 1
         consecServicio.set(key, next)
         return next
+      }
+
+      // 👇 Helper para elegir conductor según vehículo (si existe)
+      const getConductorIdForVehiculo = (vehiculoId: number): number | null => {
+        if (!conductores.length) return null
+        const candidatos = conductores.filter(
+          (c) => (c as any).vehiculoId === vehiculoId || (c as any).vehiculo_id === vehiculoId
+        )
+        const lista = candidatos.length ? candidatos : conductores
+        const elegido = pick(lista)
+        return elegido.id
       }
 
       // ===== 1) Generación aleatoria de turnos =====
@@ -179,6 +192,8 @@ export default class TurnosRtmsSeeder extends BaseSeeder {
           randInt(0, 59)
         ).padStart(2, '0')}`
 
+        const conductorId = getConductorIdForVehiculo(veh.id) // 👈 asignar conductor (si hay)
+
         const turno = await TurnoRtm.create(
           {
             sedeId: SEDE_ID,
@@ -204,6 +219,7 @@ export default class TurnosRtmsSeeder extends BaseSeeder {
             claseVehiculoId: (veh as any).claseVehiculoId ?? null,
             agenteCaptacionId,
             captacionDateoId,
+            conductorId, // 👈 NUEVO: se guarda el conductor en el turno
           } as any,
           { client: trx }
         )
@@ -235,6 +251,7 @@ export default class TurnosRtmsSeeder extends BaseSeeder {
         const turnoNumeroServicio = await getNextServicio(servicioGarantizado.id, fechaISO)
 
         const cliente = veh.clienteId ? clientes.find((c) => c.id === veh.clienteId) || null : null
+        const conductorId = getConductorIdForVehiculo(veh.id) // 👈 también para la visita garantizada
 
         await TurnoRtm.create(
           {
@@ -261,6 +278,7 @@ export default class TurnosRtmsSeeder extends BaseSeeder {
             claseVehiculoId: (veh as any).claseVehiculoId ?? null,
             agenteCaptacionId: null,
             captacionDateoId: null,
+            conductorId, // 👈 NUEVO
           } as any,
           { client: trx }
         )

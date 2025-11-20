@@ -145,7 +145,10 @@ export default class ClientesController {
     const item = await Cliente.find(params.id)
     if (!item) return response.notFound({ message: 'Cliente no encontrado' })
 
-    const [{ total }] = await db.from('vehiculos').where('cliente_id', params.id).count('* as total')
+    const [{ total }] = await db
+      .from('vehiculos')
+      .where('cliente_id', params.id)
+      .count('* as total')
     if (Number(total) > 0) {
       return response.conflict({
         message: 'No se puede eliminar: existen vehículos asociados a este cliente.',
@@ -176,15 +179,17 @@ export default class ClientesController {
       })
 
     // Conteos + última visita global
-    const [{ total_visitas, ultima }] = await base
+    const [{ total_visitas: totalVisitas, ultima }] = await base
       .clone()
       .count('* as total_visitas')
       .max('t.fecha as ultima')
 
     const last = toBogotaDateTime(ultima)
     const today = DateTime.now().setZone('America/Bogota').startOf('day')
-    const dias_desde_ultima_visita =
-      last ? String(Math.max(0, Math.floor(today.diff(last, 'days').days ?? 0))) : null
+    const diasDesdeUltimaVisita =
+      last && last.isValid
+        ? String(Math.max(0, Math.floor(today.diff(last, 'days').days ?? 0)))
+        : null
 
     // Top servicios
     const serviciosTopRaw = await base
@@ -196,7 +201,6 @@ export default class ClientesController {
       .limit(5)
 
     // 1) Última visita POR CADA VEHÍCULO del cliente
-    //    (N+1 consultas, número de vehículos por cliente es pequeño)
     const ultimasPorVehiculo: Array<{
       vehiculoId: number
       placa: string
@@ -244,9 +248,9 @@ export default class ClientesController {
 
     const metricas = {
       vehiculos_count: vehiculos.length,
-      visitas_count: Number(total_visitas ?? 0),
-      ultima_visita_at: last ? last.toISODate() : null,
-      dias_desde_ultima_visita,
+      visitas_count: Number(totalVisitas ?? 0),
+      ultima_visita_at: last && last.isValid ? last.toISODate() : null,
+      dias_desde_ultima_visita: diasDesdeUltimaVisita,
       servicios_top: (serviciosTopRaw || []).map((r: any) => ({
         servicio_id: Number(r.servicio_id ?? r.servicioId ?? r['t.servicio_id']),
         cnt: Number(r.cnt ?? r['count'] ?? r.$extras?.cnt ?? 0),
@@ -261,18 +265,20 @@ export default class ClientesController {
         marca: v.marca,
         linea: v.linea,
         modelo: v.modelo,
+        color: v.color, // ✅ nuevo
+        matricula: v.matricula, // ✅ nuevo
         clase: v.$preloaded?.clase
           ? { id: v.claseVehiculoId, nombre: (v.$preloaded as any).clase?.nombre }
           : undefined,
       })),
       metricas,
-      kpis: metricas, // alias, por compatibilidad
+      kpis: metricas, // alias
       ultimas_por_vehiculo: ultimasPorVehiculo,
       visitas_recientes: recientes,
     })
   }
 
-  /** GET /clientes/:id/historial?page=&perPage=&... */
+  /** GET /clientes/:id/historial ... */
   public async historial({ params, request, response }: HttpContext) {
     const id = Number(params.id)
     const page = Number(request.input('page', 1))

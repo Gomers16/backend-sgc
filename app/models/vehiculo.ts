@@ -2,7 +2,7 @@
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
-import ClaseVehiculo from '#models/clase_vehiculos' // ← ajusta al nombre real del archivo
+import ClaseVehiculo from '#models/clase_vehiculos'
 import Cliente from '#models/cliente'
 
 export default class Vehiculo extends BaseModel {
@@ -25,6 +25,14 @@ export default class Vehiculo extends BaseModel {
 
   @column()
   declare modelo: number | null
+
+  // 🟢 NUEVO: color del vehículo
+  @column()
+  declare color: string | null
+
+  // 🟢 NUEVO: número de matrícula / tarjeta de propiedad
+  @column()
+  declare matricula: string | null
 
   @column({ columnName: 'cliente_id' })
   declare clienteId: number | null

@@ -9,12 +9,13 @@ import Usuario from '#models/usuario'
 import Servicio from '#models/servicio'
 import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
+import Conductor from '#models/conductor' // 👈 NUEVO
 import CaptacionDateo from '#models/captacion_dateo'
-import FacturacionTicket from '#models/facturacion_ticket' // 👈 NUEVO
+import FacturacionTicket from '#models/facturacion_ticket'
 
 // ===== Helpers =====
-const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss') // DATETIME (sin ms/offset)
-const toMySQLDate = (dt: DateTime) => dt.toFormat('yyyy-LL-dd') // DATE
+const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss')
+const toMySQLDate = (dt: DateTime) => dt.toFormat('yyyy-LL-dd')
 
 type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 const VALID_TIPOS_VEHICULO: TipoVehiculoDB[] = [
@@ -45,7 +46,6 @@ function bloqueoMesesPorServicio(codigo?: string): number {
   const c = (codigo || '').toUpperCase()
   if (c === 'RTM' || c === 'SOAT') return 12
   if (c === 'PREV') return 2
-  // 'PERI' u otros: sin bloqueo
   return 0
 }
 
@@ -77,7 +77,7 @@ function buildReserva(d: CaptacionDateo) {
   return { vigente, bloqueaHasta }
 }
 
-/** ✅ Normaliza canal desde varios sinónimos a enum de atribución (sin default) */
+/** Normaliza canal a enum de atribución */
 const normalizeCanal = (v?: string): CanalAtrib | null => {
   const x = (v || '').toUpperCase().trim()
   if (['FACHADA', 'ASESOR', 'TELE', 'REDES'].includes(x)) return x as CanalAtrib
@@ -88,7 +88,6 @@ const normalizeCanal = (v?: string): CanalAtrib | null => {
   return null
 }
 
-// medio_entero (BD) derivado desde canal (cuando exista). Si NO hay canal, NO se setea.
 function medioFromCanal(
   canal: CanalAtrib
 ): 'Fachada' | 'Redes Sociales' | 'Call Center' | 'Asesor Comercial' {
@@ -108,11 +107,7 @@ function medioFromCanal(
 // ============================================================================
 
 export default class TurnosRtmController {
-  /** Lista turnos con filtros (incluye servicioId/servicioCodigo y canal/agente). */
-  // app/controllers/turnos_rtms_controller.ts
-
-  // app/controllers/turnos_rtms_controller.ts
-
+  /** Lista turnos con filtros. */
   public async index({ request, response }: HttpContext) {
     const {
       fecha,
@@ -124,7 +119,6 @@ export default class TurnosRtmController {
       fechaFin,
       servicioId,
       servicioCodigo,
-
       canalAtribucion,
       agenteId,
       agenteTipo,
@@ -139,6 +133,7 @@ export default class TurnosRtmController {
         .preload('servicio')
         .preload('vehiculo')
         .preload('cliente')
+        .preload('conductor') // 👈 NUEVO
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
         .preload('certificaciones')
@@ -218,7 +213,6 @@ export default class TurnosRtmController {
       }
 
       // ====== HISTORIAL COMPLETO POR PLACA ======
-      // DESPUÉS
       type HistItem = {
         id: number
         fechaStr: string
@@ -247,15 +241,16 @@ export default class TurnosRtmController {
           .orderBy('fecha', 'asc')
           .orderBy('hora_ingreso', 'asc')
           .preload('cliente')
-          .preload('servicio') // 👈 NUEVO
+          .preload('servicio')
 
         historialPorPlaca[p] = rows.map((r) => ({
           id: r.id,
           fechaStr: toMySQLDate(r.fecha as DateTime),
           clienteNombre: getClienteNombre(r.cliente),
-          servicioCodigo: r.servicio ? (r.servicio as any).codigoServicio ?? null : null, // 👈 NUEVO
+          servicioCodigo: r.servicio ? (r.servicio as any).codigoServicio ?? null : null,
         }))
       }
+
       const visitaLabel = (n: number | null): string => {
         if (!n || n <= 0) return '—'
         if (n === 1) return 'Primera vez'
@@ -264,7 +259,6 @@ export default class TurnosRtmController {
         return `${n}ª vez`
       }
 
-      // ====== ARMAR PAYLOAD FINAL ======
       const payload = turnos.map((t) => {
         const plain = t.serialize()
         const hist = historialPorPlaca[t.placa] ?? []
@@ -278,8 +272,6 @@ export default class TurnosRtmController {
           const idx = idxFound >= 0 ? idxFound : hist.length - 1
 
           visitaNumero = idx + 1
-
-          // Últimas 2 fechas anteriores (por si las quieres seguir usando)
           if (idx > 0) ultimasFechas.push(hist[idx - 1].fechaStr)
           if (idx > 1) ultimasFechas.push(hist[idx - 2].fechaStr)
 
@@ -305,7 +297,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** 👇 NUEVO: obtener un turno por ID (usado por Vue para "Turno asociado") */
+  /** GET /turnos/:id */
   public async show({ params, response }: HttpContext) {
     try {
       const id = Number(params.id)
@@ -320,6 +312,7 @@ export default class TurnosRtmController {
         .preload('servicio')
         .preload('vehiculo', (q) => q.preload('clase'))
         .preload('cliente')
+        .preload('conductor')                      // 👈 NUEVO
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
         .preload('certificaciones')
@@ -336,16 +329,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /**
-   * Crear turno (flujo corregido):
-   * - Valida duplicado diario por placa+servicio+sede.
-   * - Valida ventana de bloqueo por servicio si hubo un turno FINALIZADO previo.
-   * - Guarda canalAtribucion (normalizado) y medioEntero SOLO si hay canal.
-   * - Si trae `dateoId` (o se detecta uno vigente), lo marca consumido y lo vincula.
-   * - ❌ No crea registros en `captacion_dateos` automáticamente.
-   * - Calcula turno_numero (global) y turno_numero_servicio (por servicio).
-   * - Permite datos básicos de cliente (clienteTelefono/clienteNombre/clienteEmail).
-   */
+  /** Crear turno */
   public async store({ request, response }: HttpContext) {
     const trx = await Database.transaction()
     try {
@@ -360,13 +344,17 @@ export default class TurnosRtmController {
         'servicioId',
         'servicioCodigo',
         // atribución
-        'canal', // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
-        'agenteCaptacionId', // number si canal = ASESOR
-        // extras UI
+        'canal',
+        'agenteCaptacionId',
+        // extras cliente
         'dateoId',
         'clienteTelefono',
         'clienteNombre',
         'clienteEmail',
+        // 👇 NUEVOS campos de conductor
+        'conductorId',
+        'conductorTelefono',
+        'conductorNombre',
       ])
 
       if (!raw.placa || !raw.tipoVehiculo || !raw.usuarioId || !raw.fecha || !raw.horaIngreso) {
@@ -379,6 +367,7 @@ export default class TurnosRtmController {
 
       const placa = normalizePlaca(raw.placa)!
       const telefono = normalizePhone(raw.telefono) ?? normalizePhone(raw.clienteTelefono)
+      const conductorTelefono = normalizePhone(raw.conductorTelefono)
 
       const usuarioCreador = await Usuario.find(Number(raw.usuarioId))
       if (!usuarioCreador) {
@@ -431,7 +420,7 @@ export default class TurnosRtmController {
 
       const hoyISO = fechaGuardar.toISODate()!
 
-      // ===== 1) Anti-duplicado diario por placa+servicio+sede =====
+      // 1) Anti-duplicado diario
       const dupDiario = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
@@ -453,7 +442,7 @@ export default class TurnosRtmController {
         })
       }
 
-      // ===== 2) Ventana de bloqueo por servicio si hubo FINALIZADO =====
+      // 2) Ventana de bloqueo por servicio
       const lastFinalizado = await TurnoRtm.query({ client: trx })
         .where('placa', placa)
         .andWhere('servicio_id', servicio.id)
@@ -464,7 +453,7 @@ export default class TurnosRtmController {
       if (lastFinalizado) {
         const meses = bloqueoMesesPorServicio((servicio as any).codigoServicio)
         if (meses > 0) {
-          const ultimaFecha = lastFinalizado.fecha as DateTime // columna DATE
+          const ultimaFecha = lastFinalizado.fecha as DateTime
           const nextAllowed = ultimaFecha.plus({ months: meses }).startOf('day')
           if (fechaGuardar.startOf('day') < nextAllowed) {
             await trx.rollback()
@@ -480,8 +469,7 @@ export default class TurnosRtmController {
         }
       }
 
-      // ===== 3) Calcular consecutivos en la MISMA transacción =====
-      // Solo cuentan turnos ACTIVO / FINALIZADO con número > 0
+      // 3) Consecutivos
       const rowGlobal = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
@@ -503,7 +491,7 @@ export default class TurnosRtmController {
         .first()
       const nextPorServicio: number = Number(rowSvc?.max ?? 0) + 1
 
-      // ===== 3.1 Cliente / Vehículo opcional =====
+      // 3.1 Cliente / Vehículo
       let vehiculoId: number | null = null
       let clienteId: number | null = null
       let claseVehiculoId: number | null = null
@@ -518,17 +506,15 @@ export default class TurnosRtmController {
         clienteId = veh.clienteId ?? null
       }
 
-      // Si aún no tenemos cliente, intentar por teléfono
       if (!clienteId && telefono) {
         const cExist = await Cliente.query({ client: trx }).where('telefono', telefono).first()
         if (cExist) {
           clienteId = cExist.id
         } else if (raw.clienteNombre || raw.clienteEmail || telefono) {
-          // Crear cliente básico
           const cNuevo = await Cliente.create(
             {
               nombre: String(raw.clienteNombre || 'Cliente'),
-              telefono: telefono,
+              telefono,
               email: raw.clienteEmail || null,
             } as any,
             { client: trx }
@@ -537,18 +523,46 @@ export default class TurnosRtmController {
         }
       }
 
-      // ===== 4) Atribución (canal/agente) y posible dateo existente =====
+      // 3.2 Conductor
+      let conductorId: number | null = null
+
+      if (raw.conductorId) {
+        const c = await Conductor.find(Number(raw.conductorId))
+        if (c) conductorId = c.id
+      }
+
+      if (!conductorId && (conductorTelefono || raw.conductorNombre)) {
+        let cExist: Conductor | null = null
+        if (conductorTelefono) {
+          cExist = await Conductor.query({ client: trx })
+            .where('telefono', conductorTelefono)
+            .first()
+        }
+
+        if (cExist) {
+          conductorId = cExist.id
+        } else {
+          const nuevoConductor = await Conductor.create(
+            {
+              nombre: String(raw.conductorNombre || 'Conductor'),
+              telefono: conductorTelefono || null,
+            } as any,
+            { client: trx }
+          )
+          conductorId = nuevoConductor.id
+        }
+      }
+
+      // 4) Atribución / Dateo
       const nowBog = DateTime.local().setZone('America/Bogota')
       const turnoCodigo = `${servicio.codigoServicio}-${nowBog.toFormat('yyyyMMddHHmmss')}`
 
-      // ✅ Sin default a 'FACHADA'
       let canalAtribucion: CanalAtrib | null = normalizeCanal(raw.canal)
       let agenteCaptacionId: number | null = null
       if (canalAtribucion === 'ASESOR') {
         agenteCaptacionId = raw.agenteCaptacionId ? Number(raw.agenteCaptacionId) || null : null
       }
 
-      // Buscar dateo solamente para consumir si EXISTE y está vigente
       let dateo: CaptacionDateo | null = null
       if (raw.dateoId) {
         dateo = await CaptacionDateo.query({ client: trx }).where('id', Number(raw.dateoId)).first()
@@ -578,7 +592,7 @@ export default class TurnosRtmController {
         }
       }
 
-      // ===== 5) Construir payload de turno SIN forzar defaults de canal/medio =====
+      // 5) Construir payload
       const payload: any = {
         sedeId: usuarioCreador.sedeId!,
         funcionarioId: usuarioCreador.id,
@@ -599,23 +613,21 @@ export default class TurnosRtmController {
         clienteId,
         claseVehiculoId,
 
-        canalAtribucion, // puede quedar null si no hubo canal detectado
+        conductorId,                             // 👈 NUEVO
+        canalAtribucion,
         agenteCaptacionId,
         captacionDateoId: captacionDateoId ?? null,
       }
 
-      // 👉 medioEntero solo si HAY canal
       if (canalAtribucion) {
         payload.medioEntero = medioFromCanal(canalAtribucion)
       }
 
-      // Consecutivo por servicio
       payload.turnoNumeroServicio = nextPorServicio
       payload['turno_numero_servicio'] = nextPorServicio
 
       const turno = await TurnoRtm.create(payload, { client: trx })
 
-      // ===== 6) Si había dateo, marcarlo consumido (EN_PROCESO). Si NO, NO creamos ninguno. =====
       if (captacionDateoId) {
         await CaptacionDateo.query({ client: trx })
           .where('id', captacionDateoId)
@@ -634,6 +646,7 @@ export default class TurnosRtmController {
       await turno.load('servicio')
       await turno.load('vehiculo')
       await turno.load('cliente')
+      await turno.load('conductor')            // 👈 NUEVO
       await turno.load('agenteCaptacion')
       await turno.load('captacionDateo', (q) => q.preload('agente').preload('convenio'))
 
@@ -650,7 +663,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Actualizar turno (cambio de servicio, canal/agente y metadatos). */
+  /** Actualizar turno */
   public async update({ params, request, response }: HttpContext) {
     try {
       const raw = request.only([
@@ -664,12 +677,16 @@ export default class TurnosRtmController {
         'estado',
         'servicioId',
         'servicioCodigo',
-        'canal', // 'FACHADA'|'REDES'|'TELE'|'ASESOR'
-        'agenteCaptacionId', // number si canal = ASESOR
+        'canal',
+        'agenteCaptacionId',
         'clienteId',
         'vehiculoId',
         'fecha',
         'horaIngreso',
+        // 👇 NUEVOS campos de conductor
+        'conductorId',
+        'conductorTelefono',
+        'conductorNombre',
       ])
 
       const idNumericoUsuario = Number(raw.usuarioId)
@@ -711,13 +728,11 @@ export default class TurnosRtmController {
         servicioIdNext = s.id
       }
 
-      // ✅ Canal opcional con normalización (puede ser null explícito)
       let canalAtribucionNext: (CanalAtrib | null) | undefined
       if (raw.canal !== undefined) {
         canalAtribucionNext = normalizeCanal(raw.canal)
       }
 
-      // Deriva medioEntero SOLO si hay canal nuevo (no si es undefined)
       let medioBDNext:
         | 'Fachada'
         | 'Redes Sociales'
@@ -753,6 +768,32 @@ export default class TurnosRtmController {
         horaIngresoNext = hi
       }
 
+      // Resolver conductor en update
+      let conductorIdNext: number | null | undefined
+      const conductorTelefono = normalizePhone(raw.conductorTelefono)
+
+      if (raw.conductorId !== undefined) {
+        conductorIdNext = Number(raw.conductorId) || null
+      } else if (conductorTelefono || raw.conductorNombre) {
+        let cExist: Conductor | null = null
+        if (conductorTelefono) {
+          cExist = await Conductor.query().where('telefono', conductorTelefono).first()
+        }
+        if (cExist) {
+          conductorIdNext = cExist.id
+        } else {
+          const nuevoConductor = await Conductor.create({
+            nombre: String(raw.conductorNombre || 'Conductor'),
+            telefono: conductorTelefono || null,
+          } as any)
+          conductorIdNext = nuevoConductor.id
+        }
+      }
+
+      turno.merge({
+        ...(conductorIdNext !== undefined ? { conductorId: conductorIdNext } : {}),
+      })
+
       turno.merge({
         placa: raw.placa ? normalizePlaca(raw.placa)! : turno.placa,
         tipoVehiculo: tipoVehiculoNext ?? turno.tipoVehiculo,
@@ -773,17 +814,15 @@ export default class TurnosRtmController {
         ...(fechaNext ? { fecha: fechaNext } : {}),
         ...(horaIngresoNext ? { horaIngreso: horaIngresoNext } : {}),
 
-        // ✅ Si viene undefined no toques el canal; si viene null, lo limpias; si viene valor, lo actualizas
-        ...(canalAtribucionNext !== undefined
-          ? { canalAtribucion: canalAtribucionNext }
-          : {}),
+        ...(canalAtribucionNext !== undefined ? { canalAtribucion: canalAtribucionNext } : {}),
 
-        // ✅ Solo setea medioEntero cuando derivaste de un canal válido
         ...(medioBDNext ? { medioEntero: medioBDNext } : {}),
 
         ...(raw.agenteCaptacionId !== undefined
           ? { agenteCaptacionId: Number(raw.agenteCaptacionId) || null }
           : {}),
+
+        ...(conductorIdNext !== undefined ? { conductorId: conductorIdNext } : {}),
       })
 
       await turno.save()
@@ -792,6 +831,7 @@ export default class TurnosRtmController {
       await turno.load('servicio')
       await turno.load('vehiculo')
       await turno.load('cliente')
+      await turno.load('conductor') // 👈 NUEVO
       await turno.load('agenteCaptacion')
       await turno.load('captacionDateo', (q) => q.preload('agente').preload('convenio'))
 
@@ -802,7 +842,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Activar turno. */
+  /** Activar turno */
   public async activar({ params, response, request }: HttpContext) {
     try {
       const { usuarioId } = request.only(['usuarioId'])
@@ -827,7 +867,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Cancelar turno: cambia estado y libera consecutivos (los vuelve negativos). */
+  /** Cancelar turno */
   public async cancelar({ params, response, request }: HttpContext) {
     try {
       const { usuarioId } = request.only(['usuarioId'])
@@ -843,10 +883,8 @@ export default class TurnosRtmController {
       const turno = await TurnoRtm.find(params.id)
       if (!turno) return response.notFound({ message: 'Turno no encontrado' })
 
-      // Estado cancelado
       turno.estado = 'cancelado'
 
-      // 👉 LIBERAR consecutivos: pasarlos a negativos para que no bloqueen los positivos
       if (turno.turnoNumero && turno.turnoNumero > 0) {
         turno.turnoNumero = -turno.turnoNumero
       }
@@ -863,7 +901,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Inhabilitar (soft-delete) turno. */
+  /** Inhabilitar turno */
   public async destroy({ params, response, request }: HttpContext) {
     try {
       const { usuarioId } = request.only(['usuarioId'])
@@ -888,7 +926,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** Registrar salida y calcular tiempo de servicio. */
+  /** Registrar salida */
   public async registrarSalida({ params, response, request }: HttpContext) {
     try {
       const { usuarioId } = request.only(['usuarioId'])
@@ -913,7 +951,6 @@ export default class TurnosRtmController {
         entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm', { zone: 'America/Bogota' })
       }
 
-      // Asegura no-negativo
       let diff = salida.diff(entrada, ['hours', 'minutes']).toObject()
       if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
         diff = { hours: 0, minutes: 0 }
@@ -940,7 +977,7 @@ export default class TurnosRtmController {
     }
   }
 
-  /** ✅ Siguientes números de turno (global y por servicio) para HOY por sede del usuario. */
+  /** Siguiente número de turno */
   public async siguienteTurno({ request, response }: HttpContext) {
     try {
       const { usuarioId, servicioId, servicioCodigo } = request.qs()
@@ -961,7 +998,6 @@ export default class TurnosRtmController {
 
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
-      // Global (sede+día): max(turno_numero)+1 (solo activos/finalizados con número > 0)
       const rowGlobal = await Database.from('turnos_rtms')
         .where('fecha', hoy)
         .andWhere('sede_id', usuarioSolicitante.sedeId)
@@ -971,7 +1007,6 @@ export default class TurnosRtmController {
         .first()
       const siguiente = Number(rowGlobal?.max ?? 0) + 1
 
-      // Por servicio (sede+día+servicio): max(turno_numero_servicio)+1 — opcional
       let siguientePorServicio: number | null = null
       if (servicioId || servicioCodigo) {
         let sid: number | null = null
@@ -1009,21 +1044,16 @@ export default class TurnosRtmController {
     }
   }
 
-  /**
-   * Exportar Excel (rango fechas obligatorio).
-   * Columnas incluyen Turno Global y Turno Servicio; muestra canal y agente (con tipo).
-   */
+  /** Exportar Excel */
   public async exportExcel({ request, response }: HttpContext) {
     const {
       fechaInicio,
       fechaFin,
       servicioId,
       servicioCodigo,
-
-      // 🔎 Nuevos filtros
       canalAtribucion,
       agenteId,
-      agenteTipo, // 'ASESOR_INTERNO'|'ASESOR_EXTERNO'|'TELEMERCADEO'
+      agenteTipo,
     } = request.qs()
 
     try {
@@ -1045,7 +1075,6 @@ export default class TurnosRtmController {
         .preload('agenteCaptacion')
         .whereBetween('fecha', [toMySQLDate(fi), toMySQLDate(ff)])
 
-      // Servicio
       if (servicioId) {
         const sid = Number(servicioId)
         if (Number.isNaN(sid))
@@ -1058,7 +1087,6 @@ export default class TurnosRtmController {
         q.where('servicio_id', s.id)
       }
 
-      // Nuevos filtros
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
         const c = String(canalAtribucion).toUpperCase() as CanalAtrib
@@ -1073,7 +1101,6 @@ export default class TurnosRtmController {
 
       const turnos = await q.orderBy('fecha', 'asc').orderBy('turno_numero', 'asc')
 
-      // EXCEL
       const workbook = new ExcelJS.Workbook()
       const worksheet = workbook.addWorksheet('Reporte Turnos')
 
@@ -1093,6 +1120,7 @@ export default class TurnosRtmController {
         { header: 'Estado', key: 'estado', width: 12 },
         { header: 'Usuario', key: 'usuario', width: 26 },
         { header: 'Sede', key: 'sede', width: 18 },
+        { header: 'Conductor', key: 'conductor', width: 28 }, // 👈 NUEVO
       ]
 
       turnos.forEach((t) => {
@@ -1104,17 +1132,17 @@ export default class TurnosRtmController {
         const isCancelOrInactive = t.estado === 'cancelado' || t.estado === 'inactivo'
 
         const turnoGlobal = isCancelOrInactive ? '' : t.turnoNumero
-
         const turnoServicioRaw =
           (t as any).turnoNumeroServicio ?? (t as any).turno_numero_servicio ?? ''
         const turnoServicio = isCancelOrInactive ? '' : turnoServicioRaw
+
+        const conductor = (t as any).conductor ? `${(t as any).conductor.nombre}` : '-' // 👈 NUEVO
 
         worksheet.addRow({
           fecha: fechaExcel,
           turnoGlobal,
           turnoServicio,
           servicio: t.servicio ? t.servicio.codigoServicio : '-',
-
           horaIngreso: t.horaIngreso,
           horaSalida: t.horaSalida || '-',
           tiempoServicio: t.tiempoServicio || '-',
@@ -1126,6 +1154,7 @@ export default class TurnosRtmController {
           estado: t.estado,
           usuario: t.usuario ? `${t.usuario.nombres} ${t.usuario.apellidos}` : '-',
           sede: t.sede ? t.sede.nombre : '-',
+          conductor, // 👈 NUEVO
         })
       })
 

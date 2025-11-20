@@ -8,6 +8,7 @@ function normalizePlaca(raw?: string) {
   if (!raw) return ''
   return raw.replace(/[\s-]/g, '').toUpperCase()
 }
+
 function normalizePhone(raw?: string) {
   if (!raw) return undefined
   return raw.replace(/\D/g, '')
@@ -36,6 +37,9 @@ export default class VehiculosController {
           .orWhere('marca', 'like', `%${q}%`)
           .orWhere('linea', 'like', `%${q}%`)
           .orWhereRaw('CAST(modelo AS CHAR) LIKE ?', [`%${q}%`])
+          // opcional: también permitir búsqueda por color o matrícula
+          .orWhere('color', 'like', `%${q}%`)
+          .orWhere('matricula', 'like', `%${q}%`)
       })
     }
 
@@ -61,6 +65,7 @@ export default class VehiculosController {
       .preload('clase')
       .preload('cliente')
       .first()
+
     if (!item) return response.notFound({ message: 'Vehículo no encontrado' })
     return item
   }
@@ -68,7 +73,14 @@ export default class VehiculosController {
   /**
    * POST /vehiculos
    * body: {
-   *   placa, clase_codigo | clase_vehiculo_id, marca?, linea?, modelo?, cliente_telefono?
+   *   placa,
+   *   clase_codigo | clase_vehiculo_id,
+   *   marca?,
+   *   linea?,
+   *   modelo?,
+   *   color?,        // 🟢 nuevo
+   *   matricula?,    // 🟢 nuevo
+   *   cliente_telefono?
    * }
    */
   public async store({ request, response }: HttpContext) {
@@ -80,6 +92,10 @@ export default class VehiculosController {
     const modelo = request.input('modelo')
     const clienteTelRaw = request.input('cliente_telefono')
     const clienteTelefono = normalizePhone(clienteTelRaw)
+
+    // 🟢 nuevos campos
+    const color = request.input('color')
+    const matricula = request.input('matricula')
 
     if (!placa) return response.badRequest({ message: 'placa es requerida' })
 
@@ -111,6 +127,9 @@ export default class VehiculosController {
       marca: typeof marca === 'string' ? marca.trim() || null : null,
       linea: typeof linea === 'string' ? linea.trim() || null : null,
       modelo: modelo ? Number(modelo) : null,
+      // 🟢 nuevos campos
+      color: typeof color === 'string' ? color.trim() || null : null,
+      matricula: typeof matricula === 'string' ? matricula.trim() || null : null,
       clienteId,
     })
 
@@ -119,7 +138,16 @@ export default class VehiculosController {
 
   /**
    * PUT /vehiculos/:id
-   * body parcial: { placa?, clase_codigo?|clase_vehiculo_id?, marca?, linea?, modelo?, cliente_telefono? | cliente_id? }
+   * body parcial: {
+   *   placa?,
+   *   clase_codigo?|clase_vehiculo_id?,
+   *   marca?,
+   *   linea?,
+   *   modelo?,
+   *   color?,        // 🟢 nuevo
+   *   matricula?,    // 🟢 nuevo
+   *   cliente_telefono? | cliente_id?
+   * }
    */
   public async update({ params, request, response }: HttpContext) {
     const item = await Vehiculo.find(params.id)
@@ -155,9 +183,21 @@ export default class VehiculosController {
     const marca = request.input('marca')
     const linea = request.input('linea')
     const modelo = request.input('modelo')
+
     if (typeof marca === 'string') item.marca = marca.trim() || null
     if (typeof linea === 'string') item.linea = linea.trim() || null
     if (modelo !== undefined) item.modelo = modelo ? Number(modelo) : null
+
+    // 🟢 nuevos campos: color + matricula
+    const color = request.input('color')
+    const matricula = request.input('matricula')
+
+    if (color !== undefined) {
+      item.color = typeof color === 'string' ? color.trim() || null : null
+    }
+    if (matricula !== undefined) {
+      item.matricula = typeof matricula === 'string' ? matricula.trim() || null : null
+    }
 
     const clienteTelefono = normalizePhone(request.input('cliente_telefono'))
     const clienteIdBody = request.input('cliente_id')

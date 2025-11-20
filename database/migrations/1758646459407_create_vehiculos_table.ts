@@ -8,6 +8,7 @@ export default class extends BaseSchema {
     this.schema.createTable(this.tableName, (table) => {
       table.increments('id') // PK
       table.string('placa', 12).notNullable().unique() // UPPER, sin espacios/guiones
+
       table
         .integer('clase_vehiculo_id')
         .unsigned()
@@ -19,6 +20,12 @@ export default class extends BaseSchema {
       table.string('marca', 60).nullable()
       table.string('linea', 80).nullable()
       table.integer('modelo').nullable()
+
+      // 🟢 NUEVO: color del vehículo
+      table.string('color', 40).nullable()
+
+      // 🟢 NUEVO: número de matrícula / tarjeta de propiedad
+      table.string('matricula', 50).nullable()
 
       table
         .integer('cliente_id')

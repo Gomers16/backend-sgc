@@ -11,8 +11,9 @@ import Cliente from '#models/cliente'
 import ClaseVehiculo from '#models/clase_vehiculos'
 import AgenteCaptacion from '#models/agente_captacion'
 import CaptacionDateo from '#models/captacion_dateo'
-import FacturacionTicket from '#models/facturacion_ticket' // 👈 facturación
-import Certificacion from '#models/certificacion' // 👈 certificación
+import FacturacionTicket from '#models/facturacion_ticket'
+import Certificacion from '#models/certificacion'
+import Conductor from '#models/conductor' // 🟢 nuevo
 
 export type TipoVehiculoUI =
   | 'Liviano Particular'
@@ -62,6 +63,12 @@ export default class TurnoRtm extends BaseModel {
   @belongsTo(() => ClaseVehiculo, { foreignKey: 'claseVehiculoId' })
   declare claseVehiculo: BelongsTo<typeof ClaseVehiculo>
 
+  // 🟢 NUEVO: Conductor del turno (puede ser distinto al dueño)
+  @column({ columnName: 'conductor_id' })
+  declare conductorId: number | null
+  @belongsTo(() => Conductor, { foreignKey: 'conductorId' })
+  declare conductor: BelongsTo<typeof Conductor>
+
   @column({ columnName: 'agente_captacion_id' })
   declare agenteCaptacionId: number | null
   @belongsTo(() => AgenteCaptacion, { foreignKey: 'agenteCaptacionId' })
@@ -108,7 +115,7 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: TipoVehiculoUI
 
-  // ── Captación “plana” (LEGADO)
+  // ── Captación “plana”
   @column({
     columnName: 'medio_entero',
     serialize: (value?: MedioEntero | null) => value ?? null,

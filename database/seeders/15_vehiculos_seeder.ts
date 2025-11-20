@@ -12,7 +12,6 @@ export default class VehiculosSeeder extends BaseSeeder {
     const clases = await ClaseVehiculo.query().select(['id', 'codigo'])
     const byCode = new Map<ClaseCode, number>()
     clases.forEach((c) => {
-      // si en BD el enum/codigo viene como string compatible
       const code = String(c.codigo) as ClaseCode
       if (['LIV_PART', 'LIV_TAXI', 'LIV_PUBLICO', 'MOTO'].includes(code)) {
         byCode.set(code, c.id)
@@ -42,7 +41,7 @@ export default class VehiculosSeeder extends BaseSeeder {
       return `${L()}${L()}${L()}${N()}${N()}${N()}`
     }
 
-    // === 3) Catálogo marcas/líneas ===
+    // === 3) Catálogo marcas/líneas/colores ===
     const CAR_BRANDS = ['Chevrolet', 'Renault', 'Mazda', 'Kia', 'Toyota', 'Nissan'] as const
     const CAR_LINES = [
       'Spark GT',
@@ -58,8 +57,21 @@ export default class VehiculosSeeder extends BaseSeeder {
       'March',
       'Versa',
     ] as const
+
     const MOTO_BRANDS = ['Bajaj', 'AKT', 'Yamaha', 'Honda', 'Suzuki', 'TVS'] as const
     const MOTO_LINES = ['Pulsar', 'NKD', 'FZ', 'XR', 'Gixxer', 'Sport'] as const
+
+    const COLORS = [
+      'Blanco',
+      'Negro',
+      'Gris',
+      'Rojo',
+      'Azul',
+      'Plata',
+      'Beige',
+      'Verde',
+      'Amarillo',
+    ] as const
 
     // % de motos
     const MOTOS_RATIO = 0.35
@@ -69,16 +81,21 @@ export default class VehiculosSeeder extends BaseSeeder {
       marca: string
       linea: string
       modelo: number
+      color: string | null
     } => {
+      const color = pick(COLORS)
       const isMoto = Math.random() < MOTOS_RATIO
+
       if (isMoto) {
         return {
           claseCode: 'MOTO',
           marca: pick(MOTO_BRANDS),
           linea: pick(MOTO_LINES),
           modelo: randInt(2012, 2024),
+          color,
         }
       }
+
       // Carro: 75% particular, 15% taxi, 10% público
       const r = Math.random()
       const claseCode: ClaseCode = r < 0.75 ? 'LIV_PART' : r < 0.9 ? 'LIV_TAXI' : 'LIV_PUBLICO'
@@ -87,6 +104,7 @@ export default class VehiculosSeeder extends BaseSeeder {
         marca: pick(CAR_BRANDS),
         linea: pick(CAR_LINES),
         modelo: randInt(2010, 2024),
+        color,
       }
     }
 
@@ -115,7 +133,6 @@ export default class VehiculosSeeder extends BaseSeeder {
     const VEH_POR_CLIENTE_MIN = 2
     const VEH_POR_CLIENTE_MAX = 3
 
-    // util para mezclar
     const shuffle = <T>(arr: T[]): T[] => {
       const a = [...arr]
       for (let i = a.length - 1; i > 0; i--) {
@@ -128,7 +145,6 @@ export default class VehiculosSeeder extends BaseSeeder {
     // === 7) Bloque de clientes con varios vehículos ===
     let creados = 0
     if (hasClientes) {
-      // tomamos ~50% de clientes como candidatos a multi-vehículo
       const candidatos = shuffle(clienteIds).slice(
         0,
         Math.max(1, Math.floor(clienteIds.length * 0.5))
@@ -139,7 +155,7 @@ export default class VehiculosSeeder extends BaseSeeder {
         const cuantos = multi ? randInt(VEH_POR_CLIENTE_MIN, VEH_POR_CLIENTE_MAX) : 1
 
         for (let k = 0; k < cuantos && creados < TOTAL_VEHICULOS; k++) {
-          const { claseCode, marca, linea, modelo } = pickClaseAndSpec()
+          const { claseCode, marca, linea, modelo, color } = pickClaseAndSpec()
           const claseId = byCode.get(claseCode)!
           const placa = uniquePlate()
 
@@ -151,6 +167,9 @@ export default class VehiculosSeeder extends BaseSeeder {
               marca,
               linea,
               modelo,
+              color,
+              // Matrícula “fake” para dev: TP- + placa
+              matricula: `TP-${placa}`,
               clienteId: cid,
             }
           )
@@ -161,7 +180,7 @@ export default class VehiculosSeeder extends BaseSeeder {
 
     // === 8) Completar el resto (algunos sin cliente para tests) ===
     while (creados < TOTAL_VEHICULOS) {
-      const { claseCode, marca, linea, modelo } = pickClaseAndSpec()
+      const { claseCode, marca, linea, modelo, color } = pickClaseAndSpec()
       const claseId = byCode.get(claseCode)!
       const placa = uniquePlate()
       const clienteId =
@@ -175,18 +194,20 @@ export default class VehiculosSeeder extends BaseSeeder {
           marca,
           linea,
           modelo,
+          color,
+          matricula: `TP-${placa}`,
           clienteId,
         }
       )
       creados++
     }
 
-    // === 9) **Garantía**: todo cliente debe tener al menos 1 vehículo
+    // === 9) Garantía: todo cliente debe tener al menos 1 vehículo ===
     const clientesTodos = await Cliente.query().select(['id'])
     for (const c of clientesTodos) {
       const ya = await Vehiculo.query().where('cliente_id', c.id).first()
       if (!ya) {
-        const { claseCode, marca, linea, modelo } = pickClaseAndSpec()
+        const { claseCode, marca, linea, modelo, color } = pickClaseAndSpec()
         const placa = uniquePlate()
         await Vehiculo.create({
           placa,
@@ -194,6 +215,8 @@ export default class VehiculosSeeder extends BaseSeeder {
           marca,
           linea,
           modelo,
+          color,
+          matricula: `TP-${placa}`,
           clienteId: c.id,
         })
       }

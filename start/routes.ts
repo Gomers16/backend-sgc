@@ -95,6 +95,14 @@ router
       })
       .where('id', /^[0-9]+$/)
 
+    /* =========================== REP GENERAL RTM ======================= */
+    router.post('/rtm/rep-general/import', async (ctx) => {
+      const { default: RepGeneralImportController } = await import(
+        '#controllers/rep_general_imports_controller'
+      )
+      return new RepGeneralImportController().import(ctx)
+    })
+
     /* ============================== USUARIOS =========================== */
     router.get('/usuarios', async (ctx) => {
       const { default: UsuariosController } = await import('#controllers/usuarios_controller')
@@ -544,7 +552,7 @@ router
       return new CaptacionUtilController().crearAutoPorConvenio(ctx)
     })
 
-       /* =============================== PROSPECTOS ======================== */
+    /* =============================== PROSPECTOS ======================== */
     router.get('/prospectos', async (ctx) => {
       const { default: ProspectosController } = await import('#controllers/prospectos_controller')
       return new ProspectosController().index(ctx)
@@ -613,7 +621,6 @@ router
         return new ProspectosController().listByAsesor(ctx)
       })
       .where('id', /^[0-9]+$/)
-
 
     /* =============================== CONVENIOS ========================= */
     router.get('/convenios', async (ctx) => {
