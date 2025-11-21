@@ -13,8 +13,6 @@ import TurnoRtm from '#models/turno_rtm'
  * ÍNDICES 100% CONFIRMADOS CON EL USUARIO
  */
 export default class RepGeneralImportController {
-  private IDX_FECHA_HORA = 2
-
   // Vehículo
   private IDX_PLACA = 10
   private IDX_MARCA = 12
@@ -211,26 +209,6 @@ export default class RepGeneralImportController {
     return t || null
   }
 
-  private parseFechaRepGeneral(value: string | undefined): DateTime | null {
-    if (!value) return null
-    const raw = value.trim()
-    if (!raw) return null
-
-    let dt = DateTime.fromISO(raw, { zone: 'America/Bogota' })
-    if (dt.isValid) return dt
-
-    dt = DateTime.fromSQL(raw, { zone: 'America/Bogota' })
-    if (dt.isValid) return dt
-
-    dt = DateTime.fromFormat(raw, 'dd/MM/yyyy HH:mm', { zone: 'America/Bogota' })
-    if (dt.isValid) return dt
-
-    dt = DateTime.fromFormat(raw, 'dd/MM/yyyy', { zone: 'America/Bogota' })
-    if (dt.isValid) return dt
-
-    return null
-  }
-
   private async upsertClienteDesdeFila(
     row: string[]
   ): Promise<{ cliente: Cliente | null; creado: boolean }> {
@@ -392,13 +370,16 @@ export default class RepGeneralImportController {
     const telRaw = row[this.IDX_COND_TELEFONO]
 
     // 🔍 DEBUG: Ver qué trae el conductor
-    logger.info({
-      placa: row[this.IDX_PLACA],
-      conductor_doc_tipo: docTipoRaw,
-      conductor_doc_num: docRaw,
-      conductor_nombre: nombreRaw,
-      conductor_tel: telRaw,
-    }, '🔍 DEBUG: Datos del conductor en la fila')
+    logger.info(
+      {
+        placa: row[this.IDX_PLACA],
+        conductor_doc_tipo: docTipoRaw,
+        conductor_doc_num: docRaw,
+        conductor_nombre: nombreRaw,
+        conductor_tel: telRaw,
+      },
+      '🔍 DEBUG: Datos del conductor en la fila'
+    )
 
     const docTipo = this.normText(docTipoRaw)
     const docNumero = this.normText(docRaw)
@@ -462,7 +443,7 @@ export default class RepGeneralImportController {
    * Actualiza TODOS los turnos con esa placa, sin importar la fecha
    */
   private async empalmarTurnosDesdeFila(
-    row: string[],
+    _row: string[],
     cliente: Cliente | null,
     vehiculo: Vehiculo | null,
     conductor: Conductor | null

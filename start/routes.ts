@@ -40,7 +40,8 @@ router
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
       return new TurnosRtmController().siguienteTurno(ctx)
     })
-    router.get('/turnos-rtm/reporte/excel', async (ctx) => {
+    router.get('/turnos-rtm/export-excel', async (ctx) => {
+      // 👈 CAMBIAR ESTA LÍNEA
       const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
       return new TurnosRtmController().exportExcel(ctx)
     })

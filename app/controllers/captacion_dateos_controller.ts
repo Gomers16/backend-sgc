@@ -4,9 +4,9 @@ import { DateTime } from 'luxon'
 import CaptacionDateo, { Canal, Origen } from '#models/captacion_dateo'
 import AgenteCaptacion from '#models/agente_captacion'
 import Convenio from '#models/convenio'
-import TurnoRtm from '#models/turno_rtm' // ✅ para armar turnoInfo
-import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion' // ✅
-import Prospecto from '#models/prospecto' // ✅ NUEVO: para archivar prospectos
+import TurnoRtm from '#models/turno_rtm'
+import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
+import Prospecto from '#models/prospecto'
 
 /* ======================= Constantes / Tipos ======================= */
 const CANALES_DB = ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'] as const
@@ -80,9 +80,9 @@ function serializeTurnoInfo(t: any | null) {
   const numeroServicio = (t as any).turnoNumeroServicio ?? (t as any).turno_numero_servicio ?? null
   return {
     id: t.id ?? null,
-    fecha: fechaISO, // yyyy-mm-dd
+    fecha: fechaISO,
     numeroGlobal: t.turnoNumero ?? null,
-    numeroServicio: numeroServicio, // correlativo por servicio
+    numeroServicio: numeroServicio,
     estado: t.estado ?? null,
     servicioCodigo: (t as any).$preloaded?.servicio?.codigoServicio ?? null,
   }
@@ -157,7 +157,7 @@ export default class CaptacionDateosController {
     const result = await q.paginate(page, perPage)
     const serialized = result.serialize().data as any[]
 
-    // ===== 🔁 Resolver turnoInfo en batch para evitar N+1 =====
+    // Resolver turnoInfo en batch para evitar N+1
     const turnoIds = serialized
       .map((r) => r.consumidoTurnoId)
       .filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v))
@@ -205,7 +205,7 @@ export default class CaptacionDateosController {
       ? 'ASESOR'
       : out.canal
 
-    // 🔁 turnoInfo puntual
+    // turnoInfo puntual
     let turnoInfo = null
     if (item.consumidoTurnoId) {
       const t = await TurnoRtm.query()
@@ -224,7 +224,7 @@ export default class CaptacionDateosController {
    * POST /captacion-dateos
    */
   public async store({ request, response, auth }: HttpContext) {
-    // =========== Agente (por body o por usuario logueado) ===========
+    // Agente (por body o por usuario logueado)
     let agenteId = readOptionalNumber(
       (request.input('agente_id') ?? request.input('agenteId')) as unknown
     )
@@ -232,21 +232,19 @@ export default class CaptacionDateosController {
     let agente: AgenteCaptacion | null = null
 
     if (agenteId === null && auth.user) {
-      // Buscar agente del usuario logueado
       agente = await AgenteCaptacion.findBy('usuarioId', auth.user.id)
       if (agente) {
         agenteId = agente.id
       }
     }
 
-    // =========== Canal (resolviendo alias ASESOR según tipo agente) ===========
+    // Canal (resolviendo alias ASESOR según tipo agente)
     let canalRaw = String(request.input('canal') || '').toUpperCase()
-    if (!canalRaw) canalRaw = 'ASESOR' // por defecto en UI
+    if (!canalRaw) canalRaw = 'ASESOR'
 
     let canal: CanalDb
 
     if (canalRaw === 'ASESOR') {
-      // Necesitamos conocer el agente para decidir si es COMERCIAL o CONVENIO
       if (!agente && agenteId !== null) {
         agente = await AgenteCaptacion.find(agenteId)
       }
@@ -255,7 +253,6 @@ export default class CaptacionDateosController {
       if (tipo === 'ASESOR_CONVENIO') {
         canal = 'ASESOR_CONVENIO'
       } else {
-        // por defecto, comercial
         canal = 'ASESOR_COMERCIAL'
       }
     } else if ((CANALES_DB as readonly string[]).includes(canalRaw)) {
@@ -264,7 +261,7 @@ export default class CaptacionDateosController {
       return response.badRequest({ message: 'canal inválido' })
     }
 
-    // =========== Convenio (body) ===========
+    // Convenio (body)
     let convenioId = readOptionalNumber(
       (request.input('convenio_id') ?? request.input('convenioId')) as unknown
     )
@@ -275,13 +272,13 @@ export default class CaptacionDateosController {
       if (!convenio) return response.badRequest({ message: 'convenio_id no existe' })
     }
 
-    // =========== Campos básicos ===========
+    // Campos básicos
     const placa = normalizePlaca(request.input('placa') as string | undefined)
     const telefono = normalizePhone(request.input('telefono') as string | undefined)
     const origen = request.input('origen') as OrigenVal
     const observacion = (request.input('observacion') as string | undefined) ?? null
 
-    // Imagen (snake → camel)
+    // Imagen
     const imagenUrl = (request.input('imagen_url') as string | undefined) ?? null
     const imagenMime = (request.input('imagen_mime') as string | undefined) ?? null
     const imagenTamanoBytesRaw = request.input('imagen_tamano_bytes') as number | string | undefined
@@ -341,7 +338,8 @@ export default class CaptacionDateosController {
 
       convenioId = convenioDelAsesor.id
       convenio = convenioDelAsesor
-      asesorConvenioId = agente.id
+      asesorConvenioId = agente.id // ✅ Solo se llena cuando ES el asesor convenio quien datea
+
     } else if (agente && canal === 'ASESOR_COMERCIAL') {
       // 💼 Comercial: puede datear sin convenio, pero si viene convenioId debe estar asignado
       if (convenioId !== null) {
@@ -359,22 +357,11 @@ export default class CaptacionDateosController {
           })
         }
 
-        // Si el convenio tiene asesorConvenioId, lo usamos para llenar el campo
-        if (!convenio) {
-          convenio = await Convenio.find(convenioId)
-        }
-        if (convenio && convenio.asesorConvenioId) {
-          asesorConvenioId = convenio.asesorConvenioId
-        }
-      }
-    } else {
-      // Otros canales (TELE, FACHADA, REDES...) → no tocamos convenio ni asesorConvenioId
-      if (convenio) {
-        if (convenio.asesorConvenioId) {
-          asesorConvenioId = convenio.asesorConvenioId
-        }
+        // ✅ NO llenamos asesor_convenio_id cuando un comercial datea con convenio
+        // El campo asesor_convenio_id solo se usa cuando ES el asesor convenio quien datea
       }
     }
+    // ✅ Para otros canales (TELE, FACHADA, REDES) tampoco llenamos asesor_convenio_id
 
     // Exclusividad por placa/teléfono
     const ultimo = await CaptacionDateo.query()
@@ -399,12 +386,12 @@ export default class CaptacionDateosController {
       }
     }
 
-    // ===== Crear Dateo =====
+    // Crear Dateo
     const created = await CaptacionDateo.create({
       canal: canal as Canal,
       agenteId,
       convenioId,
-      asesorConvenioId, // 👈 sigue llenando el asesor del convenio
+      asesorConvenioId,
       placa: placa!,
       telefono,
       origen: origen as Origen,
@@ -418,14 +405,13 @@ export default class CaptacionDateosController {
       imagenSubidaPor,
     })
 
-    // ===== 🗂 Archivar prospecto con misma placa (si existe y no está archivado) =====
+    // Archivar prospecto con misma placa (si existe y no está archivado)
     try {
       await Prospecto.query()
         .where('archivado', false)
         .whereRaw("REPLACE(UPPER(placa), '-', '') = ?", [placa!])
         .update({ archivado: true })
     } catch (err) {
-      // No rompemos la creación del dateo por esto, solo lo dejamos en logs
       console.error('No se pudo archivar prospecto asociado a la placa', placa, err)
     }
 
@@ -443,11 +429,9 @@ export default class CaptacionDateosController {
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
 
-    // Campos simples
     const observacion = request.input('observacion') as string | undefined
     const resultado = request.input('resultado') as Resultado | undefined
 
-    // Imagen (snake → camel)
     const imagenUrl = request.input('imagen_url') as string | undefined
     const imagenMime = request.input('imagen_mime') as string | undefined
     const imagenTamanoBytesRaw = request.input('imagen_tamano_bytes') as number | string | undefined
@@ -455,7 +439,6 @@ export default class CaptacionDateosController {
     const imagenOrigenId = request.input('imagen_origen_id') as string | number | undefined
     const imagenSubidaPorRaw = request.input('imagen_subida_por') as unknown
 
-    // Turno consumido
     const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
 
     if (resultado !== undefined) {
@@ -467,7 +450,6 @@ export default class CaptacionDateosController {
 
     if (observacion !== undefined) item.observacion = observacion ?? null
 
-    // 👇 imagen
     if (imagenUrl !== undefined) item.imagenUrl = imagenUrl || null
     if (imagenMime !== undefined) item.imagenMime = imagenMime || null
     if (imagenTamanoBytesRaw !== undefined) {
@@ -499,7 +481,6 @@ export default class CaptacionDateosController {
       ? 'ASESOR'
       : out.canal
 
-    // turnoInfo después de actualizar
     let turnoInfo = null
     if (item.consumidoTurnoId) {
       const t = await TurnoRtm.query()
