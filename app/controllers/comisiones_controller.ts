@@ -6,6 +6,9 @@ import Database from '@adonisjs/lucid/services/db'
 import Comision from '#models/comision'
 import AgenteCaptacion from '#models/agente_captacion'
 
+// app/controllers/comisiones_controller.ts
+// REEMPLAZA la función mapComisionToDto (aproximadamente línea 50-120)
+
 /* ========= Helpers ========= */
 function toNumber(v: any): number {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0
@@ -16,24 +19,9 @@ function toNumber(v: any): number {
   return 0
 }
 
-/** 💰 reglas fijas por defecto:
- *  - sin convenio: 16.000 (placa)
- *  - con convenio: 20.000 (placa/convenio)
- *
- *  Si en BD (columna base) hay un valor > 0, se usa ese.
- */
-const VALOR_PLACA_SIN_CONVENIO = 16000
-const VALOR_PLACA_CON_CONVENIO = 20000
-
-function calcularValorCliente(baseDb: any, convenioId: number | null) {
-  const db = toNumber(baseDb)
-  if (db > 0) return db
-  // si no hay nada en BD, usamos las reglas fijas
-  return convenioId ? VALOR_PLACA_CON_CONVENIO : VALOR_PLACA_SIN_CONVENIO
-}
-
 /**
  * Mapea una comision REAL (es_config = false) a DTO de lista/detalle
+ * AHORA con desglose interno para mostrar distribución de pagos
  */
 function mapComisionToDto(c: Comision) {
   const anyC: any = c
@@ -42,20 +30,21 @@ function mapComisionToDto(c: Comision) {
   const turno = dateo?.$preloaded?.turno || null
   const servicio = turno?.$preloaded?.servicio || null
 
-  // 💸 comisión asesor (ya viene como 4.000 en BD)
-  const valorAsesor = toNumber(c.monto)
-
-  // 💰 comisión placa / cliente / convenio (16k / 20k si no hay base en BD)
-  const valorCliente = calcularValorCliente(c.base, c.convenioId ?? null)
-
+  // 💸 Valores principales (compatibilidad con UI antigua)
+  const valorAsesor = toNumber(c.monto) // dateo
+  const valorCliente = toNumber(c.base) // placa
   const valorTotal = valorAsesor + valorCliente
 
+  // 💰 DESGLOSE DETALLADO (NUEVO)
+  const montoAsesorComercial = c.montoAsesor ? toNumber(c.montoAsesor) : null
+  const montoConvenioPlaca = c.montoConvenio ? toNumber(c.montoConvenio) : null
+  const asesorSecundario = anyC.$preloaded?.asesorSecundario || null
+
+  // Determinar si hay desglose
+  const tieneDesglose = montoAsesorComercial !== null || montoConvenioPlaca !== null
+
   // Turnos: global y por servicio
-  const numeroGlobal =
-    turno?.numeroGlobal ??
-    turno?.turnoNumero ??
-    turno?.numero ??
-    turno?.id
+  const numeroGlobal = turno?.numeroGlobal ?? turno?.turnoNumero ?? turno?.numero ?? turno?.id
 
   const numeroServicio =
     turno?.numeroServicio ??
@@ -67,19 +56,33 @@ function mapComisionToDto(c: Comision) {
 
   return {
     id: c.id,
-    // 🔗 para enlazar con captacion_dateos.id en el front
     dateo_id: c.captacionDateoId,
-
     estado: c.estado,
     cantidad: 1,
 
-    // 👇 asesor
-    valor_unitario: valorAsesor,
-    // 👇 comisión placa (cliente / convenio)
-    valor_cliente: valorCliente,
+    // 👇 Valores tradicionales (para compatibilidad)
+    valor_unitario: valorAsesor, // dateo
+    valor_cliente: valorCliente, // placa
     valor_total: valorTotal,
     generado_at: c.fechaCalculo ? c.fechaCalculo.toISO() : null,
 
+    // 💰 DESGLOSE DETALLADO (para mostrar en modal)
+    tiene_desglose: tieneDesglose,
+    desglose: tieneDesglose
+      ? {
+          monto_asesor_comercial: montoAsesorComercial, // Lo que cobra el comercial
+          monto_convenio_placa: montoConvenioPlaca, // Lo que cobra el convenio
+          asesor_secundario: asesorSecundario
+            ? {
+                id: asesorSecundario.id,
+                nombre: asesorSecundario.nombre,
+                tipo: asesorSecundario.tipo,
+              }
+            : null,
+        }
+      : null,
+
+    // Asesor principal
     asesor: anyC.$preloaded?.asesor
       ? {
           id: anyC.$preloaded.asesor.id,
@@ -155,81 +158,79 @@ function mapMetaToDto(c: Comision) {
 }
 
 export default class ComisionesController {
-  /**
-   * GET /api/comisiones
-   * Lista comisiones (SOLO reales, es_config = false / null) con filtros:
-   * - mes (YYYY-MM)
-   * - asesorId
-   * - convenioId
-   * - estado
-   * - sortBy, order
-   */
-  public async index({ request, response }: HttpContext) {
-    const page = Number(request.input('page') || 1)
-    const perPage = Math.min(Number(request.input('perPage') || 10), 100)
-    const mes = request.input('mes') as string | undefined // "YYYY-MM"
-    const asesorId = request.input('asesorId') as number | undefined
-    const convenioId = request.input('convenioId') as number | undefined
-    const estado = request.input('estado') as string | undefined
-    const sortBy = (request.input('sortBy') || 'id') as string
-    const order = (request.input('order') || 'desc') as 'asc' | 'desc'
+  // app/controllers/comisiones_controller.ts
+// REEMPLAZA el método index() (aproximadamente línea 130-200)
 
-    const query = Comision.query()
-      // 👇 comisiones reales: es_config = false O NULL (viejas)
-      .where((q) => {
-        q.where('es_config', false).orWhereNull('es_config')
-      })
-      .preload('asesor')
-      .preload('convenio')
-      .preload('dateo', (dq) => {
-        dq.preload('turno', (tq) => {
-          tq.preload('servicio')
-        })
-      })
+/**
+ * GET /api/comisiones
+ * Lista comisiones (SOLO reales, es_config = false / null) con filtros
+ */
+public async index({ request, response }: HttpContext) {
+  const page = Number(request.input('page') || 1)
+  const perPage = Math.min(Number(request.input('perPage') || 10), 100)
+  const mes = request.input('mes') as string | undefined // "YYYY-MM"
+  const asesorId = request.input('asesorId') as number | undefined
+  const convenioId = request.input('convenioId') as number | undefined
+  const estado = request.input('estado') as string | undefined
+  const sortBy = (request.input('sortBy') || 'id') as string
+  const order = (request.input('order') || 'desc') as 'asc' | 'desc'
 
-    // Filtro por mes (año-mes)
-    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
-      const [year, month] = mes.split('-').map(Number)
-      const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
-      const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
-      if (start && end) {
-        query.whereBetween('fecha_calculo', [start, end])
-      }
-    }
-
-    // Filtro por asesor
-    if (asesorId) {
-      query.where('asesor_id', asesorId)
-    }
-
-    // Filtro por convenio (para fichas de asesor convenio)
-    if (convenioId) {
-      query.where('convenio_id', convenioId)
-    }
-
-    // Filtro por estado
-    if (estado) query.where('estado', estado)
-
-    // Ordenamiento (solo columnas reales)
-    const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
-    let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
-    if (!SORTABLE.has(sortCol)) sortCol = 'id'
-    query.orderBy(sortCol, order)
-
-    const paginated = await query.paginate(page, perPage)
-    const meta = paginated.getMeta()
-    const data = paginated.all()
-
-    const rows = data.map((c) => mapComisionToDto(c))
-
-    return response.ok({
-      data: rows,
-      total: meta.total,
-      page: meta.currentPage,
-      perPage: meta.perPage,
+  const query = Comision.query()
+    // 👇 comisiones reales: es_config = false O NULL
+    .where((q) => {
+      q.where('es_config', false).orWhereNull('es_config')
     })
+    .preload('asesor')
+    .preload('convenio')
+    .preload('asesorSecundario') // 👈 NUEVO: preload del asesor secundario
+    .preload('dateo', (dq) => {
+      dq.preload('turno', (tq) => {
+        tq.preload('servicio')
+      })
+    })
+
+  // Filtro por mes (año-mes)
+  if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+    const [year, month] = mes.split('-').map(Number)
+    const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
+    const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
+    if (start && end) {
+      query.whereBetween('fecha_calculo', [start, end])
+    }
   }
 
+  // Filtro por asesor
+  if (asesorId) {
+    query.where('asesor_id', asesorId)
+  }
+
+  // Filtro por convenio
+  if (convenioId) {
+    query.where('convenio_id', convenioId)
+  }
+
+  // Filtro por estado
+  if (estado) query.where('estado', estado)
+
+  // Ordenamiento
+  const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
+  let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
+  if (!SORTABLE.has(sortCol)) sortCol = 'id'
+  query.orderBy(sortCol, order)
+
+  const paginated = await query.paginate(page, perPage)
+  const meta = paginated.getMeta()
+  const data = paginated.all()
+
+  const rows = data.map((c) => mapComisionToDto(c))
+
+  return response.ok({
+    data: rows,
+    total: meta.total,
+    page: meta.currentPage,
+    perPage: meta.perPage,
+  })
+}
   /**
    * GET /api/comisiones/metas-mensuales
    * Resumen mensual por asesor:
@@ -262,9 +263,7 @@ export default class ComisionesController {
     const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
 
     const asesorId =
-      asesorIdParam !== undefined && asesorIdParam !== null
-        ? Number(asesorIdParam)
-        : undefined
+      asesorIdParam !== undefined && asesorIdParam !== null ? Number(asesorIdParam) : undefined
 
     // 1️⃣ Agregamos RTM por asesor (motos / vehículos)
     const baseQ = Database.from('comisiones')
@@ -285,11 +284,7 @@ export default class ComisionesController {
 
     const agregados = await baseQ
       .select('asesor_id')
-      .select(
-        Database.raw(
-          "SUM(CASE WHEN tipo_vehiculo = 'MOTO' THEN 1 ELSE 0 END) AS rtm_motos"
-        )
-      )
+      .select(Database.raw("SUM(CASE WHEN tipo_vehiculo = 'MOTO' THEN 1 ELSE 0 END) AS rtm_motos"))
       .select(
         Database.raw(
           "SUM(CASE WHEN tipo_vehiculo = 'VEHICULO' OR tipo_vehiculo IS NULL THEN 1 ELSE 0 END) AS rtm_vehiculos"
@@ -297,10 +292,7 @@ export default class ComisionesController {
       )
       .groupBy('asesor_id')
 
-    const countsByAsesor = new Map<
-      number,
-      { rtm_motos: number; rtm_vehiculos: number }
-    >()
+    const countsByAsesor = new Map<number, { rtm_motos: number; rtm_vehiculos: number }>()
     for (const row of agregados as any[]) {
       const id = Number(row.asesor_id)
       if (!Number.isFinite(id)) continue
@@ -311,15 +303,13 @@ export default class ComisionesController {
     }
 
     // 2️⃣ Configs de meta (es_config = true, meta_rtm > 0)
-    const cfgRows = await Comision.query()
-      .where('es_config', true)
-      .where('meta_rtm', '>', 0)
+    const cfgRows = await Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
 
     let cfgGlobal: Comision | null = null
     const cfgByAsesor = new Map<number, Comision>()
 
     for (const c of cfgRows) {
-      if (c.asesorId == null) {
+      if (c.asesorId === null) {
         if (!cfgGlobal) cfgGlobal = c
       } else {
         cfgByAsesor.set(c.asesorId, c)
@@ -334,10 +324,7 @@ export default class ComisionesController {
     cfgByAsesor.forEach((_v, id) => allIds.add(id))
 
     const asesorIds = Array.from(allIds)
-    const asesoresMap = new Map<
-      number,
-      { nombre: string; tipo: string | null }
-    >()
+    const asesoresMap = new Map<number, { nombre: string; tipo: string | null }>()
 
     if (asesorIds.length > 0) {
       const asesores = await AgenteCaptacion.query().whereIn('id', asesorIds)
@@ -353,12 +340,12 @@ export default class ComisionesController {
       const counts = countsByAsesor.get(id) ?? { rtm_motos: 0, rtm_vehiculos: 0 }
       const cfg = cfgByAsesor.get(id) ?? cfgGlobal
 
-      const metaRtm = cfg ? cfg.metaRtm ?? 0 : 0
+      const metaRtm = cfg ? (cfg.metaRtm ?? 0) : 0
       const pctMeta = cfg ? toNumber(cfg.porcentajeComisionMeta ?? 0) : 0
 
       // 💵 Valores unitarios de referencia para RTM
-      const valorRtmMoto = cfg ? cfg.valorRtmMoto ?? 0 : 0
-      const valorRtmVehiculo = cfg ? cfg.valorRtmVehiculo ?? 0 : 0
+      const valorRtmMoto = cfg ? (cfg.valorRtmMoto ?? 0) : 0
+      const valorRtmVehiculo = cfg ? (cfg.valorRtmVehiculo ?? 0) : 0
 
       // 📈 Facturación real estimada según las unidades y los valores de RTM
       const totalFacturacionMotos = counts.rtm_motos * valorRtmMoto
@@ -396,43 +383,46 @@ export default class ComisionesController {
     return response.ok({ data: rows })
   }
 
-  /**
-   * GET /api/comisiones/:id
-   * Detalle de una comisión REAL (no config) con todas sus relaciones
-   */
-  public async show({ params, response }: HttpContext) {
-    const comision = await Comision.query()
-      .where('id', params.id)
-      // 👇 igual que en index: reales = false o NULL
-      .where((q) => {
-        q.where('es_config', false).orWhereNull('es_config')
+  // app/controllers/comisiones_controller.ts
+// REEMPLAZA el método show() (aproximadamente línea 210-250)
+
+/**
+ * GET /api/comisiones/:id
+ * Detalle de una comisión REAL con todas sus relaciones
+ */
+public async show({ params, response }: HttpContext) {
+  const comision = await Comision.query()
+    .where('id', params.id)
+    .where((q) => {
+      q.where('es_config', false).orWhereNull('es_config')
+    })
+    .preload('asesor')
+    .preload('convenio')
+    .preload('asesorSecundario') // 👈 NUEVO
+    .preload('dateo', (dq) => {
+      dq.preload('turno', (tq) => {
+        tq.preload('servicio')
       })
-      .preload('asesor')
-      .preload('convenio')
-      .preload('dateo', (dq) => {
-        dq.preload('turno', (tq) => {
-          tq.preload('servicio')
-        })
-      })
-      .first()
+    })
+    .first()
 
-    if (!comision) {
-      return response.notFound({ message: 'Comisión no encontrada' })
-    }
-
-    const dto = mapComisionToDto(comision)
-
-    // Extendemos con campos de detalle (por ahora null / reservados)
-    const result = {
-      ...dto,
-      aprobado_at: null,
-      pagado_at: null,
-      anulado_at: null,
-      observacion: null,
-    }
-
-    return response.ok(result)
+  if (!comision) {
+    return response.notFound({ message: 'Comisión no encontrada' })
   }
+
+  const dto = mapComisionToDto(comision)
+
+  // Extendemos con campos de detalle
+  const result = {
+    ...dto,
+    aprobado_at: null,
+    pagado_at: null,
+    anulado_at: null,
+    observacion: null,
+  }
+
+  return response.ok(result)
+}
 
   /**
    * PATCH /api/comisiones/:id/valores

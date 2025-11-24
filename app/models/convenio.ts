@@ -1,9 +1,10 @@
-// app/Models/Convenio.ts
+// app/models/convenio.ts
 import { DateTime } from 'luxon'
-import { BaseModel, column, hasMany } from '@adonisjs/lucid/orm'
-import type { HasMany } from '@adonisjs/lucid/types/relations'
+import { BaseModel, column, hasMany, belongsTo } from '@adonisjs/lucid/orm'
+import type { HasMany, BelongsTo } from '@adonisjs/lucid/types/relations'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import CaptacionDateo from '#models/captacion_dateo'
+import AgenteCaptacion from '#models/agente_captacion' // 👈 AGREGAR IMPORT
 
 export type ConvenioTipo = 'PERSONA' | 'TALLER' | 'PARQUEADERO' | 'LAVADERO'
 
@@ -58,9 +59,15 @@ export default class Convenio extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true, columnName: 'updated_at' })
   declare updatedAt: DateTime
 
+  // ========== RELACIONES ==========
+
   @hasMany(() => AsesorConvenioAsignacion, { foreignKey: 'convenioId' })
   declare asignaciones: HasMany<typeof AsesorConvenioAsignacion>
 
   @hasMany(() => CaptacionDateo, { foreignKey: 'convenioId' })
   declare dateos: HasMany<typeof CaptacionDateo>
+
+  // 👇 RELACIÓN CRÍTICA NUEVA: para preload del asesor del convenio
+  @belongsTo(() => AgenteCaptacion, { foreignKey: 'asesorConvenioId' })
+  declare asesorConvenio: BelongsTo<typeof AgenteCaptacion>
 }

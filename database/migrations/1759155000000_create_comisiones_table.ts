@@ -27,7 +27,7 @@ export default class extends BaseSchema {
         .onDelete('CASCADE')
 
       /**
-       * Asesor:
+       * Asesor PRINCIPAL:
        *  - NULL  => regla GLOBAL (aplica a todos los asesores)
        *  - valor => regla específica de ese asesor o comisión generada normal
        */
@@ -49,7 +49,6 @@ export default class extends BaseSchema {
 
       /**
        * Tipo de servicio de la comisión generada (RTM / TECNOMECANICA / etc.)
-       * Para filas de configuración se puede dejar en 'OTRO' si quieres usarlo.
        */
       table
         .enu('tipo_servicio', ['RTM', 'TECNOMECANICA', 'PREVENTIVA', 'SOAT', 'OTRO'], {
@@ -63,11 +62,6 @@ export default class extends BaseSchema {
        * Tipo de vehículo para la REGLA/COMISIÓN:
        *  - MOTO
        *  - VEHICULO (cualquier otro distinto a moto)
-       *
-       * Para comisiones generadas, puedes rellenarlo o dejarlo NULL y deducirlo
-       * desde el turno/vehículo cuando calcules.
-       *
-       * Para metas globales, se puede dejar en NULL.
        */
       table
         .enu('tipo_vehiculo', ['MOTO', 'VEHICULO'], {
@@ -78,60 +72,78 @@ export default class extends BaseSchema {
 
       /**
        * BASE:
-       *  - Para comisiones generadas: base de comisión por placa/cliente/convenio.
-       *  - Para filas de configuración: valor estándar de comisión por placa para esa regla.
+       *  - Para comisiones generadas: comisión por PLACA/cliente/convenio.
+       *  - Para filas de configuración: valor estándar de comisión por placa.
        */
       table.decimal('base', 12, 2).notNullable().defaultTo(0)
 
       /**
        * PORCENTAJE:
-       *  - Lo puedes usar si en algún caso quieres manejar % sobre base.
+       *  - Opcional si quieres manejar % sobre base.
        *  - En muchos casos quedará en 0.
        */
       table.decimal('porcentaje', 5, 2).notNullable().defaultTo(0)
 
       /**
        * MONTO:
-       *  - Para comisiones generadas: comisión del ASESOR (dateo) ya calculada.
-       *  - Para filas de configuración: valor estándar de comisión por dateo para esa regla.
+       *  - Para comisiones generadas: comisión por DATEO del asesor.
+       *  - Para filas de configuración: valor estándar de comisión por dateo.
        */
       table.decimal('monto', 12, 2).notNullable().defaultTo(0)
+
+      // ========== 💰 DESGLOSE INTERNO (NUEVO) ==========
+
+      /**
+       * MONTO_ASESOR:
+       *  - Lo que cobra el asesor comercial por el DATEO cuando hay convenio.
+       *  - Si no hay convenio, igual a `monto`.
+       *  - NULL en filas de configuración.
+       */
+      table.decimal('monto_asesor', 12, 2).nullable()
+
+      /**
+       * MONTO_CONVENIO:
+       *  - Lo que cobra el dueño del convenio por la PLACA.
+       *  - Si no hay convenio, igual a `base`.
+       *  - NULL en filas de configuración.
+       */
+      table.decimal('monto_convenio', 12, 2).nullable()
+
+      /**
+       * ASESOR_SECUNDARIO_ID:
+       *  - ID del asesor del convenio (quien recibe monto_convenio).
+       *  - NULL si no hay convenio o si el mismo asesor datea su convenio.
+       */
+      table
+        .integer('asesor_secundario_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('agentes_captacions')
+        .onDelete('SET NULL')
+
+      // ========== FIN DESGLOSE ==========
 
       /**
        * META_RTM:
        *  - Meta mensual de RTM (cantidad de RTM) para filas de CONFIGURACIÓN.
-       *  - Uso típico:
-       *      es_config = true
-       *      asesor_id = NULL  => meta global
-       *      asesor_id = X     => meta individual del asesor X
-       *  - Para comisiones reales se deja en 0.
        */
       table.integer('meta_rtm').unsigned().notNullable().defaultTo(0)
 
       /**
        * Valores de referencia de RTM (solo filas de META MENSUAL):
-       *  - valor_rtm_moto      → tarifa usada para RTM de motos.
-       *  - valor_rtm_vehiculo  → tarifa usada para RTM de vehículos.
-       *
-       * Para comisiones reales o reglas de placa/dateo pueden quedar en 0.
        */
       table.decimal('valor_rtm_moto', 12, 2).notNullable().defaultTo(0)
       table.decimal('valor_rtm_vehiculo', 12, 2).notNullable().defaultTo(0)
 
       /**
        * PORCENTAJE_COMISION_META:
-       *  - % de comisión sobre la facturación RTM del mes cuando se cumple
-       *    o supera la meta_rtm.
-       *  - Solo se usa en filas de CONFIGURACIÓN (es_config = true).
-       *  - Para comisiones reales queda en 0.
+       *  - % de comisión sobre la facturación RTM del mes cuando se cumple la meta.
        */
       table.decimal('porcentaje_comision_meta', 5, 2).notNullable().defaultTo(0)
 
       /**
        * Estado de la comisión:
-       *  - En comisiones generadas: flujo normal (PENDIENTE/APROBADA/PAGADA/ANULADA).
-       *  - En filas de configuración: puedes dejar siempre en 'PENDIENTE' o ignorarlo,
-       *    el flag es_config es el que manda.
        */
       table
         .enu('estado', ['PENDIENTE', 'APROBADA', 'PAGADA', 'ANULADA'], {
@@ -143,9 +155,8 @@ export default class extends BaseSchema {
 
       /**
        * es_config:
-       *  - false => fila corresponde a una comisión generada real (lo que ya usas hoy).
-       *  - true  => fila es una REGLA de configuración (global o por asesor + tipo_vehiculo)
-       *             o una META mensual por asesor.
+       *  - false => comisión real generada
+       *  - true  => fila de configuración (reglas/metas)
        */
       table.boolean('es_config').notNullable().defaultTo(false)
 
@@ -162,12 +173,13 @@ export default class extends BaseSchema {
         .inTable('usuarios')
         .onDelete('SET NULL')
 
-      /** ⏱️ Timestamps que espera el modelo (createdAt / updatedAt) */
+      /** ⏱️ Timestamps */
       table.timestamp('created_at', { useTz: false }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: false }).notNullable().defaultTo(this.now())
 
       /* ===== Índices ===== */
       table.index(['asesor_id', 'estado'])
+      table.index(['asesor_secundario_id']) // 👈 NUEVO
       table.index(['tipo_servicio', 'estado'])
       table.index(['fecha_calculo'])
       table.index(['es_config'])

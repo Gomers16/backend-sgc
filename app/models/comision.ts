@@ -28,7 +28,7 @@ export default class Comision extends BaseModel {
   declare captacionDateoId: number | null
 
   /**
-   * Asesor:
+   * Asesor PRINCIPAL:
    *  - null  => regla GLOBAL (config)
    *  - valor => comisión real o regla por asesor
    */
@@ -41,19 +41,12 @@ export default class Comision extends BaseModel {
   @column({ columnName: 'tipo_servicio' })
   declare tipoServicio: ComisionTipoServicio
 
-  /**
-   * Tipo de vehículo para la regla / comisión:
-   *  - 'MOTO'
-   *  - 'VEHICULO'
-   *
-   * En comisiones reales se puede dejar null si lo deduces desde turno/vehículo.
-   */
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: ComisionTipoVehiculo | null
 
   /**
    * BASE:
-   *  - comisión por placa (cliente/convenio) o valor estándar en reglas.
+   *  - comisión por PLACA (cliente/convenio).
    * Lucid devuelve DECIMAL como string.
    */
   @column()
@@ -68,46 +61,46 @@ export default class Comision extends BaseModel {
 
   /**
    * MONTO:
-   *  - en comisiones reales: comisión del asesor (dateo).
-   *  - en reglas: valor estándar de comisión por dateo.
+   *  - comisión por DATEO del asesor.
    */
   @column()
   declare monto: string
 
+  // ========== 💰 DESGLOSE INTERNO (NUEVO) ==========
+
   /**
-   * Meta mensual de RTM (cantidad de RTM) para filas de CONFIGURACIÓN.
-   *
-   * Uso típico:
-   *  - es_config = true
-   *  - asesor_id = NULL  => meta global para todos
-   *  - asesor_id = X     => meta específica para ese asesor
-   *
-   * Para comisiones reales se deja en 0.
+   * MONTO_ASESOR:
+   *  - Lo que cobra el asesor comercial por el DATEO.
+   *  - Lucid devuelve DECIMAL como string, pero puede ser NULL.
    */
+  @column({ columnName: 'monto_asesor' })
+  declare montoAsesor: string | null
+
+  /**
+   * MONTO_CONVENIO:
+   *  - Lo que cobra el dueño del convenio por la PLACA.
+   */
+  @column({ columnName: 'monto_convenio' })
+  declare montoConvenio: string | null
+
+  /**
+   * ASESOR_SECUNDARIO_ID:
+   *  - ID del asesor del convenio (quien recibe montoConvenio).
+   */
+  @column({ columnName: 'asesor_secundario_id' })
+  declare asesorSecundarioId: number | null
+
+  // ========== FIN DESGLOSE ==========
+
   @column({ columnName: 'meta_rtm' })
   declare metaRtm: number
 
-  /**
-   * Valores de referencia de RTM (solo filas de META MENSUAL):
-   *  - valorRtmMoto      → tarifa usada para RTM de motos.
-   *  - valorRtmVehiculo  → tarifa usada para RTM de vehículos.
-   *
-   * Para comisiones reales o reglas de placa/dateo normalmente queda en 0.
-   */
   @column({ columnName: 'valor_rtm_moto' })
   declare valorRtmMoto: number
 
   @column({ columnName: 'valor_rtm_vehiculo' })
   declare valorRtmVehiculo: number
 
-  /**
-   * Porcentaje de comisión sobre la META mensual de RTM.
-   * Se usa sólo en filas de CONFIGURACIÓN.
-   *
-   * Ejemplo:
-   *  - 5.00  => 5% de comisión sobre la facturación RTM del mes,
-   *             si se cumple o supera la meta.
-   */
   @column({ columnName: 'porcentaje_comision_meta' })
   declare porcentajeComisionMeta: string
 
@@ -116,8 +109,8 @@ export default class Comision extends BaseModel {
 
   /**
    * esConfig:
-   *  - false => comisión real (lo que ves en la vista 💸 Comisiones)
-   *  - true  => fila de configuración (reglas globales / por asesor / metas)
+   *  - false => comisión real
+   *  - true  => fila de configuración
    */
   @column({ columnName: 'es_config' })
   declare esConfig: boolean
@@ -150,4 +143,10 @@ export default class Comision extends BaseModel {
     foreignKey: 'convenioId',
   })
   declare convenio: BelongsTo<typeof Convenio>
+
+  // 👇 NUEVA RELACIÓN: Asesor secundario (dueño del convenio)
+  @belongsTo(() => AgenteCaptacion, {
+    foreignKey: 'asesorSecundarioId',
+  })
+  declare asesorSecundario: BelongsTo<typeof AgenteCaptacion>
 }

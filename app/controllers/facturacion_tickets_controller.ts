@@ -669,199 +669,241 @@ export default class FacturacionTicketsController {
     const dto = await this.getTicketDTOById(ticket.id)
     return dto
   }
-
   // ========================== Privados / Hook Comisiones ==========================
 
-  private async applyCommissionHook(ticket: FacturacionTicket) {
-    // Solo al estar confirmada
-    if (ticket.estado !== 'CONFIRMADA') return
+ // app/controllers/facturacion_tickets_controller.ts
+// REEMPLAZA COMPLETAMENTE el método applyCommissionHook (líneas ~480-730)
 
-    // Validar servicio = RTM / Tecnomecánica
-    const esRTM = isRTMByCodigoONombre(ticket.servicioCodigo, ticket.servicioNombre)
-    if (!esRTM) return
+private async applyCommissionHook(ticket: FacturacionTicket) {
+  if (ticket.estado !== 'CONFIRMADA') return
 
-    // Asegurar que tenemos dateo_id: si no, intenta inferirlo desde el turno
-    let turnoForTipo: TurnoRtm | null = null
+  const esRTM = isRTMByCodigoONombre(ticket.servicioCodigo, ticket.servicioNombre)
+  if (!esRTM) return
 
-    if (!ticket.dateoId && ticket.turnoId) {
-      turnoForTipo = await TurnoRtm.find(ticket.turnoId)
-      const maybe = turnoForTipo as unknown as { captacionDateoId?: number | null } | null
-      if (maybe?.captacionDateoId) {
-        ticket.dateoId = maybe.captacionDateoId
-        await ticket.save()
-      }
-    }
+  let turnoForTipo: TurnoRtm | null = null
 
-    if (!ticket.dateoId) return // Sin dateo NO comisiona
-
-    // Cargar el dateo con relaciones
-    const dateo = await CaptacionDateo.query()
-      .where('id', ticket.dateoId)
-      .preload('agente')
-      .preload('asesorConvenio')
-      .preload('convenio')
-      .first()
-
-    if (!dateo) return
-
-    // Intentar obtener tipo de vehículo (MOTO / VEHICULO) para aplicar configuración
-    let turnoTipoVehiculo: string | null = null
-    if (!turnoForTipo && ticket.turnoId) {
-      turnoForTipo = await TurnoRtm.find(ticket.turnoId)
-    }
-    if (turnoForTipo) {
-      const anyTurno = turnoForTipo as any
-      turnoTipoVehiculo = anyTurno.tipoVehiculo ?? anyTurno.tipo_vehiculo ?? null
-    }
-
-    const tipoVehiculoComision = inferTipoVehiculoComision({
-      ticketTipo: (ticket as any).tipoVehiculoSnapshot ?? (ticket as any).tipo_vehiculo ?? null,
-      turnoTipo: turnoTipoVehiculo,
-    })
-
-    // Estado inicial: PENDIENTE
-    // Tipo servicio: 'RTM'
-    // Fecha cálculo: ahora
-    const now = DateTime.now()
-    const usuarioId = ticket.confirmedById ?? ticket.createdById ?? null
-
-    // Evitar DUPLICADOS básicos: si ya existe HOY para este dateo y este "monto patrón", no creamos de nuevo
-    const startDay = now.startOf('day').toSQL()
-    const endDay = now.endOf('day').toSQL()
-
-    // Valores legacy por defecto
-    let montoAsesorNoConvenio = 20000
-    let montoAsesorConConvenio = 4000
-    let montoConvenio = 20000
-
-    // Aplicar configuraciones, si existen
-    if (tipoVehiculoComision) {
-      // Config para el asesor comercial (dateo.agenteId)
-      if (dateo.agenteId) {
-        const cfgAsesor = await findConfigComisionDateo({
-          asesorId: dateo.agenteId,
-          tipoVehiculo: tipoVehiculoComision,
-        })
-        if (cfgAsesor && cfgAsesor.valorDateo > 0) {
-          // Misma comisión configurada tanto si hay convenio como si no
-          montoAsesorNoConvenio = cfgAsesor.valorDateo
-          montoAsesorConConvenio = cfgAsesor.valorDateo
-        }
-      }
-
-      // Config para el asesor del convenio (dateo.asesorConvenioId)
-      if (dateo.asesorConvenioId) {
-        const cfgConvenio = await findConfigComisionDateo({
-          asesorId: dateo.asesorConvenioId,
-          tipoVehiculo: tipoVehiculoComision,
-        })
-        if (cfgConvenio && cfgConvenio.valorDateo > 0) {
-          montoConvenio = cfgConvenio.valorDateo
-        }
-      }
-    }
-
-    const trx = await Database.transaction()
-    try {
-      const baseWhere = Comision.query({ client: trx })
-        .where('captacion_dateo_id', dateo.id)
-        .whereBetween('fecha_calculo', [startDay!, endDay!])
-        .where('tipo_servicio', 'RTM')
-
-      // Caso con convenio
-      if (dateo.convenioId) {
-        // asesor comercial (dateo.agenteId)
-        if (dateo.agenteId) {
-          const existsAsesor = await baseWhere
-            .clone()
-            .where('asesor_id', dateo.agenteId)
-            .where('convenio_id', dateo.convenioId)
-            .where('monto', montoAsesorConConvenio)
-            .first()
-
-          if (!existsAsesor) {
-            const c1 = new Comision()
-            c1.captacionDateoId = dateo.id
-            c1.asesorId = dateo.agenteId
-            c1.convenioId = dateo.convenioId
-            c1.tipoServicio = 'RTM'
-            c1.base = '0'
-            c1.porcentaje = '0'
-            c1.monto = String(montoAsesorConConvenio)
-            c1.estado = 'PENDIENTE'
-            c1.fechaCalculo = now
-            c1.calculadoPor = usuarioId
-            if (tipoVehiculoComision) (c1 as any).tipoVehiculo = tipoVehiculoComision
-            await c1.useTransaction(trx).save()
-          }
-        }
-
-        // asesor de convenio
-        if (dateo.convenioId && dateo.asesorConvenioId) {
-          const existsConvenio = await baseWhere
-            .clone()
-            .where('asesor_id', dateo.asesorConvenioId)
-            .where('convenio_id', dateo.convenioId)
-            .where('monto', montoConvenio)
-            .first()
-
-          if (!existsConvenio) {
-            const c2 = new Comision()
-            c2.captacionDateoId = dateo.id
-            c2.asesorId = dateo.asesorConvenioId // requerido por el schema
-            c2.convenioId = dateo.convenioId
-            c2.tipoServicio = 'RTM'
-            c2.base = '0'
-            c2.porcentaje = '0'
-            c2.monto = String(montoConvenio)
-            c2.estado = 'PENDIENTE'
-            c2.fechaCalculo = now
-            c2.calculadoPor = usuarioId
-            if (tipoVehiculoComision) (c2 as any).tipoVehiculo = tipoVehiculoComision
-            await c2.useTransaction(trx).save()
-          }
-        }
-      } else {
-        // Sin convenio: solo asesor comercial
-        if (dateo.agenteId) {
-          const existsAsesor = await baseWhere
-            .clone()
-            .where('asesor_id', dateo.agenteId)
-            .whereNull('convenio_id')
-            .where('monto', montoAsesorNoConvenio)
-            .first()
-
-          if (!existsAsesor) {
-            const c = new Comision()
-            c.captacionDateoId = dateo.id
-            c.asesorId = dateo.agenteId
-            c.convenioId = null
-            c.tipoServicio = 'RTM'
-            c.base = '0'
-            c.porcentaje = '0'
-            c.monto = String(montoAsesorNoConvenio)
-            c.estado = 'PENDIENTE'
-            c.fechaCalculo = now
-            c.calculadoPor = usuarioId
-            if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
-            await c.useTransaction(trx).save()
-          }
-        }
-      }
-
-      // marcar el DATEO como EXITOSO en la MISMA transacción
-      if (dateo.resultado !== 'EXITOSO') {
-        dateo.resultado = 'EXITOSO'
-        await dateo.useTransaction(trx).save()
-      }
-
-      await trx.commit()
-    } catch (err) {
-      await trx.rollback()
-      throw err
+  if (!ticket.dateoId && ticket.turnoId) {
+    turnoForTipo = await TurnoRtm.find(ticket.turnoId)
+    const maybe = turnoForTipo as unknown as { captacionDateoId?: number | null } | null
+    if (maybe?.captacionDateoId) {
+      ticket.dateoId = maybe.captacionDateoId
+      await ticket.save()
     }
   }
 
+  if (!ticket.dateoId) return
+
+  // ========== CARGAR DATEO CON TODAS LAS RELACIONES ==========
+  const dateo = await CaptacionDateo.query()
+    .where('id', ticket.dateoId)
+    .preload('agente')
+    .preload('asesorConvenio')
+    .preload('convenio', (qConvenio) => {
+      qConvenio.preload('asesorConvenio')
+    })
+    .first()
+
+  if (!dateo) return
+
+  // Obtener tipo de vehículo
+  let turnoTipoVehiculo: string | null = null
+  if (!turnoForTipo && ticket.turnoId) {
+    turnoForTipo = await TurnoRtm.find(ticket.turnoId)
+  }
+  if (turnoForTipo) {
+    const anyTurno = turnoForTipo as any
+    turnoTipoVehiculo = anyTurno.tipoVehiculo ?? anyTurno.tipo_vehiculo ?? null
+  }
+
+  const tipoVehiculoComision = inferTipoVehiculoComision({
+    ticketTipo: (ticket as any).tipoVehiculoSnapshot ?? (ticket as any).tipo_vehiculo ?? null,
+    turnoTipo: turnoTipoVehiculo,
+  })
+
+  const now = DateTime.now()
+  const usuarioId = ticket.confirmedById ?? ticket.createdById ?? null
+
+  // ========== OBTENER CONFIGURACIONES ==========
+  let valorPlacaAsesor = 0
+  let valorDateoAsesor = 0
+  let valorPlacaConvenio = 0
+  let valorDateoConvenio = 0
+
+  const configGlobal = await findConfigComisionDateo({
+    asesorId: null,
+    tipoVehiculo: tipoVehiculoComision,
+  })
+
+  if (configGlobal) {
+    valorPlacaAsesor = configGlobal.valorPlaca
+    valorDateoAsesor = configGlobal.valorDateo
+    valorPlacaConvenio = configGlobal.valorPlaca
+    valorDateoConvenio = configGlobal.valorDateo
+  }
+
+  if (dateo.agenteId) {
+    const cfgAsesor = await findConfigComisionDateo({
+      asesorId: dateo.agenteId,
+      tipoVehiculo: tipoVehiculoComision,
+    })
+
+    if (cfgAsesor) {
+      valorPlacaAsesor = cfgAsesor.valorPlaca
+      valorDateoAsesor = cfgAsesor.valorDateo
+    }
+  }
+
+  let asesorConvenioIdReal: number | null = null
+
+  if (dateo.convenioId && dateo.$preloaded?.convenio?.$preloaded?.asesorConvenio) {
+    asesorConvenioIdReal = dateo.$preloaded.convenio.$preloaded.asesorConvenio.id
+
+    const cfgConvenio = await findConfigComisionDateo({
+      asesorId: asesorConvenioIdReal,
+      tipoVehiculo: tipoVehiculoComision,
+    })
+
+    if (cfgConvenio) {
+      valorPlacaConvenio = cfgConvenio.valorPlaca
+      valorDateoConvenio = cfgConvenio.valorDateo
+    }
+  }
+
+  if (
+    valorPlacaAsesor === 0 &&
+    valorDateoAsesor === 0 &&
+    valorPlacaConvenio === 0 &&
+    valorDateoConvenio === 0
+  ) {
+    console.warn(`⚠️ No hay configuración de comisión para tipo_vehiculo: ${tipoVehiculoComision}`)
+    return
+  }
+
+  // ========== EVITAR DUPLICADOS ==========
+  const startDay = now.startOf('day').toSQL()
+  const endDay = now.endOf('day').toSQL()
+
+  const trx = await Database.transaction()
+  try {
+    const existingComision = await Comision.query({ client: trx })
+      .where('captacion_dateo_id', dateo.id)
+      .whereBetween('fecha_calculo', [startDay!, endDay!])
+      .where('tipo_servicio', 'RTM')
+      .first()
+
+    if (existingComision) {
+      console.log('⚠️ Ya existe una comisión para este dateo hoy')
+      await trx.rollback()
+      return
+    }
+
+    // ========== CREAR UNA SOLA COMISIÓN CON DESGLOSE ==========
+
+    if (dateo.convenioId) {
+      const esAsesorConvenioQuienDatea =
+        dateo.agenteId && asesorConvenioIdReal && dateo.agenteId === asesorConvenioIdReal
+
+      if (esAsesorConvenioQuienDatea) {
+        // 🎯 CASO 2: Asesor convenio datea su propio convenio
+        // Una sola comisión para él (placa + dateo)
+
+        const c = new Comision()
+        c.captacionDateoId = dateo.id
+        c.asesorId = asesorConvenioIdReal
+        c.convenioId = dateo.convenioId
+        c.tipoServicio = 'RTM'
+        c.base = String(valorPlacaConvenio) // placa
+        c.porcentaje = '0'
+        c.monto = String(valorDateoConvenio) // dateo
+        c.montoAsesor = String(valorDateoConvenio) // 👈 todo para él
+        c.montoConvenio = String(valorPlacaConvenio) // 👈 todo para él
+        c.asesorSecundarioId = null // 👈 no hay segundo asesor
+        c.estado = 'PENDIENTE'
+        c.fechaCalculo = now
+        c.calculadoPor = usuarioId
+        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
+        await c.useTransaction(trx).save()
+
+        console.log(
+          `✅ Comisión creada (Caso 2): Asesor convenio datea propio convenio - Dateo: ${valorDateoConvenio}, Placa: ${valorPlacaConvenio}, Total: ${valorPlacaConvenio + valorDateoConvenio}`
+        )
+      } else {
+        // 📋 CASO 1: Asesor comercial datea para un convenio
+        // UNA SOLA comisión con desglose
+
+        if (!dateo.agenteId) {
+          console.warn('⚠️ No hay asesor comercial')
+          await trx.rollback()
+          return
+        }
+
+        const c = new Comision()
+        c.captacionDateoId = dateo.id
+        c.asesorId = dateo.agenteId // 👈 Asesor principal (comercial)
+        c.convenioId = dateo.convenioId
+        c.tipoServicio = 'RTM'
+        c.base = String(valorPlacaConvenio) // 👈 para mostrar en la tabla
+        c.porcentaje = '0'
+        c.monto = String(valorDateoAsesor) // 👈 para mostrar en la tabla
+
+        // 💰 DESGLOSE INTERNO
+        c.montoAsesor = String(valorDateoAsesor) // 👈 comercial cobra dateo
+        c.montoConvenio = String(valorPlacaConvenio) // 👈 convenio cobra placa
+        c.asesorSecundarioId = asesorConvenioIdReal // 👈 dueño del convenio
+
+        c.estado = 'PENDIENTE'
+        c.fechaCalculo = now
+        c.calculadoPor = usuarioId
+        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
+        await c.useTransaction(trx).save()
+
+        console.log(
+          `✅ Comisión creada (Caso 1): Comercial datea convenio - Asesor: ${valorDateoAsesor}, Convenio: ${valorPlacaConvenio}, Total: ${valorDateoAsesor + valorPlacaConvenio}`
+        )
+      }
+    } else {
+      // 🎯 CASO 3: Asesor comercial sin convenio
+
+      if (!dateo.agenteId) {
+        console.warn('⚠️ No hay asesor')
+        await trx.rollback()
+        return
+      }
+
+      const c = new Comision()
+      c.captacionDateoId = dateo.id
+      c.asesorId = dateo.agenteId
+      c.convenioId = null
+      c.tipoServicio = 'RTM'
+      c.base = String(valorPlacaAsesor) // placa
+      c.porcentaje = '0'
+      c.monto = String(valorDateoAsesor) // dateo
+      c.montoAsesor = String(valorDateoAsesor) // 👈 todo para él
+      c.montoConvenio = String(valorPlacaAsesor) // 👈 todo para él
+      c.asesorSecundarioId = null // 👈 no hay segundo asesor
+      c.estado = 'PENDIENTE'
+      c.fechaCalculo = now
+      c.calculadoPor = usuarioId
+      if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
+      await c.useTransaction(trx).save()
+
+      console.log(
+        `✅ Comisión creada (Caso 3): Sin convenio - Dateo: ${valorDateoAsesor}, Placa: ${valorPlacaAsesor}, Total: ${valorPlacaAsesor + valorDateoAsesor}`
+      )
+    }
+
+    // Marcar dateo como EXITOSO
+    if (dateo.resultado !== 'EXITOSO') {
+      dateo.resultado = 'EXITOSO'
+      await dateo.useTransaction(trx).save()
+    }
+
+    await trx.commit()
+  } catch (err) {
+    await trx.rollback()
+    throw err
+  }
+}
   /** Rellena columnas snapshot del ticket a partir del Turno. */
   private async fillSnapshotsFromTurno(ticket: FacturacionTicket, turno: TurnoRtm) {
     const t = turno as unknown as ITurnoSnapshotReadable
@@ -1156,16 +1198,11 @@ function buildTicketDTO(ticket: FacturacionTicket): ITicketDTO {
     turnoDTO?.turnoNumero ??
     null
   const turnoServicio =
-    pick('turnoNumeroServicio', 'turno_numero_servicio') ??
-    turnoDTO?.turnoNumeroServicio ??
-    null
+    pick('turnoNumeroServicio', 'turno_numero_servicio') ?? turnoDTO?.turnoNumeroServicio ?? null
   const turnoCodigo = pick('turnoCodigo', 'turno_codigo') ?? turnoDTO?.turnoCodigo ?? null
   const placaTurno = pick('placaTurno', 'placa_turno') ?? turnoDTO?.placa ?? null
 
-  const sedeNombre =
-    pick('sedeNombre', 'sede_nombre') ??
-    turnoDTO?.sede?.nombre ??
-    null
+  const sedeNombre = pick('sedeNombre', 'sede_nombre') ?? turnoDTO?.sede?.nombre ?? null
   const funcionarioNombre =
     pick('funcionarioNombre', 'funcionario_nombre') ??
     (turnoDTO?.usuario
@@ -1283,6 +1320,24 @@ async function findConfigComisionDateo(params: {
       .where('es_config', true)
       .whereNull('asesor_id')
       .where('tipo_vehiculo', tipoVehiculo)
+      .first()
+  }
+
+  // 3) 🆕 Fallback: Regla global SIN tipo_vehiculo (para asesores sin config específica)
+  if (!row && asesorId) {
+    row = await Comision.query()
+      .where('es_config', true)
+      .where('asesor_id', asesorId)
+      .whereNull('tipo_vehiculo')
+      .first()
+  }
+
+  // 4) 🆕 Fallback final: Regla GLOBAL sin tipo_vehiculo (asesor_id = NULL, tipo_vehiculo = NULL)
+  if (!row) {
+    row = await Comision.query()
+      .where('es_config', true)
+      .whereNull('asesor_id')
+      .whereNull('tipo_vehiculo')
       .first()
   }
 
