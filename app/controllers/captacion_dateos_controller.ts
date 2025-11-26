@@ -101,7 +101,7 @@ export default class CaptacionDateosController {
    * 4. También desarchiva TODOS los prospectos duplicados con esa placa
    */
   public async verificarVencidos({ response }: HttpContext) {
-    const hace72h = DateTime.now().minus({ hours: 72 })
+    const hace72h = DateTime.now().minus({ hours: 2 })
 
     console.log(`🔍 Buscando dateos vencidos desde ${hace72h.toISO()}`)
 
