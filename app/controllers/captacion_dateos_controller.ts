@@ -1,6 +1,7 @@
 // app/controllers/captacion_dateos_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
+import db from '@adonisjs/lucid/services/db'
 import CaptacionDateo, { Canal, Origen } from '#models/captacion_dateo'
 import AgenteCaptacion from '#models/agente_captacion'
 import Convenio from '#models/convenio'
@@ -90,8 +91,82 @@ function serializeTurnoInfo(t: any | null) {
 
 export default class CaptacionDateosController {
   /**
-   * GET /captacion-dateos
+   * POST /captacion-dateos/verificar-vencidos
+   *
+   * 🎯 PROPÓSITO:
+   * Revisa dateos que cumplen TODAS estas condiciones:
+   * 1. Vienen de un prospecto (prospecto_id NOT NULL)
+   * 2. Llevan más de 72 horas en estado PENDIENTE
+   * 3. Los revierte a prospectos (los "desarchiva")
+   * 4. También desarchiva TODOS los prospectos duplicados con esa placa
    */
+  public async verificarVencidos({ response }: HttpContext) {
+    const hace72h = DateTime.now().minus({ hours: 72 })
+
+    console.log(`🔍 Buscando dateos vencidos desde ${hace72h.toISO()}`)
+
+    const dateosVencidos = await CaptacionDateo.query()
+      .whereNotNull('prospecto_id')
+      .where('resultado', 'PENDIENTE')
+      .where('created_at', '<=', hace72h.toSQL()!)
+      .preload('prospecto')
+
+    console.log(`📊 Se encontraron ${dateosVencidos.length} dateo(s) vencido(s)`)
+
+    let revertidos = 0
+
+    for (const dateo of dateosVencidos) {
+      if (!dateo.prospecto) {
+        console.warn(`⚠️ Dateo ${dateo.id} no tiene prospecto asociado, saltando...`)
+        continue
+      }
+
+      const trx = await db.transaction()
+      try {
+        // 1️⃣ Desarchivar el prospecto ORIGINAL del dateo
+        dateo.prospecto.archivado = false
+        await dateo.prospecto.useTransaction(trx).save()
+        console.log(`✅ Prospecto ${dateo.prospecto.id} desarchivado`)
+
+        // 2️⃣ Desarchivar TODOS los prospectos duplicados con la misma placa
+        const placaNormalizada = normalizePlaca(dateo.placa)
+        if (placaNormalizada) {
+          const resultadoPlaca = await Prospecto.query({ client: trx })
+            .where('archivado', true)
+            .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNormalizada])
+            .update({ archivado: false })
+
+          console.log(`✅ Se desarchivaron ${resultadoPlaca} prospecto(s) adicionales con placa ${placaNormalizada}`)
+        }
+
+        // 3️⃣ Marcar el dateo como NO_EXITOSO con nota
+        dateo.resultado = 'NO_EXITOSO'
+        const notaVencimiento = '[AUTO] Vencido por inactividad (72h en PENDIENTE)'
+        dateo.observacion = dateo.observacion
+          ? `${dateo.observacion}\n${notaVencimiento}`
+          : notaVencimiento
+        await dateo.useTransaction(trx).save()
+
+        await trx.commit()
+        revertidos++
+        console.log(`✅ Dateo ${dateo.id} revertido exitosamente`)
+
+      } catch (e) {
+        await trx.rollback()
+        console.error(`❌ Error revirtiendo dateo ${dateo.id}:`, e)
+      }
+    }
+
+    return response.ok({
+      message: `Se revirtieron ${revertidos} dateo(s) a prospectos`,
+      procesados: dateosVencidos.length,
+      exitosos: revertidos,
+      fallidos: dateosVencidos.length - revertidos,
+      total: dateosVencidos.length, // Alias para compatibilidad con frontend
+    })
+  }
+
+  /** GET /captacion-dateos */
   public async index({ request }: HttpContext) {
     const page = Number(request.input('page', 1))
     const perPage = Math.min(Number(request.input('perPage', 20)), 100)
@@ -339,7 +414,6 @@ export default class CaptacionDateosController {
       convenioId = convenioDelAsesor.id
       convenio = convenioDelAsesor
       asesorConvenioId = agente.id // ✅ Solo se llena cuando ES el asesor convenio quien datea
-
     } else if (agente && canal === 'ASESOR_COMERCIAL') {
       // 💼 Comercial: puede datear sin convenio, pero si viene convenioId debe estar asignado
       if (convenioId !== null) {
@@ -405,15 +479,20 @@ export default class CaptacionDateosController {
       imagenSubidaPor,
     })
 
-    // Archivar prospecto con misma placa (si existe y no está archivado)
-    try {
-      await Prospecto.query()
-        .where('archivado', false)
-        .whereRaw("REPLACE(UPPER(placa), '-', '') = ?", [placa!])
-        .update({ archivado: true })
-    } catch (err) {
-      console.error('No se pudo archivar prospecto asociado a la placa', placa, err)
+    // REEMPLAZA DESDE AQUÍ
+    if (placa) {
+      try {
+        const resultadoArch = await Prospecto.query()
+          .where('archivado', false)
+          .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
+          .update({ archivado: true })
+
+        console.log(`✅ Se archivaron ${resultadoArch} prospecto(s) con placa ${placa}`)
+      } catch (err) {
+        console.error('❌ Error archivando prospectos con placa', placa, err)
+      }
     }
+    // HASTA AQUÍ
 
     const out = created.serialize() as any
     out.canal = (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const).includes(out.canal)

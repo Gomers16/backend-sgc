@@ -17,8 +17,8 @@ export default class CreateProspectosTable extends BaseSchema {
         .inTable('convenios')
         .onDelete('SET NULL')
 
-      // ⛔ Placa única y obligatoria
-      table.string('placa', 12).notNullable().unique()
+      // ✅ Placa obligatoria (SIN unique para permitir duplicados)
+      table.string('placa', 12).notNullable()
 
       table.string('telefono', 20).nullable()
       table.string('nombre', 120).nullable()
@@ -62,7 +62,7 @@ export default class CreateProspectosTable extends BaseSchema {
       table.dateTime('updated_at', { precision: 0 }).notNullable().defaultTo(this.now())
 
       table.index(['convenio_id'])
-      table.index(['placa'])
+      table.index(['placa']) // ✅ Índice para búsquedas rápidas (NO impide duplicados)
       table.index(['telefono'])
       table.index(['soat_vigente', 'soat_vencimiento'])
       table.index(['tecno_vigente', 'tecno_vencimiento'])

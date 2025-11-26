@@ -503,8 +503,8 @@ router
         const { default: AgentesConveniosController } = await import(
           '#controllers/agentes_convenios_controller'
         )
-        return new AgentesConveniosController().listByAsesor(ctx)
-      })
+        return new AgentesConveniosController().listByAsesor(ctx) // Usa el método correcto aquí
+  })
       .where('id', /^[0-9]+$/)
 
     /* ============================== DATEOS ============================= */
@@ -528,6 +528,15 @@ router
       )
       return new CaptacionDateosController().store(ctx)
     })
+    // 🔥 NUEVA RUTA: Verificar dateos vencidos (>72h en PENDIENTE)
+    // Debe ejecutarse periódicamente (cron job cada hora o manualmente)
+    router.post('/captacion-dateos/verificar-vencidos', async (ctx) => {
+      const { default: CaptacionDateosController } = await import(
+        '#controllers/captacion_dateos_controller'
+      )
+      return new CaptacionDateosController().verificarVencidos(ctx)
+    })
+
     router
       .put('/captacion-dateos/:id', async (ctx) => {
         const { default: CaptacionDateosController } = await import(

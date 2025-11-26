@@ -210,7 +210,7 @@ export default class ProspectosController {
     })
   }
 
-  /** POST /api/prospectos  (placa requerida y única) */
+  /** POST /api/prospectos  (placa requerida pero YA NO única) */
   public async store({ request, response, auth }: HttpContext) {
     const body = request.only([
       'placa',
@@ -228,7 +228,6 @@ export default class ProspectosController {
       'observaciones',
       'creadoPor',
       'creado_por',
-      // ❌ ya no usamos asesorId/asesor_agente_id para la asignación inicial
     ])
 
     const placa = normPlaca(body.placa)
@@ -243,14 +242,8 @@ export default class ProspectosController {
       })
     }
 
-    // ⛔ Validar placa única (a nivel de negocio)
-    const existente = await Prospecto.query().where('placa', placa).first()
-    if (existente) {
-      return response.status(409).send({
-        message: 'Ya existe un prospecto con esta placa',
-        id: existente.id,
-      })
-    }
+    // ✅ YA NO HAY VALIDACIÓN DE PLACA ÚNICA AQUÍ
+    // Se permiten duplicados para competencia entre asesores
 
     const soatVenc = body.soatVencimiento ? DateTime.fromISO(body.soatVencimiento) : null
     const tecnoVenc = body.tecnoVencimiento ? DateTime.fromISO(body.tecnoVencimiento) : null
@@ -259,26 +252,27 @@ export default class ProspectosController {
       : null
     const periUlt = body.peritajeUltimaFecha ? DateTime.fromISO(body.peritajeUltimaFecha) : null
 
-    // 🔐 Determinar creador
     const creadorIdNum = Number(auth?.user?.id ?? body.creadoPor ?? body.creado_por)
     const creadoPor = Number.isFinite(creadorIdNum) ? creadorIdNum : null
 
-    // ✅ Regla: el asesor asignado inicial DEBE ser el agente del usuario creador
     if (!creadoPor) {
       return response.badRequest({
         message: 'No se pudo determinar el usuario creador (creadoPor).',
       })
     }
+
     const agenteCreador = await AgenteCaptacion.query()
       .where('usuario_id', creadoPor)
       .where('activo', true)
       .first()
+
     if (!agenteCreador) {
       return response.badRequest({
         message: 'El usuario creador no tiene un Agente de Captación activo configurado',
         details: { creadoPor },
       })
     }
+
     const asesorAgenteId = agenteCreador.id
 
     const trx = await db.transaction()
@@ -299,12 +293,10 @@ export default class ProspectosController {
           preventivaVencimiento: prevVenc && prevVenc.isValid ? prevVenc : null,
           peritajeUltimaFecha: periUlt && periUlt.isValid ? periUlt : null,
           observaciones: body.observaciones ?? null,
-          // archivado: false se coloca por default en DB
         } as any,
         { client: trx }
       )
 
-      // Asignación inicial al agente del creador (activo)
       await AsesorProspectoAsignacion.create(
         {
           asesorId: Number(asesorAgenteId),
@@ -339,7 +331,7 @@ export default class ProspectosController {
     }
   }
 
-  /** PATCH /api/prospectos/:id  (no permite vaciar la placa, ni duplicarla) */
+  /** PATCH /api/prospectos/:id  (YA NO valida duplicados) */
   public async update({ request, params, response }: HttpContext) {
     const id = Number(params.id)
     const prospecto = await Prospecto.find(id)
@@ -367,21 +359,8 @@ export default class ProspectosController {
         return response.badRequest({ message: 'placa es obligatoria y no puede ser vacía' })
       }
 
-      // ⛔ Validar que la nueva placa no exista en otro prospecto
-      if (nueva !== prospecto.placa) {
-        const duplicado = await Prospecto.query()
-          .where('placa', nueva)
-          .whereNot('id', prospecto.id)
-          .first()
-
-        if (duplicado) {
-          return response.status(409).send({
-            message: 'Ya existe otro prospecto con esta placa',
-            id: duplicado.id,
-          })
-        }
-      }
-
+      // ✅ YA NO SE VALIDA SI LA PLACA ESTÁ DUPLICADA
+      // Se permite cambiar a una placa que ya existe en otros prospectos
       prospecto.placa = nueva
     }
 
@@ -726,10 +705,8 @@ export default class ProspectosController {
     return { message: 'Asignación cerrada' }
   }
 
-  /** POST /api/prospectos/:id/datear
-   *  Convierte el prospecto en un Dateo y lo marca como archivado.
-   */
-  public async datear({ params, auth, response }: HttpContext) {
+  /** POST /api/prospectos/:id/datear */
+  public async datear({ params, response }: HttpContext) {
     const prospectoId = Number(params.id)
     if (!Number.isFinite(prospectoId)) {
       return response.badRequest({ message: 'ID inválido' })
@@ -747,7 +724,6 @@ export default class ProspectosController {
       return response.notFound({ message: 'Prospecto no encontrado o ya archivado' })
     }
 
-    // Validar RTM vencida (opcionalmente puedes relajar esto)
     const hoy = DateTime.now().startOf('day')
     const tecno = prospecto.tecnoVencimiento
     if (!tecno || !tecno.isValid || tecno.diff(hoy, 'days').days >= 0) {
@@ -774,7 +750,6 @@ export default class ProspectosController {
 
     const trx = await db.transaction()
     try {
-      // Crear el Dateo a partir del prospecto
       const dateo = await CaptacionDateo.create(
         {
           prospectoId: prospecto.id,
@@ -783,16 +758,25 @@ export default class ProspectosController {
           clienteNombre: prospecto.nombre,
           convenioId: prospecto.convenioId ?? null,
           agenteId: asesor.id,
-          canal: asesor.tipo || 'ASESOR_COMERCIAL', // ajusta a tus enums reales
-          resultado: 'PENDIENTE', // ajusta al enum real de tu columna
-          creadoPor: auth?.user?.id ?? null,
+          canal: asesor.tipo || 'ASESOR_COMERCIAL',
+          resultado: 'PENDIENTE',
+          origen: 'UI',
         } as any,
         { client: trx }
       )
 
-      // Archivar el prospecto para que no aparezca más en la tabla
+      // 1️⃣ Archivar el prospecto original
       prospecto.archivado = true
       await prospecto.useTransaction(trx).save()
+
+      // 2️⃣ Archivar TODOS los prospectos duplicados con la misma placa
+      const placaNormalizada = prospecto.placa?.replace(/[\s-]/g, '').toUpperCase()
+      if (placaNormalizada) {
+        await Prospecto.query({ client: trx })
+          .where('archivado', false)
+          .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNormalizada])
+          .update({ archivado: true })
+      }
 
       await trx.commit()
       return response.created({
