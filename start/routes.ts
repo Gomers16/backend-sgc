@@ -631,54 +631,78 @@ router
         return new ProspectosController().listByAsesor(ctx)
       })
       .where('id', /^[0-9]+$/)
+/* =============================== CONVENIOS ========================= */
+// ⚠️ IMPORTANTE: Rutas específicas PRIMERO (antes de /:id)
 
-    /* =============================== CONVENIOS ========================= */
-    router.get('/convenios', async (ctx) => {
-      const { default: ConveniosController } = await import('#controllers/convenios_controller')
-      return new ConveniosController().index(ctx)
-    })
+// 🆕 Búsqueda por nombre exacto
+router.get('/convenios/buscar-por-nombre', async (ctx) => {
+  const { default: ConveniosController } = await import('#controllers/convenios_controller')
+  return new ConveniosController().buscarPorNombre(ctx)
+})
 
-    // 👇 ESTA RUTA FALTABA (detalle por ID)
-    router
-      .get('/convenios/:id', async (ctx) => {
-        const { default: ConveniosController } = await import('#controllers/convenios_controller')
-        return new ConveniosController().show(ctx)
-      })
-      .where('id', /^[0-9]+$/)
+// Convenios asignados a un asesor
+router.get('/convenios/asignados', async (ctx) => {
+  const { default: ConveniosController } = await import('#controllers/convenios_controller')
+  return new ConveniosController().asignadosPorAsesor(ctx)
+})
 
-    router.post('/convenios', async (ctx) => {
-      const { default: ConveniosController } = await import('#controllers/convenios_controller')
-      return new ConveniosController().store(ctx)
-    })
-    /** 🔹 Convenios asignados a un asesor comercial */
-    router.get('/convenios/asignados', async (ctx) => {
-      const { default: ConveniosController } = await import('#controllers/convenios_controller')
-      return new ConveniosController().asignadosPorAsesor(ctx)
-    })
-    router
-      .patch('/convenios/:id', async (ctx) => {
-        const { default: ConveniosController } = await import('#controllers/convenios_controller')
-        return new ConveniosController().update(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .get('/convenios/:id/asesor-activo', async (ctx) => {
-        const { default: ConveniosController } = await import('#controllers/convenios_controller')
-        return new ConveniosController().asesorActivo(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .post('/convenios/:id/asignar', async (ctx) => {
-        const { default: ConveniosController } = await import('#controllers/convenios_controller')
-        return new ConveniosController().asignarAsesor(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .post('/convenios/:id/retirar', async (ctx) => {
-        const { default: ConveniosController } = await import('#controllers/convenios_controller')
-        return new ConveniosController().retirarAsesor(ctx)
-      })
-      .where('id', /^[0-9]+$/)
+// Convenios con información ligera (light)
+router.get('/convenios/light', async (ctx) => {
+  const { default: ConveniosController } = await import('#controllers/convenios_controller')
+  return new ConveniosController().light(ctx)
+})
+
+// Listado general de convenios
+router.get('/convenios', async (ctx) => {
+  const { default: ConveniosController } = await import('#controllers/convenios_controller')
+  return new ConveniosController().index(ctx)
+})
+
+// Crear convenio
+router.post('/convenios', async (ctx) => {
+  const { default: ConveniosController } = await import('#controllers/convenios_controller')
+  return new ConveniosController().store(ctx)
+})
+
+// ✅ DETALLE DE CONVENIO POR ID (UNA SOLA VEZ)
+router
+  .get('/convenios/:id', async (ctx) => {
+    const { default: ConveniosController } = await import('#controllers/convenios_controller')
+    return new ConveniosController().show(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+
+// Actualizar convenio
+router
+  .patch('/convenios/:id', async (ctx) => {
+    const { default: ConveniosController } = await import('#controllers/convenios_controller')
+    return new ConveniosController().update(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+
+// Obtener asesor activo de un convenio
+router
+  .get('/convenios/:id/asesor-activo', async (ctx) => {
+    const { default: ConveniosController } = await import('#controllers/convenios_controller')
+    return new ConveniosController().asesorActivo(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+
+// Asignar asesor a convenio
+router
+  .post('/convenios/:id/asignar', async (ctx) => {
+    const { default: ConveniosController } = await import('#controllers/convenios_controller')
+    return new ConveniosController().asignarAsesor(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+
+// Retirar asesor de convenio
+router
+  .post('/convenios/:id/retirar', async (ctx) => {
+    const { default: ConveniosController } = await import('#controllers/convenios_controller')
+    return new ConveniosController().retirarAsesor(ctx)
+  })
+  .where('id', /^[0-9]+$/)
 
     /* =============================== COMISIONES ======================== */
     // ⚠️ IMPORTANTE: Rutas de configuración primero (antes de /comisiones/:id)
