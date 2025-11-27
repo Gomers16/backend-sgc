@@ -8,11 +8,11 @@ import Prospecto from '#models/prospecto'
 import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
 import Usuario from '#models/usuario'
-import TurnoRtm from '#models/turno_rtm' // 👈 NUEVO
+import TurnoRtm from '#models/turno_rtm'
 
 export type Canal = 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES'
 export type Origen = 'UI' | 'WHATSAPP' | 'IMPORT'
-export type ResultadoDateo = 'PENDIENTE' | 'EN_PROCESO' | 'EXITOSO' | 'NO_EXITOSO'
+export type ResultadoDateo = 'PENDIENTE' | 'EN_PROCESO' | 'EXITOSO' | 'NO_EXITOSO' | 'RE_DATEAR'
 
 // === Helpers TTL usados por controladores y computados ===
 function ttlSinConsumir(): number {
@@ -106,6 +106,10 @@ export default class CaptacionDateo extends BaseModel {
   @column()
   declare resultado: ResultadoDateo
 
+  // 👇 NUEVO: Campo liberado
+  @column()
+  declare liberado: boolean
+
   @column({ columnName: 'motivo_no_exitoso' })
   declare motivoNoExitoso: string | null
 
@@ -119,7 +123,6 @@ export default class CaptacionDateo extends BaseModel {
   @belongsTo(() => Convenio, { foreignKey: 'convenioId' })
   declare convenio: BelongsTo<typeof Convenio>
 
-  // 👇 AHORA asesor_convenio_id apunta a agentes_captacions
   @belongsTo(() => AgenteCaptacion, { foreignKey: 'asesorConvenioId' })
   declare asesorConvenio: BelongsTo<typeof AgenteCaptacion>
 
@@ -135,7 +138,6 @@ export default class CaptacionDateo extends BaseModel {
   @belongsTo(() => Cliente, { foreignKey: 'clienteId' })
   declare cliente: BelongsTo<typeof Cliente>
 
-  // 👇 RELACIÓN para que el preload('turno') funcione
   @belongsTo(() => TurnoRtm, { foreignKey: 'consumidoTurnoId' })
   declare turno: BelongsTo<typeof TurnoRtm>
 

@@ -66,7 +66,6 @@ export default class CaptacionDateos extends BaseSchema {
         .inTable('convenios')
         .onDelete('SET NULL')
 
-      // 👇 AHORA referencia agentes_captacions (asesor convenio)
       table
         .integer('asesor_convenio_id')
         .unsigned()
@@ -107,14 +106,17 @@ export default class CaptacionDateos extends BaseSchema {
         .inTable('clientes')
         .onDelete('SET NULL')
 
-      // Resultado del dateo
+      // Resultado del dateo - 🆕 INCLUYE RE_DATEAR
       table
-        .enu('resultado', ['PENDIENTE', 'EN_PROCESO', 'EXITOSO', 'NO_EXITOSO'], {
+        .enu('resultado', ['PENDIENTE', 'EN_PROCESO', 'EXITOSO', 'NO_EXITOSO', 'RE_DATEAR'], {
           useNative: true,
           enumName: 'dateo_resultado_enum',
         })
         .notNullable()
         .defaultTo('PENDIENTE')
+
+      // Campo liberado
+      table.boolean('liberado').notNullable().defaultTo(false)
 
       table.string('motivo_no_exitoso', 180).nullable()
 
@@ -134,6 +136,7 @@ export default class CaptacionDateos extends BaseSchema {
       table.index(['convenio_id'])
       table.index(['asesor_convenio_id'])
       table.index(['prospecto_id'])
+      table.index(['liberado', 'resultado'])
     })
 
     // 🔧 CORRECCIÓN DE DATOS: Asignar convenio_id a dateos existentes

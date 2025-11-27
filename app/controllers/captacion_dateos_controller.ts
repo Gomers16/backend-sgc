@@ -17,7 +17,7 @@ const CANAL_ALIAS_ASESOR = ['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const
 const ORIGENES = ['UI', 'WHATSAPP', 'IMPORT'] as const
 type OrigenVal = (typeof ORIGENES)[number]
 
-const RESULTADOS = ['PENDIENTE', 'EN_PROCESO', 'EXITOSO', 'NO_EXITOSO'] as const
+const RESULTADOS = ['PENDIENTE', 'EN_PROCESO', 'EXITOSO', 'NO_EXITOSO', 'RE_DATEAR'] as const
 type Resultado = (typeof RESULTADOS)[number]
 
 function normalizePlaca(v?: string | null) {
@@ -54,6 +54,7 @@ function toSnake(row: any) {
     ...row,
     created_at: row.createdAt,
     created_at_fmt: fmtBogotaAmPm(row.createdAt),
+    liberado: row.liberado ?? false, // 👈 AGREGA ESTA LÍNEA
     imagen_url: row.imagenUrl ?? null,
     imagen_mime: row.imagenMime ?? null,
     imagen_tamano_bytes: row.imagenTamanoBytes ?? null,
@@ -95,74 +96,81 @@ export default class CaptacionDateosController {
    *
    * 🎯 PROPÓSITO:
    * Revisa dateos que cumplen TODAS estas condiciones:
-   * 1. Vienen de un prospecto (prospecto_id NOT NULL)
-   * 2. Llevan más de 72 horas en estado PENDIENTE
-   * 3. Los revierte a prospectos (los "desarchiva")
-   * 4. También desarchiva TODOS los prospectos duplicados con esa placa
+   * 1. Estado PENDIENTE
+   * 2. NO liberados (liberado = false)
+   * 3. Llevan más de 72 horas desde su creación
+   *
+   * COMPORTAMIENTO:
+   * - Si tiene prospecto_id → desarchiva prospecto + ELIMINA dateo
+   * - Si NO tiene prospecto_id → marca como RE_DATEAR + libera
    */
   public async verificarVencidos({ response }: HttpContext) {
-    const hace72h = DateTime.now().minus({ hours: 2 })
+    const minutosVencimiento = 2 // 👈 72 horas (para producción)
+    // const minutosVencimiento = 5 // 👈 Para pruebas
 
-    console.log(`🔍 Buscando dateos vencidos desde ${hace72h.toISO()}`)
+    console.log(`🔍 Buscando dateos vencidos (>= ${minutosVencimiento} minutos)`)
 
     const dateosVencidos = await CaptacionDateo.query()
-      .whereNotNull('prospecto_id')
       .where('resultado', 'PENDIENTE')
-      .where('created_at', '<=', hace72h.toSQL()!)
+      .where('liberado', false)
+      .whereRaw('TIMESTAMPDIFF(MINUTE, created_at, NOW()) >= ?', [minutosVencimiento])
       .preload('prospecto')
 
     console.log(`📊 Se encontraron ${dateosVencidos.length} dateo(s) vencido(s)`)
 
-    let revertidos = 0
+    let procesados = 0
 
     for (const dateo of dateosVencidos) {
-      if (!dateo.prospecto) {
-        console.warn(`⚠️ Dateo ${dateo.id} no tiene prospecto asociado, saltando...`)
-        continue
-      }
-
       const trx = await db.transaction()
       try {
-        // 1️⃣ Desarchivar el prospecto ORIGINAL del dateo
-        dateo.prospecto.archivado = false
-        await dateo.prospecto.useTransaction(trx).save()
-        console.log(`✅ Prospecto ${dateo.prospecto.id} desarchivado`)
+        if (dateo.prospecto) {
+          // ✅ CASO 1: CON prospecto → revertir a prospecto y ELIMINAR dateo
+          dateo.prospecto.archivado = false
+          await dateo.prospecto.useTransaction(trx).save()
+          console.log(`✅ Prospecto ${dateo.prospecto.id} desarchivado`)
 
-        // 2️⃣ Desarchivar TODOS los prospectos duplicados con la misma placa
-        const placaNormalizada = normalizePlaca(dateo.placa)
-        if (placaNormalizada) {
-          const resultadoPlaca = await Prospecto.query({ client: trx })
-            .where('archivado', true)
-            .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNormalizada])
-            .update({ archivado: false })
+          // Desarchivar TODOS los prospectos duplicados con la misma placa
+          const placaNormalizada = dateo.placa?.replace(/[\s-]/g, '').toUpperCase()
+          if (placaNormalizada) {
+            const resultadoPlaca = await Prospecto.query({ client: trx })
+              .where('archivado', true)
+              .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNormalizada])
+              .update({ archivado: false })
 
-          console.log(`✅ Se desarchivaron ${resultadoPlaca} prospecto(s) adicionales con placa ${placaNormalizada}`)
+            console.log(
+              `✅ Se desarchivaron ${resultadoPlaca} prospecto(s) adicionales con placa ${placaNormalizada}`
+            )
+          }
+
+          // 🗑️ ELIMINAR el dateo (volvió a prospecto)
+          await dateo.useTransaction(trx).delete()
+          console.log(`🗑️ Dateo ${dateo.id} eliminado (prospecto revertido)`)
+        } else {
+          // 🔄 CASO 2: SIN prospecto → marcar como RE_DATEAR y liberar
+          dateo.liberado = true
+          dateo.resultado = 'RE_DATEAR'
+          const notaVencimiento = '[AUTO] Vencido por inactividad - Disponible para re-dateo'
+          dateo.observacion = dateo.observacion
+            ? `${dateo.observacion}\n${notaVencimiento}`
+            : notaVencimiento
+          await dateo.useTransaction(trx).save()
+          console.log(`🔄 Dateo ${dateo.id} marcado como RE_DATEAR y liberado`)
         }
 
-        // 3️⃣ Marcar el dateo como NO_EXITOSO con nota
-        dateo.resultado = 'NO_EXITOSO'
-        const notaVencimiento = '[AUTO] Vencido por inactividad (72h en PENDIENTE)'
-        dateo.observacion = dateo.observacion
-          ? `${dateo.observacion}\n${notaVencimiento}`
-          : notaVencimiento
-        await dateo.useTransaction(trx).save()
-
         await trx.commit()
-        revertidos++
-        console.log(`✅ Dateo ${dateo.id} revertido exitosamente`)
-
+        procesados++
       } catch (e) {
-        await trx.rollback()
-        console.error(`❌ Error revirtiendo dateo ${dateo.id}:`, e)
+      await trx.rollback()
+      console.error(`❌ Error procesando dateo ${dateo.id}:`, e)
       }
     }
 
     return response.ok({
-      message: `Se revirtieron ${revertidos} dateo(s) a prospectos`,
+      message: `Se procesaron ${procesados} dateo(s) vencido(s)`,
       procesados: dateosVencidos.length,
-      exitosos: revertidos,
-      fallidos: dateosVencidos.length - revertidos,
-      total: dateosVencidos.length, // Alias para compatibilidad con frontend
+      exitosos: procesados,
+      fallidos: dateosVencidos.length - procesados,
+      total: dateosVencidos.length,
     })
   }
 
@@ -443,6 +451,7 @@ export default class CaptacionDateosController {
         q.orWhere('placa', placa!)
         if (telefono) q.orWhere('telefono', telefono)
       })
+      .where('liberado', false) // 👈 Solo bloquear si NO está liberado
       .preload('agente', (q) => q.select(['id', 'nombre', 'tipo']))
       .orderBy('created_at', 'desc')
       .first()
@@ -480,8 +489,23 @@ export default class CaptacionDateosController {
     })
 
     // REEMPLAZA DESDE AQUÍ
+    // 🔗 VINCULAR prospecto al dateo + archivar todos los duplicados por placa
     if (placa) {
       try {
+        // 1️⃣ Buscar el primer prospecto NO archivado con esta placa
+        const prospectoEncontrado = await Prospecto.query()
+          .where('archivado', false)
+          .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
+          .first()
+
+        if (prospectoEncontrado) {
+          // 2️⃣ Vincular el prospecto al dateo
+          created.prospectoId = prospectoEncontrado.id
+          await created.save()
+          console.log(`🔗 Dateo ${created.id} vinculado con prospecto ${prospectoEncontrado.id}`)
+        }
+
+        // 3️⃣ Archivar TODOS los prospectos con esta placa (incluido el vinculado)
         const resultadoArch = await Prospecto.query()
           .where('archivado', false)
           .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
@@ -489,7 +513,7 @@ export default class CaptacionDateosController {
 
         console.log(`✅ Se archivaron ${resultadoArch} prospecto(s) con placa ${placa}`)
       } catch (err) {
-        console.error('❌ Error archivando prospectos con placa', placa, err)
+        console.error('❌ Error procesando prospectos con placa', placa, err)
       }
     }
     // HASTA AQUÍ
