@@ -616,16 +616,17 @@ export default class ContratosController {
         `Convenio usuario #${usuario.id}`
 
       convenio = await Convenio.create({
-        tipo: 'PERSONA',
-        nombre: nombreConvenio,
-        docTipo: docTipoUsuario,      // 👈 aquí va 'CC' + lo que tengas
-        docNumero: docNumero,         // 👈 aquí va la CÉDULA
-        telefono: telefonoConvenio,
-        whatsapp: whatsappConvenio,
-        email: emailConvenio,
-        direccion: direccionUsuario,
-        activo: true,
-      } as any)
+       tipo: 'PERSONA',
+  nombre: nombreConvenio,
+  docTipo: docTipoUsuario,
+  docNumero: docNumero,
+  telefono: telefonoConvenio,
+  whatsapp: whatsappConvenio,
+  email: emailConvenio,
+  direccion: direccionUsuario,
+  activo: true,
+        asesorConvenioId: agente.id, // 👈 AGREGAR ESTA LÍNEA
+} as any)
     } else {
       // Si ya existía, rellenamos los campos vacíos con la info del usuario
       let dirty = false
