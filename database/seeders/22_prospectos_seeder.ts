@@ -34,6 +34,9 @@ function nombre(): string {
 function phone(): string {
   return '3' + String(randInt(100000000, 999999999))
 }
+function cedula(): string {
+  return String(randInt(10000000, 99999999))
+}
 
 /** Genera una placa colombiana AAA123 (sin O/Q), única frente a BD + set local */
 function makePlateFactory(existing: Set<string>) {
@@ -98,7 +101,8 @@ export default class ProspectosSeeder extends BaseSeeder {
           {
             telefono: tel,
             nombre: nombre(),
-            placa, // <-- nunca null
+            cedula: cedula(), // 👈 NUEVO
+            placa,
             observaciones: Math.random() < 0.3 ? 'Prospecto demo' : null,
             origen: pick(ORIGENES),
 

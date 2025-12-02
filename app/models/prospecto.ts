@@ -3,7 +3,7 @@ import { BaseModel, column, belongsTo, hasMany, computed } from '@adonisjs/lucid
 import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 
 import Convenio from '#models/convenio'
-import Usuario from '#models/usuario' // ⬅️ si tu “asesor creador” es otro modelo, cámbialo aquí
+import Usuario from '#models/usuario'
 import AsesorProspectoAsignacion from '#models/asesor_prospecto_asignacion'
 import CaptacionDateo from '#models/captacion_dateo'
 
@@ -26,6 +26,7 @@ export default class Prospecto extends BaseModel {
   @column() declare placa: string | null
   @column() declare telefono: string | null
   @column() declare nombre: string | null
+  @column() declare cedula: string | null // 👈 NUEVO
 
   // 📝 Observaciones
   @column() declare observaciones: string | null

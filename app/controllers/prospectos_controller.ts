@@ -216,6 +216,7 @@ export default class ProspectosController {
       'placa',
       'telefono',
       'nombre',
+      'cedula',
       'convenioId',
       'origen',
       'soatVigente',
@@ -233,12 +234,14 @@ export default class ProspectosController {
     const placa = normPlaca(body.placa)
     const telefono = normTel(body.telefono)
     const nombre = (body.nombre ?? '').trim()
+    const cedula = body.cedula ? String(body.cedula).trim() : null
 
     // 🔒 Campos obligatorios
-    if (!placa || !telefono || !nombre) {
+    // 🔒 Campos obligatorios
+    if (!placa || !telefono || !nombre || !cedula) {
       return response.badRequest({
-        message: 'placa, telefono y nombre son obligatorios',
-        details: { placa: !!placa, telefono: !!telefono, nombre: !!nombre },
+        message: 'placa, telefono, nombre y cedula son obligatorios',
+        details: { placa: !!placa, telefono: !!telefono, nombre: !!nombre, cedula: !!cedula },
       })
     }
 
@@ -283,6 +286,7 @@ export default class ProspectosController {
           placa,
           telefono,
           nombre,
+          cedula,
           origen: (body.origen as Prospecto['origen']) ?? 'OTRO',
           creadoPor,
           soatVigente: !!body.soatVigente,
@@ -341,6 +345,7 @@ export default class ProspectosController {
       'placa',
       'telefono',
       'nombre',
+      'cedula',
       'convenioId',
       'origen',
       'soatVigente',
@@ -366,6 +371,8 @@ export default class ProspectosController {
 
     if (body.telefono !== undefined) prospecto.telefono = normTel(body.telefono)
     if (body.nombre !== undefined) prospecto.nombre = (body.nombre ?? null)?.trim() || null
+    if (body.cedula !== undefined)
+      prospecto.cedula = body.cedula ? String(body.cedula).trim() : null
     if (body.convenioId !== undefined) prospecto.convenioId = body.convenioId ?? null
     if (body.origen !== undefined) prospecto.origen = body.origen as any
 
@@ -403,6 +410,7 @@ export default class ProspectosController {
     const placaRaw = q.placa ? String(q.placa).trim() : ''
     const telefonoRaw = q.telefono ? String(q.telefono).trim() : ''
     const nombreRaw = q.nombre ? String(q.nombre).trim() : ''
+    const cedulaRaw = q.cedula ? String(q.cedula).trim() : ''
     const convenioId = q.convenioId ?? q.convenio_id
     const asesorId = q.asesorId ?? q.asesor_id
     const desdeStr = q.desde ? String(q.desde) : ''
@@ -518,6 +526,10 @@ export default class ProspectosController {
     /* =========================
     BUSCADOR LIBRE (q)
   ========================== */
+    // cedula exacta o parcial
+    if (cedulaRaw) {
+      query.where('cedula', 'like', `%${cedulaRaw}%`)
+    }
     if (term) {
       const like = `%${term.toUpperCase()}%`
       const telTerm = term.replace(/\D+/g, '')
@@ -525,6 +537,9 @@ export default class ProspectosController {
         sub.whereRaw('UPPER(placa) LIKE ?', [like]).orWhereRaw('UPPER(nombre) LIKE ?', [like])
         if (telTerm) {
           sub.orWhere('telefono', 'like', `%${telTerm}%`)
+        }
+        if (telTerm) {
+          sub.orWhere('cedula', 'like', `%${telTerm}%`)
         }
       })
     }

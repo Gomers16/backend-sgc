@@ -22,6 +22,7 @@ export default class CreateProspectosTable extends BaseSchema {
 
       table.string('telefono', 20).nullable()
       table.string('nombre', 120).nullable()
+      table.string('cedula', 20).nullable() // 👈 NUEVO
       table.string('observaciones', 255).nullable()
 
       // 🛞 SOAT
@@ -64,6 +65,7 @@ export default class CreateProspectosTable extends BaseSchema {
       table.index(['convenio_id'])
       table.index(['placa']) // ✅ Índice para búsquedas rápidas (NO impide duplicados)
       table.index(['telefono'])
+      table.index(['cedula']) // 👈 NUEVO índice
       table.index(['soat_vigente', 'soat_vencimiento'])
       table.index(['tecno_vigente', 'tecno_vencimiento'])
       table.index(['preventiva_vigente', 'preventiva_vencimiento'])
