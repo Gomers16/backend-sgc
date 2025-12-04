@@ -1,4 +1,5 @@
 // database/seeders/17_agentes_captacion_seeder.ts
+
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import AgenteCaptacion from '#models/agente_captacion'
 import Cargo from '#models/cargo'
@@ -22,7 +23,7 @@ export default class AgentesCaptacionSeeder extends BaseSeeder {
 
     // ASESOR COMERCIAL -> tipo ASESOR_COMERCIAL
     for (const u of comerciales) {
-      await AgenteCaptacion.updateOrCreate(
+      const agente = await AgenteCaptacion.updateOrCreate(
         { usuarioId: u.id },
         {
           usuarioId: u.id,
@@ -32,11 +33,15 @@ export default class AgentesCaptacionSeeder extends BaseSeeder {
           activo: true,
         }
       )
+
+      // 🔥 Vincular agente con usuario
+      u.agenteId = agente.id
+      await u.save()
     }
 
     // ASESOR CONVENIO -> tipo ASESOR_CONVENIO
     for (const u of convenios) {
-      await AgenteCaptacion.updateOrCreate(
+      const agente = await AgenteCaptacion.updateOrCreate(
         { usuarioId: u.id },
         {
           usuarioId: u.id,
@@ -46,10 +51,14 @@ export default class AgentesCaptacionSeeder extends BaseSeeder {
           activo: true,
         }
       )
+
+      // 🔥 Vincular agente con usuario
+      u.agenteId = agente.id
+      await u.save()
     }
 
     console.log(
-      `✅ Agentes de Captación creados/actualizados: comerciales=${comerciales.length}, convenios=${convenios.length}`
+      `✅ Agentes de Captación creados/actualizados y vinculados: comerciales=${comerciales.length}, convenios=${convenios.length}`
     )
   }
 }

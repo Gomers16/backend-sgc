@@ -1,15 +1,13 @@
+// app/middleware/auth_middleware.ts
+
 import type { HttpContext } from '@adonisjs/core/http'
 import type { NextFn } from '@adonisjs/core/types/http'
 import type { Authenticators } from '@adonisjs/auth/types'
 
 /**
- * Auth middleware is used authenticate HTTP requests and deny
- * access to unauthenticated users.
+ * Auth middleware con manejo robusto de errores JSON para MySQL
  */
 export default class AuthMiddleware {
-  /**
-   * The URL to redirect to, when authentication fails
-   */
   redirectTo = '/login'
 
   async handle(
@@ -19,7 +17,52 @@ export default class AuthMiddleware {
       guards?: (keyof Authenticators)[]
     } = {}
   ) {
-    await ctx.auth.authenticateUsing(options.guards, { loginRoute: this.redirectTo })
-    return next()
+    try {
+      await ctx.auth.authenticateUsing(options.guards, { loginRoute: this.redirectTo })
+      return next()
+    } catch (error) {
+      // 🔥 Detectar errores específicos de JSON corrupto
+      const isJsonError =
+        error.message?.includes('Unexpected end of JSON input') ||
+        error.message?.includes('JSON.parse') ||
+        error.message?.includes('SyntaxError')
+
+      if (isJsonError) {
+        console.error('❌ Token con JSON corrupto detectado')
+
+        // Intentar limpiar el token corrupto
+        try {
+          const authHeader = ctx.request.header('Authorization')
+          if (authHeader) {
+            const tokenValue = authHeader.replace('Bearer ', '').replace('oat_', '').trim()
+
+            // Eliminar tokens corruptos de este hash
+            await ctx.db
+              .from('auth_access_tokens')
+              .where('hash', 'like', `%${tokenValue.substring(0, 15)}%`)
+              .delete()
+
+            console.log('✅ Token corrupto eliminado de BD')
+          }
+        } catch (cleanupError) {
+          console.error('⚠️ Error al limpiar token:', cleanupError.message)
+        }
+
+        // Responder con error específico
+        return ctx.response.unauthorized({
+          message: 'Token inválido. Por favor, inicia sesión nuevamente.',
+          code: 'INVALID_TOKEN',
+          details: 'Token corrupto detectado y eliminado'
+        })
+      }
+
+      // Otros errores de autenticación
+      console.error('❌ Error de autenticación:', error.message)
+
+      return ctx.response.unauthorized({
+        message: 'No autenticado',
+        code: 'UNAUTHENTICATED'
+      })
+    }
   }
 }

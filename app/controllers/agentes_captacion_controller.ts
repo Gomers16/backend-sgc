@@ -120,18 +120,45 @@ export default class AgentesCaptacionController {
     return { data, ...meta }
   }
 
-  /** GET /agentes-captacion/:id */
-  public async show({ params, response }: HttpContext) {
-    const row = await AgenteCaptacion.query()
-      .where('agentes_captacions.id', params.id)
-      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
+/** GET /agentes-captacion/:id */
+public async show({ params, response, auth }: HttpContext) {
+  const row = await AgenteCaptacion.query()
+    .where('agentes_captacions.id', params.id)
+    .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
+    .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
+    .first()
+
+  if (!row) return response.notFound({ message: 'Agente no encontrado' })
+
+  // 🔐 VALIDACIÓN: Si es COMERCIAL, solo puede ver su propia ficha
+  const userRole = auth.user?.rol?.nombre
+  if (userRole === 'COMERCIAL') {
+    // 🔥 Buscar el agenteId del usuario autenticado directamente desde la BD
+    const userAgenteRow = await db
+      .from('agentes_captacions')
+      .where('usuario_id', auth.user.id)
+      .select('id')
       .first()
 
-    if (!row) return response.notFound({ message: 'Agente no encontrado' })
-    return rowToPlainWithActivo(row)
+    const userAgenteId = userAgenteRow?.id
+
+    console.log('🔍 Validación COMERCIAL:', {
+      userRole,
+      userId: auth.user.id,
+      userAgenteId,
+      requestedId: row.id,
+      allowed: userAgenteId && Number(row.id) === Number(userAgenteId)
+    })
+
+    if (!userAgenteId || Number(row.id) !== Number(userAgenteId)) {
+      return response.forbidden({
+        message: 'No tienes permiso para ver esta ficha comercial. Solo puedes ver tu propia ficha.'
+      })
+    }
   }
 
+    return rowToPlainWithActivo(row)
+  }
   /** GET /agentes-captacion/me */
   public async me({ auth, response }: HttpContext) {
     if (!auth?.user?.id) {

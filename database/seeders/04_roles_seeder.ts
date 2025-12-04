@@ -1,23 +1,21 @@
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
-import Rol from '#models/rol' // Importación correcta usando alias
+import Rol from '#models/rol'
 
 export default class RolSeeder extends BaseSeeder {
   async run() {
+    // 🔥 Limpiamos para desarrollo
+    await Rol.query().delete()
+
     const roles = [
-      // Roles esenciales basados en áreas funcionales clave
-      { nombre: 'ADMINISTRADOR CONTROL TOTAL' }, // Para acceso total al sistema
-      { nombre: 'CONTABILIDAD' }, // Usuarios del área de contabilidad
-      { nombre: 'TALENTO_HUMANO' }, // Usuarios del área de talento humano
-      { nombre: 'OPERACIONES' }, // Usuarios del área de operaciones
-      { nombre: 'COMERCIAL' }, // Usuarios del área comercial
-      // Puedes añadir otros roles si son necesarios, pero que sean consistentes con lo que buscas
+      { nombre: 'SUPER_ADMIN' }, // Tú
+      { nombre: 'GERENCIA' }, // Gerente, Jefe Sede, Directora Comercial
+      { nombre: 'COMERCIAL' }, // 👈 Asesores Comerciales + Convenios
+      { nombre: 'CONTABILIDAD' }, // Contador, Auxiliares
+      { nombre: 'TALENTO_HUMANO' }, // RRHH
+      { nombre: 'OPERATIVO_TURNOS' }, // Puerta, Caja, Ingeniero, Inspector
     ]
 
-    // Filtra para roles únicos por nombre antes de crearlos, para evitar duplicados
-    const uniqueRoles = Array.from(new Set(roles.map((r) => r.nombre))).map((nombre) => ({
-      nombre,
-    }))
-
-    await Rol.createMany(uniqueRoles)
+    await Rol.createMany(roles)
+    console.log('✅ 6 roles creados')
   }
 }

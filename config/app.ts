@@ -6,9 +6,6 @@ import { defineConfig } from '@adonisjs/core/http'
 /**
  * The app key is used for encrypting cookies, generating signed URLs,
  * and by the "encryption" module.
- *
- * The encryption module will fail to decrypt data if the key is lost or
- * changed. Therefore it is recommended to keep the app key secure.
  */
 export const appKey = new Secret(env.get('APP_KEY'))
 
@@ -18,6 +15,12 @@ export const appKey = new Secret(env.get('APP_KEY'))
 export const http = defineConfig({
   generateRequestId: true,
   allowMethodSpoofing: false,
+
+  /**
+   * 🔥 CONFIGURACIÓN DEL SERVIDOR
+   */
+  host: env.get('HOST', '0.0.0.0'),
+  port: env.get('PORT', 3333),
 
   /**
    * Enabling async local storage will let you access HTTP context

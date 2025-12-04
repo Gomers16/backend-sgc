@@ -1,10 +1,12 @@
+// app/models/usuario.ts
+
 import { DateTime } from 'luxon'
 import Hash from '@adonisjs/core/services/hash'
 import { compose } from '@adonisjs/core/helpers'
-import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
+import { BaseModel, column, belongsTo, hasMany, hasOne } from '@adonisjs/lucid/orm'
 import { withAuthFinder } from '@adonisjs/auth/mixins/lucid'
 import { DbAccessTokensProvider } from '@adonisjs/auth/access_tokens'
-import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
+import type { BelongsTo, HasMany, HasOne } from '@adonisjs/lucid/types/relations'
 
 import Rol from '#models/rol'
 import RazonSocial from '#models/razon_social'
@@ -12,6 +14,7 @@ import EntidadSalud from '#models/entidad_salud'
 import Contrato from '#models/contrato'
 import Sede from '#models/sede'
 import Cargo from '#models/cargo'
+import AgenteCaptacion from '#models/agente_captacion'
 
 const AuthFinder = withAuthFinder(() => Hash.use('scrypt'), {
   uids: ['correo'],
@@ -36,6 +39,10 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
 
   @column({ columnName: 'sede_id' })
   declare sedeId: number
+
+  // 🆕 Campo virtual para agenteId (se obtiene de la relación)
+  @column({ columnName: 'agente_id' })
+  declare agenteId?: number | null
 
   @column()
   declare nombres: string
@@ -95,7 +102,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column.dateTime({ columnName: 'deleted_at' })
   declare deletedAt: DateTime | null
 
-  // Relaciones
+  // Relaciones existentes
   @belongsTo(() => RazonSocial, { foreignKey: 'razonSocialId' })
   declare razonSocial: BelongsTo<typeof RazonSocial>
 
@@ -125,6 +132,12 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
 
   @hasMany(() => Contrato, { foreignKey: 'usuarioId' })
   declare contratos: HasMany<typeof Contrato>
+
+  // 🆕 Relación con AgenteCaptacion (1:1)
+  @hasOne(() => AgenteCaptacion, {
+    foreignKey: 'usuarioId',
+  })
+  declare agenteCaptacion: HasOne<typeof AgenteCaptacion>
 
   static accessTokens = DbAccessTokensProvider.forModel(Usuario, {
     expiresIn: '30 days',

@@ -16,12 +16,13 @@ export default class AuthAccessTokens extends BaseSchema {
         .onDelete('CASCADE')
 
       table.string('tokenable_type').notNullable().defaultTo('Usuario')
-      table.string('hash', 64).notNullable()
+
+      // 🔥 CAMBIO CRÍTICO: De string(64) a text()
+      table.text('hash').notNullable()
+
       table.string('type').notNullable()
       table.string('name').nullable()
-      // ✅ CAMBIO CRÍTICO AQUÍ: Eliminamos defaultTo('[]') para cumplir con la restricción de MySQL.
-      // Aseguramos que sea nullable() para que no falle si no se proporciona un valor.
-      table.json('abilities').nullable() // Ahora es nullable, sin default
+      table.json('abilities').nullable()
       table.timestamp('last_used_at').nullable()
       table.timestamp('expires_at').nullable()
       table.timestamps(true, true)

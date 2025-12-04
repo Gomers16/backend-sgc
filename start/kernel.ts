@@ -38,6 +38,7 @@ router.use([
  * Middleware nombrados: se asignan explícitamente en rutas/grupos.
  */
 export const middleware = router.named({
+  checkRole: () => import('#middleware/check_role_middleware'),
   guest: () => import('#middleware/guest_middleware'),
   auth: () => import('#middleware/auth_middleware'),
 })

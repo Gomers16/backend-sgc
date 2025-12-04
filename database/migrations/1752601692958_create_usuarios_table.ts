@@ -21,6 +21,13 @@ export default class extends BaseSchema {
       table.integer('sede_id').unsigned().references('id').inTable('sedes').onDelete('RESTRICT')
       table.integer('cargo_id').unsigned().references('id').inTable('cargos').onDelete('RESTRICT')
 
+      // 🔥 Relación con agente de captación (SIN FK para evitar dependencia circular)
+      table
+        .integer('agente_id')
+        .unsigned()
+        .nullable()
+        .comment('ID del agente de captación (si el usuario ES un agente)')
+
       // Afiliaciones (FKs a entidades_salud)
       table
         .integer('eps_id')
@@ -68,9 +75,6 @@ export default class extends BaseSchema {
 
       table.enum('estado', ['activo', 'inactivo']).defaultTo('activo').notNullable()
       table.boolean('recomendaciones').defaultTo(false).notNullable()
-
-      // 🚨 Quitamos: columnas de archivos de afiliación (eps_doc_*, arl_doc_*, etc.)
-      // 🚨 Quitamos: columnas de recomendación médica (recomendacion_medica, reco_med_doc_*)
 
       table.timestamp('created_at', { useTz: true }).notNullable()
       table.timestamp('updated_at', { useTz: true }).notNullable()
