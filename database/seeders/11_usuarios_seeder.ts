@@ -246,8 +246,9 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularCorporativo: '3181111111',
         centroCosto: 'OPE-02',
       }),
+      // 🟧 OPERATIVO_TURNOS - INGENIERO
       u({
-        sedeId: ibagueSede.id,
+        sedeId: ibagueSede.id, // 👈 ✅ YA TIENE SEDE ASIGNADA
         rolId: operativoRol.id,
         cargoId: ingenieroCargo?.id || asesorComercialCargo.id,
         nombres: 'Roberto',

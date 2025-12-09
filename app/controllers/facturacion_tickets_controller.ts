@@ -22,11 +22,30 @@ const DUP_WINDOW_MINUTES = 60
 
 /* ============================== Tipos DTO / Snapshots ============================== */
 
-interface IAgenteDTO { id: number; nombre: string; tipo?: string | null }
-interface IConvenioDTO { id: number; codigo?: string | null; nombre: string }
-interface IUsuarioDTO { id: number; nombres?: string | null; apellidos?: string | null }
-interface ISedeDTO { id: number; nombre: string }
-interface IServicioDTO { id: number; codigoServicio?: string | null; nombreServicio?: string | null }
+interface IAgenteDTO {
+  id: number
+  nombre: string
+  tipo?: string | null
+}
+interface IConvenioDTO {
+  id: number
+  codigo?: string | null
+  nombre: string
+}
+interface IUsuarioDTO {
+  id: number
+  nombres?: string | null
+  apellidos?: string | null
+}
+interface ISedeDTO {
+  id: number
+  nombre: string
+}
+interface IServicioDTO {
+  id: number
+  codigoServicio?: string | null
+  nombreServicio?: string | null
+}
 
 interface IDateoDTO {
   id: number
