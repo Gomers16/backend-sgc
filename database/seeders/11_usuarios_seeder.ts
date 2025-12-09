@@ -33,7 +33,7 @@ export default class UsuarioSeeder extends BaseSeeder {
     const ibagueSede = await Sede.findBy('nombre', 'Ibagué')
     const bogotaSede = await Sede.findBy('nombre', 'Bogotá')
 
-    // 🆕 NUEVOS 6 ROLES
+    // 🆕 6 ROLES
     const superAdminRol = await Rol.findBy('nombre', 'SUPER_ADMIN')
     const gerenciaRol = await Rol.findBy('nombre', 'GERENCIA')
     const comercialRol = await Rol.findBy('nombre', 'COMERCIAL')
@@ -41,15 +41,16 @@ export default class UsuarioSeeder extends BaseSeeder {
     const talentoHumanoRol = await Rol.findBy('nombre', 'TALENTO_HUMANO')
     const operativoRol = await Rol.findBy('nombre', 'OPERATIVO_TURNOS')
 
-    // Cargos
-    const direccionAdminCargo = await Cargo.findBy('nombre', 'DIRECCION ADMINSITRATIVA Y COMERCIAL')
-    const jefesSedeCargo = await Cargo.findBy('nombre', 'LIDER DE SERVICIO AL CLIENTE')
+    // 🆕 CARGOS ACTUALIZADOS
+    const direccionAdminCargo = await Cargo.findBy('nombre', 'DIRECCION ADMINISTRATIVA Y COMERCIAL')
+    const gerenciaCargo = await Cargo.findBy('nombre', 'GERENCIA')
+    const liderSedeCargo = await Cargo.findBy('nombre', 'LIDER DE SEDE')
+    const liderInformesCargo = await Cargo.findBy('nombre', 'LIDER DE INFORMES')
     const contadorCargo = await Cargo.findBy('nombre', 'CONTADOR')
-    const contableSeniorCargo = await Cargo.findBy('nombre', 'AUXILIAR CONTABLE SENIOR')
     const talentoHumanoCargo = await Cargo.findBy('nombre', 'TALENTO HUMANO')
-    const asesorPuertaCargo = await Cargo.findBy('nombre', 'ASESOR - PUERTA')
-    const asesorCajaCargo = await Cargo.findBy('nombre', 'ASESOR - CAJA')
-    const ingenieroCargo = await Cargo.findBy('nombre', 'DIRECTOR TECNICO')
+    const asesorServicioCargo = await Cargo.findBy('nombre', 'ASESOR SERVICIO AL CLIENTE')
+    const ingenieroCargo = await Cargo.findBy('nombre', 'INGENIERO')
+    const inspectorCargo = await Cargo.findBy('nombre', 'INSPECTOR')
     const asesorComercialCargo = await Cargo.findBy('nombre', 'ASESOR COMERCIAL')
     const asesorConvenioCargo = await Cargo.findBy('nombre', 'ASESOR CONVENIO')
 
@@ -111,7 +112,7 @@ export default class UsuarioSeeder extends BaseSeeder {
       }
     }
 
-    // ---------- Usuarios (2 por rol, 5 asesores convenio) ----------
+    // ---------- Usuarios ----------
     const usuarios: Partial<InstanceType<typeof Usuario>>[] = [
       // 🟦 SUPER_ADMIN (1 usuario - tú)
       u({
@@ -129,11 +130,11 @@ export default class UsuarioSeeder extends BaseSeeder {
         recomendaciones: true,
       }),
 
-      // 🟦 GERENCIA (2 usuarios)
+      // 🟦 GERENCIA (4 usuarios: 1 gerente, 1 líder sede, 1 líder informes, 1 director comercial)
       u({
         sedeId: ibagueSede.id,
         rolId: gerenciaRol.id,
-        cargoId: direccionAdminCargo?.id || asesorComercialCargo.id,
+        cargoId: gerenciaCargo?.id || direccionAdminCargo?.id || asesorComercialCargo.id,
         nombres: 'María',
         apellidos: 'Sánchez',
         correo: 'maria.sanchez@cda.com',
@@ -147,7 +148,7 @@ export default class UsuarioSeeder extends BaseSeeder {
       u({
         sedeId: bogotaSede?.id || ibagueSede.id,
         rolId: gerenciaRol.id,
-        cargoId: jefesSedeCargo?.id || direccionAdminCargo?.id || asesorComercialCargo.id,
+        cargoId: liderSedeCargo?.id || direccionAdminCargo?.id || asesorComercialCargo.id,
         nombres: 'Carlos',
         apellidos: 'Rodríguez',
         correo: 'carlos.rodriguez@cda.com',
@@ -157,32 +158,46 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularCorporativo: '3127777777',
         centroCosto: 'GER-02',
       }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: gerenciaRol.id,
+        cargoId: liderInformesCargo?.id || direccionAdminCargo?.id || asesorComercialCargo.id,
+        nombres: 'Sandra',
+        apellidos: 'Martínez',
+        correo: 'sandra.martinez@cda.com',
+        password: 'gerencia123',
+        direccion: 'Cra 10 #15-25',
+        celularPersonal: '3004444444',
+        celularCorporativo: '3136666666',
+        centroCosto: 'GER-03',
+        recomendaciones: true,
+      }),
 
       // 🟩 CONTABILIDAD (2 usuarios)
       u({
         sedeId: ibagueSede.id,
         rolId: contabilidadRol.id,
-        cargoId: contadorCargo?.id || contableSeniorCargo?.id || asesorComercialCargo.id,
+        cargoId: contadorCargo?.id || asesorComercialCargo.id,
         nombres: 'Laura',
         apellidos: 'González',
         correo: 'laura.gonzalez@cda.com',
         password: 'conta123',
         direccion: 'Cra 9 #10-20',
-        celularPersonal: '3004444444',
-        celularCorporativo: '3136666666',
+        celularPersonal: '3005555555',
+        celularCorporativo: '3145555555',
         centroCosto: 'CON-01',
       }),
       u({
         sedeId: ibagueSede.id,
         rolId: contabilidadRol.id,
-        cargoId: contableSeniorCargo?.id || asesorComercialCargo.id,
+        cargoId: contadorCargo?.id || asesorComercialCargo.id,
         nombres: 'Pedro',
         apellidos: 'Ramírez',
         correo: 'pedro.ramirez@cda.com',
         password: 'conta123',
         direccion: 'Calle 45 #23-10',
-        celularPersonal: '3005555555',
-        celularCorporativo: '3145555555',
+        celularPersonal: '3006666666',
+        celularCorporativo: '3154444444',
         centroCosto: 'CON-02',
         recomendaciones: true,
       }),
@@ -197,39 +212,39 @@ export default class UsuarioSeeder extends BaseSeeder {
         correo: 'andrea.lopez@cda.com',
         password: 'talento123',
         direccion: 'Calle 72 #10-30',
-        celularPersonal: '3006666666',
-        celularCorporativo: '3154444444',
+        celularPersonal: '3007777777',
+        celularCorporativo: '3163333333',
         centroCosto: 'TH-01',
         recomendaciones: true,
       }),
 
-      // 🟧 OPERATIVO_TURNOS (3 usuarios - puerta, caja, ingeniero)
+      // 🟧 OPERATIVO_TURNOS (4 usuarios: asesor servicio, asesor servicio 2, ingeniero, inspector)
       u({
         sedeId: ibagueSede.id,
         rolId: operativoRol.id,
-        cargoId: asesorPuertaCargo?.id || asesorComercialCargo.id,
+        cargoId: asesorServicioCargo?.id || asesorComercialCargo.id,
         nombres: 'Luis',
         apellidos: 'Romero',
         correo: 'luis.romero@cda.com',
-        password: 'puerta123',
+        password: 'operativo123',
         direccion: 'Calle 40 #18-30',
-        celularPersonal: '3007777777',
-        celularCorporativo: '3163333333',
-        centroCosto: 'PTA-01',
+        celularPersonal: '3008888888',
+        celularCorporativo: '3172222222',
+        centroCosto: 'OPE-01',
         recomendaciones: true,
       }),
       u({
         sedeId: ibagueSede.id,
         rolId: operativoRol.id,
-        cargoId: asesorCajaCargo?.id || asesorComercialCargo.id,
+        cargoId: asesorServicioCargo?.id || asesorComercialCargo.id,
         nombres: 'Gabriela',
         apellidos: 'Ortiz',
         correo: 'gabriela.ortiz@cda.com',
-        password: 'caja123',
+        password: 'operativo123',
         direccion: 'Cra 5 #25-18',
-        celularPersonal: '3008888888',
-        celularCorporativo: '3172222222',
-        centroCosto: 'CAJ-01',
+        celularPersonal: '3009999999',
+        celularCorporativo: '3181111111',
+        centroCosto: 'OPE-02',
       }),
       u({
         sedeId: ibagueSede.id,
@@ -238,12 +253,25 @@ export default class UsuarioSeeder extends BaseSeeder {
         nombres: 'Roberto',
         apellidos: 'Navarro',
         correo: 'roberto.navarro@cda.com',
-        password: 'ingeniero123',
+        password: 'operativo123',
         direccion: 'Av 30 #45-20',
-        celularPersonal: '3009999999',
-        celularCorporativo: '3181111111',
+        celularPersonal: '3010000000',
+        celularCorporativo: '3190000000',
         centroCosto: 'ING-01',
         recomendaciones: true,
+      }),
+      u({
+        sedeId: ibagueSede.id,
+        rolId: operativoRol.id,
+        cargoId: inspectorCargo?.id || asesorComercialCargo.id,
+        nombres: 'Miguel',
+        apellidos: 'Torres',
+        correo: 'miguel.torres@cda.com',
+        password: 'operativo123',
+        direccion: 'Calle 50 #22-10',
+        celularPersonal: '3010000001',
+        celularCorporativo: '3190000001',
+        centroCosto: 'INS-01',
       }),
 
       // 🟪 ASESOR COMERCIAL (2 usuarios - rol COMERCIAL)
@@ -256,8 +284,8 @@ export default class UsuarioSeeder extends BaseSeeder {
         correo: 'juan.morales@cda.com',
         password: 'comercial123',
         direccion: 'Calle 85 #30-40',
-        celularPersonal: '3010000001',
-        celularCorporativo: '3190000001',
+        celularPersonal: '3010000002',
+        celularCorporativo: '3190000002',
         centroCosto: 'COM-01',
         recomendaciones: true,
       }),
@@ -270,8 +298,8 @@ export default class UsuarioSeeder extends BaseSeeder {
         correo: 'diana.castro@cda.com',
         password: 'comercial123',
         direccion: 'Cra 4 #20-15',
-        celularPersonal: '3010000002',
-        celularCorporativo: '3190000002',
+        celularPersonal: '3010000003',
+        celularCorporativo: '3190000003',
         centroCosto: 'COM-02',
       }),
 
@@ -350,12 +378,12 @@ export default class UsuarioSeeder extends BaseSeeder {
 
     console.log('✅ Usuarios creados/actualizados:')
     console.log('   - 1 SUPER_ADMIN')
-    console.log('   - 2 GERENCIA')
+    console.log('   - 4 GERENCIA (1 gerente, 1 líder sede, 1 líder informes, 1 director comercial)')
     console.log('   - 2 CONTABILIDAD')
     console.log('   - 1 TALENTO_HUMANO')
-    console.log('   - 3 OPERATIVO_TURNOS')
+    console.log('   - 4 OPERATIVO_TURNOS (2 asesores servicio, 1 ingeniero, 1 inspector)')
     console.log('   - 2 ASESOR COMERCIAL (rol COMERCIAL)')
     console.log('   - 5 ASESOR CONVENIO (rol COMERCIAL)')
-    console.log('   📊 TOTAL: 16 usuarios')
+    console.log('   📊 TOTAL: 19 usuarios')
   }
 }

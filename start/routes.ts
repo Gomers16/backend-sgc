@@ -37,77 +37,137 @@ router
     })
 
     /* ============================== TURNOS ============================= */
-    router.get('/turnos-rtm', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().index(ctx)
-    })
+router
+  .get('/turnos-rtm', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().index(ctx)
+  })
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
 
-    router.get('/turnos-rtm/siguiente-turno', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().siguienteTurno(ctx)
-    })
-    router.get('/turnos-rtm/export-excel', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().exportExcel(ctx)
-    })
-    router.post('/turnos-rtm', async (ctx) => {
-      const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-      return new TurnosRtmController().store(ctx)
-    })
+router
+  .get('/turnos-rtm/siguiente-turno', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().siguienteTurno(ctx)
+  })
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
 
-    router
-      .post('/turnos-rtm/:id/cerrar', async (ctx) => {
-        const { default: TurnosCierreController } = await import(
-          '../app/controllers/turnos_cierre_controller.js'
-        )
-        return new TurnosCierreController().cerrar(ctx)
-      })
-      .where('id', /^[0-9]+$/)
+router
+  .get('/turnos-rtm/export-excel', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().exportExcel(ctx)
+  })
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
 
-    router
-      .get('/turnos-rtm/:id', async (ctx) => {
-        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-        return new TurnosRtmController().show(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .put('/turnos-rtm/:id', async (ctx) => {
-        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-        return new TurnosRtmController().update(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .put('/turnos-rtm/:id/salida', async (ctx) => {
-        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-        return new TurnosRtmController().registrarSalida(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .patch('/turnos-rtm/:id/activar', async (ctx) => {
-        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-        return new TurnosRtmController().activar(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .patch('/turnos-rtm/:id/cancelar', async (ctx) => {
-        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-        return new TurnosRtmController().cancelar(ctx)
-      })
-      .where('id', /^[0-9]+$/)
-    router
-      .patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
-        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-        return new TurnosRtmController().destroy(ctx)
-      })
-      .where('id', /^[0-9]+$/)
+router
+  .post('/turnos-rtm', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().store(ctx)
+  })
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
 
-    /* =========================== REP GENERAL RTM ======================= */
-    router.post('/rtm/rep-general/import', async (ctx) => {
-      const { default: RepGeneralImportController } = await import(
-        '#controllers/rep_general_imports_controller'
-      )
-      return new RepGeneralImportController().import(ctx)
-    })
+router
+  .post('/turnos-rtm/:id/cerrar', async (ctx) => {
+    const { default: TurnosCierreController } = await import(
+      '../app/controllers/turnos_cierre_controller.js'
+    )
+    return new TurnosCierreController().cerrar(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+router
+  .get('/turnos-rtm/:id', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().show(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+router
+  .put('/turnos-rtm/:id', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().update(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+router
+  .put('/turnos-rtm/:id/salida', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().registrarSalida(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+router
+  .patch('/turnos-rtm/:id/activar', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().activar(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+router
+  .patch('/turnos-rtm/:id/cancelar', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().cancelar(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+router
+  .patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
+    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+    return new TurnosRtmController().destroy(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
+
+/* =========================== REP GENERAL RTM ======================= */
+router
+  .post('/rtm/rep-general/import', async (ctx) => {
+    const { default: RepGeneralImportController } = await import(
+      '#controllers/rep_general_imports_controller'
+    )
+    return new RepGeneralImportController().import(ctx)
+  })
+  .use([
+    middleware.auth(),
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
+  ])
 
     /* ============================== USUARIOS =========================== */
     router.get('/usuarios', async (ctx) => {
@@ -730,14 +790,14 @@ router
 
     router
       .get('/convenios/buscar-por-nombre', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().buscarPorNombre(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
-    }),
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().buscarPorNombre(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
       ])
 
     router
@@ -824,7 +884,7 @@ router
       })
       .where('id', /^[0-9]+$/)
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
-/* =============================== COMISIONES ======================== */
+    /* =============================== COMISIONES ======================== */
 
     router
       .get('/comisiones/config', async (ctx) => {
@@ -882,9 +942,7 @@ router
 
     router
       .get('/comisiones/metas', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().metasIndex(ctx)
       })
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
