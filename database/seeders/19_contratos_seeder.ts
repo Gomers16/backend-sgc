@@ -19,11 +19,11 @@ export default class ContratosSeeder extends BaseSeeder {
 
     // ========== DEPENDENCIAS ==========
     const ibagueSede = await Sede.findBy('nombre', 'Ibagué')
-    const bogotaSede = await Sede.findBy('nombre', 'Bogotá')
     const razonSocialCdaCentro = await RazonSocial.findBy('nombre', 'CDA del Centro')
 
     // Cargos que existen en tu seeder
-    const cargoGerencia = await Cargo.findBy('nombre', 'DIRECCION ADMINSITRATIVA Y COMERCIAL')
+    // 🚩 CORRECCIÓN APLICADA AQUÍ: Usamos 'GERENCIA' que es el nombre correcto del Cargo.
+    const cargoGerencia = await Cargo.findBy('nombre', 'GERENCIA')
     const cargoContador = await Cargo.findBy('nombre', 'CONTADOR')
     const cargoTalentoHumano = await Cargo.findBy('nombre', 'TALENTO HUMANO')
 
@@ -43,7 +43,7 @@ export default class ContratosSeeder extends BaseSeeder {
     if (
       !ibagueSede ||
       !razonSocialCdaCentro ||
-      !cargoGerencia ||
+      !cargoGerencia || // ¡Ahora debería ser TRUE!
       !cargoContador ||
       !cargoTalentoHumano ||
       !epsEjemplo ||
@@ -56,15 +56,15 @@ export default class ContratosSeeder extends BaseSeeder {
     ) {
       console.error('❌ Faltan datos relacionados. Revisa los seeders previos.')
       console.error('Detalles:')
-      console.error('  - Sede Ibagué:', !!ibagueSede)
-      console.error('  - Razón Social:', !!razonSocialCdaCentro)
-      console.error('  - Cargo Gerencia:', !!cargoGerencia)
-      console.error('  - Cargo Contador:', !!cargoContador)
-      console.error('  - Cargo RRHH:', !!cargoTalentoHumano)
-      console.error('  - EPS:', !!epsEjemplo)
-      console.error('  - Usuario Gerencia:', !!usuarioGerencia)
-      console.error('  - Usuario Contabilidad:', !!usuarioContabilidad)
-      console.error('  - Usuario RRHH:', !!usuarioTalentoHumano)
+      console.error('  - Sede Ibagué:', !!ibagueSede)
+      console.error('  - Razón Social:', !!razonSocialCdaCentro)
+      console.error('  - Cargo Gerencia:', !!cargoGerencia)
+      console.error('  - Cargo Contador:', !!cargoContador)
+      console.error('  - Cargo RRHH:', !!cargoTalentoHumano)
+      console.error('  - EPS:', !!epsEjemplo)
+      console.error('  - Usuario Gerencia:', !!usuarioGerencia)
+      console.error('  - Usuario Contabilidad:', !!usuarioContabilidad)
+      console.error('  - Usuario RRHH:', !!usuarioTalentoHumano)
       return
     }
 
@@ -315,9 +315,9 @@ export default class ContratosSeeder extends BaseSeeder {
     ])
 
     console.log('✅ Contratos creados exitosamente:')
-    console.log('   - Contrato 1: Carlos Rodríguez (Gerencia) - Indefinido')
-    console.log('   - Contrato 2: Laura González (Contabilidad) - Término fijo')
-    console.log('   - Contrato 3: Andrea López (RRHH) - Prestación de servicios')
-    console.log('   📊 TOTAL: 3 contratos con salarios y pasos')
+    console.log('  - Contrato 1: Carlos Rodríguez (Gerencia) - Indefinido')
+    console.log(' - Contrato 2: Laura González (Contabilidad) - Término fijo')
+    console.log(' - Contrato 3: Andrea López (RRHH) - Prestación de servicios')
+    console.log(' 📊 TOTAL: 3 contratos con salarios y pasos')
   }
 }

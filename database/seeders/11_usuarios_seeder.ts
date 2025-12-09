@@ -43,6 +43,7 @@ export default class UsuarioSeeder extends BaseSeeder {
 
     // 🆕 CARGOS ACTUALIZADOS
     const direccionAdminCargo = await Cargo.findBy('nombre', 'DIRECCION ADMINISTRATIVA Y COMERCIAL')
+    const direccionCalidadCargo = await Cargo.findBy('nombre', 'DIRECCION DE CALIDAD Y AUDITORÍA') // 👈 AGREGAR AQUÍ
     const gerenciaCargo = await Cargo.findBy('nombre', 'GERENCIA')
     const liderSedeCargo = await Cargo.findBy('nombre', 'LIDER DE SEDE')
     const liderInformesCargo = await Cargo.findBy('nombre', 'LIDER DE INFORMES')
@@ -158,6 +159,7 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularCorporativo: '3127777777',
         centroCosto: 'GER-02',
       }),
+      // Sandra Martínez (Líder de Informes)
       u({
         sedeId: ibagueSede.id,
         rolId: gerenciaRol.id,
@@ -170,6 +172,21 @@ export default class UsuarioSeeder extends BaseSeeder {
         celularPersonal: '3004444444',
         celularCorporativo: '3136666666',
         centroCosto: 'GER-03',
+        recomendaciones: true,
+      }),
+      // 👇 AGREGAR ESTO AQUÍ:
+      u({
+        sedeId: ibagueSede.id,
+        rolId: gerenciaRol.id,
+        cargoId: direccionCalidadCargo?.id || direccionAdminCargo?.id || asesorComercialCargo.id,
+        nombres: 'Patricia',
+        apellidos: 'Gómez',
+        correo: 'patricia.gomez@cda.com',
+        password: 'gerencia123',
+        direccion: 'Carrera 5 #10-20',
+        celularPersonal: '3101234567',
+        celularCorporativo: '3201234567',
+        centroCosto: 'GER-04',
         recomendaciones: true,
       }),
 

@@ -1,25 +1,31 @@
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
-import Cargo from '#models/cargo' // Importación usando alias
+import Cargo from '#models/cargo'
 
 export default class CargoSeeder extends BaseSeeder {
   async run() {
     const cargos = [
-      { nombre: 'DIRECCION FINANCIERA' },
+      // 🏢 Direcciones
       { nombre: 'DIRECCION DE CALIDAD Y AUDITORÍA' },
-      { nombre: 'DIRECCION ADMINSITRATIVA Y COMERCIAL' },
+      { nombre: 'DIRECCION ADMINISTRATIVA Y COMERCIAL' },
+
+      // 👥 Áreas administrativas y gerenciales
+      { nombre: 'GERENCIA' }, // ✅ NUEVO
       { nombre: 'TALENTO HUMANO' },
       { nombre: 'CONTADOR' },
-      { nombre: 'AUXILIAR CONTABLE JUNIOR' },
-      { nombre: 'AUXILIAR CONTABLE SENIOR' },
-      { nombre: 'LIDER DE SERVICIO AL CLIENTE' },
-      { nombre: 'ASESOR COMERCIAL' }, // <- actualizado
-      { nombre: 'ASESOR CONVENIO' }, // <- agregado
-      { nombre: 'ASESOR - REGISTRO' },
-      { nombre: 'ASESOR - CAJA' },
-      { nombre: 'ASESOR - PUERTA' },
-      { nombre: 'ASESOR - TELEMERCADEO' },
-      { nombre: 'DIRECTOR TECNICO' },
-      { nombre: 'DIRECTOR TECNICO SUPLENTE' },
+
+      // 🎯 Líderes
+      { nombre: 'LIDER DE SEDE' }, // ✅ NUEVO
+      { nombre: 'LIDER DE INFORMES' }, // ✅ NUEVO
+
+      // 🤝 Comercial
+      { nombre: 'ASESOR COMERCIAL' },
+      { nombre: 'ASESOR CONVENIO' },
+
+      // 👨‍💼 Servicio al cliente
+      { nombre: 'ASESOR SERVICIO AL CLIENTE' }, // ✅ NUEVO (reemplaza a registro, caja, puerta, telemercadeo)
+
+      // 🔧 Técnico
+      { nombre: 'INGENIERO' }, // ✅ NUEVO
       { nombre: 'INSPECTOR' },
     ]
 
