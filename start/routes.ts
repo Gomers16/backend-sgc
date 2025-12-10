@@ -909,7 +909,7 @@ router
   .where('id', /^[0-9]+$/)
   .use([
     middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] })
   ])
 
 router
@@ -920,7 +920,7 @@ router
   .where('id', /^[0-9]+$/)
   .use([
     middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
+    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] })
   ])
 
 router

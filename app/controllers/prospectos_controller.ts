@@ -1,4 +1,6 @@
 // app/controllers/prospectos_controller.ts
+// ✅ CORREGIDO: Permite que SUPER_ADMIN cree prospectos para cualquier asesor
+
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 import db from '@adonisjs/lucid/services/db'
@@ -229,6 +231,8 @@ export default class ProspectosController {
       'observaciones',
       'creadoPor',
       'creado_por',
+      'asesor_agente_id', // ✅ NUEVO: Leer del frontend
+      'asesorAgenteId', // ✅ NUEVO: Alternativa camelCase
     ])
 
     const placa = normPlaca(body.placa)
@@ -236,7 +240,6 @@ export default class ProspectosController {
     const nombre = (body.nombre ?? '').trim()
     const cedula = body.cedula ? String(body.cedula).trim() : null
 
-    // 🔒 Campos obligatorios
     // 🔒 Campos obligatorios
     if (!placa || !telefono || !nombre || !cedula) {
       return response.badRequest({
@@ -264,19 +267,46 @@ export default class ProspectosController {
       })
     }
 
-    const agenteCreador = await AgenteCaptacion.query()
-      .where('usuario_id', creadoPor)
-      .where('activo', true)
-      .first()
+    // ✅ NUEVA LÓGICA: Determinar el asesor asignado
+    let asesorAgenteId: number | null = null
 
-    if (!agenteCreador) {
-      return response.badRequest({
-        message: 'El usuario creador no tiene un Agente de Captación activo configurado',
-        details: { creadoPor },
-      })
+    // 1. Si viene asesor_agente_id en el body (frontend lo envía), usar ese
+    const asesorFromBody = Number(body.asesor_agente_id ?? body.asesorAgenteId)
+    if (Number.isFinite(asesorFromBody) && asesorFromBody > 0) {
+      console.log('✅ [Backend] Usando asesor_agente_id del body:', asesorFromBody)
+      asesorAgenteId = asesorFromBody
+
+      // Validar que el asesor exista
+      const asesorExiste = await AgenteCaptacion.query()
+        .where('id', asesorAgenteId)
+        .where('activo', true)
+        .first()
+
+      if (!asesorExiste) {
+        return response.badRequest({
+          message: `El asesor con ID ${asesorAgenteId} no existe o no está activo`,
+          details: { asesor_agente_id: asesorAgenteId },
+        })
+      }
+    } else {
+      // 2. Si no viene, intentar buscar el agente del usuario creador (COMERCIAL)
+      console.log('⚠️ [Backend] No viene asesor_agente_id, buscando agente del usuario:', creadoPor)
+      const agenteCreador = await AgenteCaptacion.query()
+        .where('usuario_id', creadoPor)
+        .where('activo', true)
+        .first()
+
+      if (!agenteCreador) {
+        return response.badRequest({
+          message:
+            'El usuario creador no tiene un Agente de Captación activo configurado y no se especificó asesor_agente_id',
+          details: { creadoPor, asesor_agente_id: body.asesor_agente_id },
+        })
+      }
+
+      asesorAgenteId = agenteCreador.id
+      console.log('✅ [Backend] Usando agente del usuario creador:', asesorAgenteId)
     }
-
-    const asesorAgenteId = agenteCreador.id
 
     const trx = await db.transaction()
     try {
@@ -300,6 +330,9 @@ export default class ProspectosController {
         } as any,
         { client: trx }
       )
+
+      console.log('✅ [Backend] Prospecto creado:', prospecto.id)
+      console.log('✅ [Backend] Asignando a asesor:', asesorAgenteId)
 
       await AsesorProspectoAsignacion.create(
         {
@@ -328,9 +361,11 @@ export default class ProspectosController {
         )
         .first()
 
+      console.log('✅ [Backend] Prospecto creado y asignado exitosamente')
       return response.created(full ?? prospecto)
     } catch (e) {
       await trx.rollback()
+      console.error('❌ [Backend] Error creando prospecto:', e)
       return response.internalServerError({ message: 'Error creando prospecto', error: String(e) })
     }
   }
