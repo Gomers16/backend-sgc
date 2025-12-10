@@ -526,11 +526,17 @@ export default class CaptacionDateosController {
   }
 
   /**
-   * PUT /captacion-dateos/:id
-   */
+  /**
+ * PUT /captacion-dateos/:id
+ */
   public async update({ params, request, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
+
+    // ✅ CAMPOS EDITABLES AGREGADOS
+    const placa = request.input('placa') as string | undefined
+    const telefono = request.input('telefono') as string | undefined
+    const canalRaw = request.input('canal') as string | undefined
 
     const observacion = request.input('observacion') as string | undefined
     const resultado = request.input('resultado') as Resultado | undefined
@@ -542,7 +548,33 @@ export default class CaptacionDateosController {
     const imagenOrigenId = request.input('imagen_origen_id') as string | number | undefined
     const imagenSubidaPorRaw = request.input('imagen_subida_por') as unknown
 
-    const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
+  const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
+
+    // ✅ ACTUALIZAR PLACA
+    if (placa !== undefined) {
+      item.placa = normalizePlaca(placa)
+    }
+
+    // ✅ ACTUALIZAR TELÉFONO
+    if (telefono !== undefined) {
+      item.telefono = normalizePhone(telefono)
+    }
+
+    // ✅ ACTUALIZAR CANAL
+    if (canalRaw !== undefined) {
+      const canalUpper = String(canalRaw).toUpperCase()
+
+      if (canalUpper === 'ASESOR') {
+        // Mantener el tipo específico (COMERCIAL o CONVENIO) que ya tiene
+        // o usar COMERCIAL por defecto
+        if (item.canal !== 'ASESOR_COMERCIAL' && item.canal !== 'ASESOR_CONVENIO') {
+          item.canal = 'ASESOR_COMERCIAL'
+        }
+        // Si ya es uno de los dos, no lo cambiamos
+      } else if ((CANALES_DB as readonly string[]).includes(canalUpper)) {
+        item.canal = canalUpper as CanalDb
+      }
+    }
 
     if (resultado !== undefined) {
       if (!(RESULTADOS as readonly string[]).includes(resultado)) {
@@ -598,7 +630,7 @@ export default class CaptacionDateosController {
     return { ...toSnake(out), reserva, turnoInfo }
   }
 
-  /** DELETE /captacion-dateos/:id */
+    /** DELETE /captacion-dateos/:id */
   public async destroy({ params, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
