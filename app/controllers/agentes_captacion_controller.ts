@@ -120,45 +120,52 @@ export default class AgentesCaptacionController {
     return { data, ...meta }
   }
 
-/** GET /agentes-captacion/:id */
-public async show({ params, response, auth }: HttpContext) {
-  const row = await AgenteCaptacion.query()
-    .where('agentes_captacions.id', params.id)
-    .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-    .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
-    .first()
-
-  if (!row) return response.notFound({ message: 'Agente no encontrado' })
-
-  // 🔐 VALIDACIÓN: Si es COMERCIAL, solo puede ver su propia ficha
-  const userRole = auth.user?.rol?.nombre
-  if (userRole === 'COMERCIAL') {
-    // 🔥 Buscar el agenteId del usuario autenticado directamente desde la BD
-    const userAgenteRow = await db
-      .from('agentes_captacions')
-      .where('usuario_id', auth.user.id)
-      .select('id')
+  /** GET /agentes-captacion/:id */
+  public async show({ params, response, auth }: HttpContext) {
+    const row = await AgenteCaptacion.query()
+      .where('agentes_captacions.id', params.id)
+      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
+      .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
       .first()
 
-    const userAgenteId = userAgenteRow?.id
+    if (!row) return response.notFound({ message: 'Agente no encontrado' })
 
-    console.log('🔍 Validación COMERCIAL:', {
-      userRole,
-      userId: auth.user.id,
-      userAgenteId,
-      requestedId: row.id,
-      allowed: userAgenteId && Number(row.id) === Number(userAgenteId)
-    })
+    // 🔐 VALIDACIÓN: Si es COMERCIAL, solo puede ver su propia ficha
+    const userRole = auth.user?.rol?.nombre
+    if (userRole === 'COMERCIAL') {
+      // ✅ Verificación de auth.user antes de usar
+      if (!auth.user?.id) {
+        return response.unauthorized({ message: 'Usuario no autenticado' })
+      }
 
-    if (!userAgenteId || Number(row.id) !== Number(userAgenteId)) {
-      return response.forbidden({
-        message: 'No tienes permiso para ver esta ficha comercial. Solo puedes ver tu propia ficha.'
+      // 🔥 Buscar el agenteId del usuario autenticado directamente desde la BD
+      const userAgenteRow = await db
+        .from('agentes_captacions')
+        .where('usuario_id', auth.user.id)
+        .select('id')
+        .first()
+
+      const userAgenteId = userAgenteRow?.id
+
+      console.log('🔍 Validación COMERCIAL:', {
+        userRole,
+        userId: auth.user.id,
+        userAgenteId,
+        requestedId: row.id,
+        allowed: userAgenteId && Number(row.id) === Number(userAgenteId),
       })
+
+      if (!userAgenteId || Number(row.id) !== Number(userAgenteId)) {
+        return response.forbidden({
+          message:
+            'No tienes permiso para ver esta ficha comercial. Solo puedes ver tu propia ficha.',
+        })
+      }
     }
-  }
 
     return rowToPlainWithActivo(row)
   }
+
   /** GET /agentes-captacion/me */
   public async me({ auth, response }: HttpContext) {
     if (!auth?.user?.id) {
@@ -182,7 +189,16 @@ public async show({ params, response, auth }: HttpContext) {
 
   /** POST /agentes-captacion */
   public async store({ request, response }: HttpContext) {
-    let { tipo, nombre, telefono, doc_tipo, doc_numero, activo, usuario_id } = request.only([
+    // ✅ Usar camelCase para las variables
+    let {
+      tipo,
+      nombre,
+      telefono,
+      doc_tipo: docTipo,
+      doc_numero: docNumero,
+      activo,
+      usuario_id: usuarioId,
+    } = request.only([
       'tipo',
       'nombre',
       'telefono',
@@ -194,22 +210,21 @@ public async show({ params, response, auth }: HttpContext) {
 
     if (!tipo || !TIPOS.has(tipo)) {
       return response.badRequest({
-        message:
-          'tipo inválido (ASESOR_COMERCIAL | ASESOR_CONVENIO | ASESOR_TELEMERCADEO)',
+        message: 'tipo inválido (ASESOR_COMERCIAL | ASESOR_CONVENIO | ASESOR_TELEMERCADEO)',
       })
     }
     if (!nombre) return response.badRequest({ message: 'nombre es requerido' })
 
     telefono = normalizePhone(telefono)
 
-    if (doc_tipo && !DOC_TIPOS.has(doc_tipo)) {
+    if (docTipo && !DOC_TIPOS.has(docTipo)) {
       return response.badRequest({ message: 'doc_tipo inválido (CC | NIT)' })
     }
 
-    if (doc_tipo && doc_numero) {
+    if (docTipo && docNumero) {
       const exists = await AgenteCaptacion.query()
-        .where('doc_tipo', doc_tipo)
-        .andWhere('doc_numero', String(doc_numero).trim())
+        .where('doc_tipo', docTipo)
+        .andWhere('doc_numero', String(docNumero).trim())
         .first()
       if (exists) return response.conflict({ message: 'Documento ya existe' })
     }
@@ -218,9 +233,9 @@ public async show({ params, response, auth }: HttpContext) {
       tipo,
       nombre: String(nombre).trim(),
       telefono: telefono || null,
-      docTipo: doc_tipo || null,
-      docNumero: doc_numero ? String(doc_numero).trim() : null,
-      usuarioId: usuario_id ?? null,
+      docTipo: docTipo || null,
+      docNumero: docNumero ? String(docNumero).trim() : null,
+      usuarioId: usuarioId ?? null,
       // para convenios; para comerciales/telemercadeo no se usa (se calcula)
       activo: typeof activo === 'boolean' ? activo : true,
     })
@@ -324,47 +339,53 @@ public async show({ params, response, auth }: HttpContext) {
   public async resumen({ params }: HttpContext) {
     const asesorId = Number(params.id)
 
-    const [{ 'count(*)': convTotStr }] = await AsesorConvenioAsignacion.query()
+    // ✅ Usar aggregate queries correctamente
+    const convTotal = await AsesorConvenioAsignacion.query()
       .where('asesor_id', asesorId)
-      .count('*')
+      .count('* as total')
+      .first()
 
-    const [{ 'count(*)': convVigStr }] = await AsesorConvenioAsignacion.query()
+    const convVig = await AsesorConvenioAsignacion.query()
       .where('asesor_id', asesorId)
       .where('activo', true)
       .whereNull('fecha_fin')
-      .count('*')
+      .count('* as total')
+      .first()
 
     const hoyIni = DateTime.now().startOf('day').toJSDate()
     const hoyFin = DateTime.now().endOf('day').toJSDate()
     const mesIni = DateTime.now().startOf('month').toJSDate()
     const mesFin = DateTime.now().endOf('month').toJSDate()
 
-    const [{ 'count(*)': prosVigStr }] = await AsesorProspectoAsignacion.query()
+    const prosVig = await AsesorProspectoAsignacion.query()
       .where('asesor_id', asesorId)
       .where('activo', true)
       .whereNull('fecha_fin')
-      .count('*')
+      .count('* as total')
+      .first()
 
-    const [{ 'count(*)': prosHoyStr }] = await AsesorProspectoAsignacion.query()
+    const prosHoy = await AsesorProspectoAsignacion.query()
       .where('asesor_id', asesorId)
       .whereBetween('fecha_asignacion', [hoyIni, hoyFin])
-      .count('*')
+      .count('* as total')
+      .first()
 
-    const [{ 'count(*)': prosMesStr }] = await AsesorProspectoAsignacion.query()
+    const prosMes = await AsesorProspectoAsignacion.query()
       .where('asesor_id', asesorId)
       .whereBetween('fecha_asignacion', [mesIni, mesFin])
-      .count('*')
+      .count('* as total')
+      .first()
 
     return {
       convenios: {
-        total: Number(convTotStr ?? 0),
-        vigentes: Number(convVigStr ?? 0),
+        total: Number(convTotal?.$extras.total ?? 0),
+        vigentes: Number(convVig?.$extras.total ?? 0),
       },
       prospectos: {
-        total: Number(prosVigStr ?? 0),
-        vigentes: Number(prosVigStr ?? 0),
-        hoy: Number(prosHoyStr ?? 0),
-        mes: Number(prosMesStr ?? 0),
+        total: Number(prosVig?.$extras.total ?? 0),
+        vigentes: Number(prosVig?.$extras.total ?? 0),
+        hoy: Number(prosHoy?.$extras.total ?? 0),
+        mes: Number(prosMes?.$extras.total ?? 0),
       },
     }
   }
@@ -406,16 +427,20 @@ public async show({ params, response, auth }: HttpContext) {
 
     const cols = selectRaw.length ? selectRaw : ['id', 'nombre', 'tipo']
 
-    const rows = await db
+    // ✅ Construir query con tipado correcto
+    let query = db
       .from('agentes_captacions')
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
       .select(
         ...cols.map((c) => `agentes_captacions.${c}`),
         db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`)
       )
-      .modify((qb) => {
-        if (activos) qb.whereRaw(`${ACTIVO_CALC_SQL} = 1`)
-      })
+
+    if (activos) {
+      query = query.whereRaw(`${ACTIVO_CALC_SQL} = 1`)
+    }
+
+    const rows = await query
 
     const data = rows.map((r: any) => {
       const activo = Number(r.activo_calc) === 1
@@ -430,11 +455,11 @@ public async show({ params, response, auth }: HttpContext) {
     const asesorId = Number(params.id)
     const vigente = String(request.input('vigente', '1')) === '1'
 
-    const rows = await db
+    // ✅ Construir query condicionalmente
+    let query = db
       .from('convenios')
       .join('asesor_convenio_asignaciones as aca', 'aca.convenio_id', 'convenios.id')
       .where('aca.asesor_id', asesorId)
-      .if(vigente, (qb) => qb.where('aca.activo', true).whereNull('aca.fecha_fin'))
       .select(
         'convenios.id',
         'convenios.nombre',
@@ -445,6 +470,11 @@ public async show({ params, response, auth }: HttpContext) {
       )
       .orderBy('convenios.nombre', 'asc')
 
+    if (vigente) {
+      query = query.where('aca.activo', true).whereNull('aca.fecha_fin')
+    }
+
+    const rows = await query
     return rows
   }
 
@@ -471,14 +501,12 @@ public async show({ params, response, auth }: HttpContext) {
     }
 
     // Dateos relacionados al asesor (por distintas columnas posibles)
-    const q = CaptacionDateo.query()
-      .where((qb) => {
-        qb
-          .where('asesor_id', asesorId)
-          .orWhere('agente_id', asesorId)
-          .orWhere('creado_por', asesorId)
-          .orWhere('user_id', asesorId)
-      })
+    const q = CaptacionDateo.query().where((qb) => {
+      qb.where('asesor_id', asesorId)
+        .orWhere('agente_id', asesorId)
+        .orWhere('creado_por', asesorId)
+        .orWhere('user_id', asesorId)
+    })
 
     if (desdeSql) q.where('created_at', '>=', desdeSql)
     if (hastaSql) q.where('created_at', '<=', hastaSql)

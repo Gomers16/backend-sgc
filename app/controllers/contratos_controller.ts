@@ -473,7 +473,7 @@ export default class ContratosController {
     }
   }
 
- /**
+  /**
    * Garantiza que, si el usuario del contrato es ASESOR,
    * exista:
    *  - un AgenteCaptacion ligado al usuario (COMERCIAL / CONVENIO / TELEMERCADEO)
@@ -526,16 +526,13 @@ export default class ContratosController {
       `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
       `Usuario #${usuario.id}`
 
-    const agente = await AgenteCaptacion.firstOrCreate(
-      { usuarioId: usuario.id, tipo },
-      {
-        usuarioId: usuario.id,
-        tipo,
-        nombre: nombreAgente,
-        telefono: telefonoUsuario,
-        activo: true,
-      } as any
-    )
+    const agente = await AgenteCaptacion.firstOrCreate({ usuarioId: usuario.id, tipo }, {
+      usuarioId: usuario.id,
+      tipo,
+      nombre: nombreAgente,
+      telefono: telefonoUsuario,
+      activo: true,
+    } as any)
 
     agente.merge({
       nombre: nombreAgente,
@@ -570,10 +567,7 @@ export default class ContratosController {
     const docNumero = docNumeroUsuario || docNumeroContrato || null
 
     // Tipo de documento: por defecto 'CC' (puedes cambiarlo si manejas otros)
-    const docTipoUsuario =
-      (usuario as any).tipoDocumento ||
-      (usuario as any).docTipo ||
-      'CC'
+    const docTipoUsuario = (usuario as any).tipoDocumento || (usuario as any).docTipo || 'CC'
 
     // Dirección tomada del usuario (perfil)
     const direccionUsuario =
@@ -870,7 +864,8 @@ export default class ContratosController {
           })
         }
       }
-      if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
+      if (pasosParaGuardar.length > 0)
+        await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
 
       // Historial: creación
       await ContratoHistorialEstado.create(
@@ -907,7 +902,10 @@ export default class ContratosController {
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al crear contrato:', error)
-      return response.internalServerError({ message: 'Error al crear contrato', error: error.message })
+      return response.internalServerError({
+        message: 'Error al crear contrato',
+        error: error.message,
+      })
     }
   }
 
@@ -1161,7 +1159,12 @@ export default class ContratosController {
         { client: trx }
       )
 
-      await this.logContratoFisicoCambio(contrato, null, { nombre: fileName, url: publicUrl }, actorId)
+      await this.logContratoFisicoCambio(
+        contrato,
+        null,
+        { nombre: fileName, url: publicUrl },
+        actorId
+      )
       await this.logContratoFisicoObservacion(contrato, String(observacionArchivo ?? ''), actorId)
 
       // Recomendación médica opcional
@@ -1258,7 +1261,9 @@ export default class ContratosController {
       const nuevoEstado: Estado =
         estadoRaw === 'activo' ? 'activo' : estadoRaw === 'inactivo' ? 'inactivo' : (null as any)
       if (!nuevoEstado)
-        return response.badRequest({ message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'." })
+        return response.badRequest({
+          message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'.",
+        })
 
       const oldEstado = contrato.estado
 
@@ -1284,7 +1289,9 @@ export default class ContratosController {
         }
         if (terminoEff && !allowedByTipo[tipoEff].includes(terminoEff)) {
           await trx.rollback()
-          return response.badRequest({ message: `'terminoContrato' inválido para tipo '${tipoEff}'.` })
+          return response.badRequest({
+            message: `'terminoContrato' inválido para tipo '${tipoEff}'.`,
+          })
         }
 
         const requiereFin =
@@ -1293,8 +1300,7 @@ export default class ContratosController {
           tipoEff === 'temporal' ||
           (tipoEff === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
 
-        const fechaTermLuxon =
-          this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
+        const fechaTermLuxon = this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
         if (requiereFin && !fechaTermLuxon) {
           await trx.rollback()
           return response.badRequest({
@@ -1360,7 +1366,12 @@ export default class ContratosController {
       const soloEstado =
         keys.length > 0 &&
         keys.every((k) =>
-          ['estado', 'motivoFinalizacion', 'fechaTerminacion', 'fechaFin', 'fechaFinalizacion'].includes(
+          [
+            'estado',
+            'motivoFinalizacion',
+            'fechaTerminacion',
+            'fechaFin',
+            'fechaFinalizacion',
             k
           )
         )

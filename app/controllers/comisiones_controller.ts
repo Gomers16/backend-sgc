@@ -159,78 +159,78 @@ function mapMetaToDto(c: Comision) {
 
 export default class ComisionesController {
   // app/controllers/comisiones_controller.ts
-// REEMPLAZA el método index() (aproximadamente línea 130-200)
+  // REEMPLAZA el método index() (aproximadamente línea 130-200)
 
-/**
- * GET /api/comisiones
- * Lista comisiones (SOLO reales, es_config = false / null) con filtros
- */
-public async index({ request, response }: HttpContext) {
-  const page = Number(request.input('page') || 1)
-  const perPage = Math.min(Number(request.input('perPage') || 10), 100)
-  const mes = request.input('mes') as string | undefined // "YYYY-MM"
-  const asesorId = request.input('asesorId') as number | undefined
-  const convenioId = request.input('convenioId') as number | undefined
-  const estado = request.input('estado') as string | undefined
-  const sortBy = (request.input('sortBy') || 'id') as string
-  const order = (request.input('order') || 'desc') as 'asc' | 'desc'
+  /**
+   * GET /api/comisiones
+   * Lista comisiones (SOLO reales, es_config = false / null) con filtros
+   */
+  public async index({ request, response }: HttpContext) {
+    const page = Number(request.input('page') || 1)
+    const perPage = Math.min(Number(request.input('perPage') || 10), 100)
+    const mes = request.input('mes') as string | undefined // "YYYY-MM"
+    const asesorId = request.input('asesorId') as number | undefined
+    const convenioId = request.input('convenioId') as number | undefined
+    const estado = request.input('estado') as string | undefined
+    const sortBy = (request.input('sortBy') || 'id') as string
+    const order = (request.input('order') || 'desc') as 'asc' | 'desc'
 
-  const query = Comision.query()
-    // 👇 comisiones reales: es_config = false O NULL
-    .where((q) => {
-      q.where('es_config', false).orWhereNull('es_config')
-    })
-    .preload('asesor')
-    .preload('convenio')
-    .preload('asesorSecundario') // 👈 NUEVO: preload del asesor secundario
-    .preload('dateo', (dq) => {
-      dq.preload('turno', (tq) => {
-        tq.preload('servicio')
+    const query = Comision.query()
+      // 👇 comisiones reales: es_config = false O NULL
+      .where((q) => {
+        q.where('es_config', false).orWhereNull('es_config')
       })
-    })
+      .preload('asesor')
+      .preload('convenio')
+      .preload('asesorSecundario') // 👈 NUEVO: preload del asesor secundario
+      .preload('dateo', (dq) => {
+        dq.preload('turno', (tq) => {
+          tq.preload('servicio')
+        })
+      })
 
-  // Filtro por mes (año-mes)
-  if (mes && /^\d{4}-\d{2}$/.test(mes)) {
-    const [year, month] = mes.split('-').map(Number)
-    const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
-    const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
-    if (start && end) {
-      query.whereBetween('fecha_calculo', [start, end])
+    // Filtro por mes (año-mes)
+    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+      const [year, month] = mes.split('-').map(Number)
+      const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
+      const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
+      if (start && end) {
+        query.whereBetween('fecha_calculo', [start, end])
+      }
     }
+
+    // Filtro por asesor
+    if (asesorId) {
+      query.where('asesor_id', asesorId)
+    }
+
+    // Filtro por convenio
+    if (convenioId) {
+      query.where('convenio_id', convenioId)
+    }
+
+    // Filtro por estado
+    if (estado) query.where('estado', estado)
+
+    // Ordenamiento
+    const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
+    let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
+    if (!SORTABLE.has(sortCol)) sortCol = 'id'
+    query.orderBy(sortCol, order)
+
+    const paginated = await query.paginate(page, perPage)
+    const meta = paginated.getMeta()
+    const data = paginated.all()
+
+    const rows = data.map((c) => mapComisionToDto(c))
+
+    return response.ok({
+      data: rows,
+      total: meta.total,
+      page: meta.currentPage,
+      perPage: meta.perPage,
+    })
   }
-
-  // Filtro por asesor
-  if (asesorId) {
-    query.where('asesor_id', asesorId)
-  }
-
-  // Filtro por convenio
-  if (convenioId) {
-    query.where('convenio_id', convenioId)
-  }
-
-  // Filtro por estado
-  if (estado) query.where('estado', estado)
-
-  // Ordenamiento
-  const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
-  let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
-  if (!SORTABLE.has(sortCol)) sortCol = 'id'
-  query.orderBy(sortCol, order)
-
-  const paginated = await query.paginate(page, perPage)
-  const meta = paginated.getMeta()
-  const data = paginated.all()
-
-  const rows = data.map((c) => mapComisionToDto(c))
-
-  return response.ok({
-    data: rows,
-    total: meta.total,
-    page: meta.currentPage,
-    perPage: meta.perPage,
-  })
-}
   /**
    * GET /api/comisiones/metas-mensuales
    * Resumen mensual por asesor:
@@ -384,45 +384,45 @@ public async index({ request, response }: HttpContext) {
   }
 
   // app/controllers/comisiones_controller.ts
-// REEMPLAZA el método show() (aproximadamente línea 210-250)
+  // REEMPLAZA el método show() (aproximadamente línea 210-250)
 
-/**
- * GET /api/comisiones/:id
- * Detalle de una comisión REAL con todas sus relaciones
- */
-public async show({ params, response }: HttpContext) {
-  const comision = await Comision.query()
-    .where('id', params.id)
-    .where((q) => {
-      q.where('es_config', false).orWhereNull('es_config')
-    })
-    .preload('asesor')
-    .preload('convenio')
-    .preload('asesorSecundario') // 👈 NUEVO
-    .preload('dateo', (dq) => {
-      dq.preload('turno', (tq) => {
-        tq.preload('servicio')
+  /**
+   * GET /api/comisiones/:id
+   * Detalle de una comisión REAL con todas sus relaciones
+   */
+  public async show({ params, response }: HttpContext) {
+    const comision = await Comision.query()
+      .where('id', params.id)
+      .where((q) => {
+        q.where('es_config', false).orWhereNull('es_config')
       })
-    })
-    .first()
+      .preload('asesor')
+      .preload('convenio')
+      .preload('asesorSecundario') // 👈 NUEVO
+      .preload('dateo', (dq) => {
+        dq.preload('turno', (tq) => {
+          tq.preload('servicio')
+        })
+      })
+      .first()
 
-  if (!comision) {
-    return response.notFound({ message: 'Comisión no encontrada' })
+    if (!comision) {
+      return response.notFound({ message: 'Comisión no encontrada' })
+    }
+
+    const dto = mapComisionToDto(comision)
+
+    // Extendemos con campos de detalle
+    const result = {
+      ...dto,
+      aprobado_at: null,
+      pagado_at: null,
+      anulado_at: null,
+      observacion: null,
+    }
+
+    return response.ok(result)
   }
-
-  const dto = mapComisionToDto(comision)
-
-  // Extendemos con campos de detalle
-  const result = {
-    ...dto,
-    aprobado_at: null,
-    pagado_at: null,
-    anulado_at: null,
-    observacion: null,
-  }
-
-  return response.ok(result)
-}
 
   /**
    * PATCH /api/comisiones/:id/valores
@@ -442,9 +442,10 @@ public async show({ params, response }: HttpContext) {
       })
     }
 
-    const { cantidad, valor_unitario } = request.only(['cantidad', 'valor_unitario'])
+    // ✅ Usar camelCase
+    const { cantidad, valor_unitario: valorUnitario } = request.only(['cantidad', 'valor_unitario'])
     const cant = toNumber(cantidad || 1)
-    const vu = toNumber(valor_unitario || 0)
+    const vu = toNumber(valorUnitario || 0)
 
     // Recalcular monto (asesor)
     comision.monto = String(cant * vu)
@@ -728,9 +729,7 @@ public async show({ params, response }: HttpContext) {
     const asesorId = request.input('asesorId') as number | undefined
     const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
 
-    const q = Comision.query()
-      .where('es_config', true)
-      .where('meta_rtm', '>', 0)
+    const q = Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
 
     if (asesorId) {
       q.where('asesor_id', asesorId)
@@ -780,7 +779,9 @@ public async show({ params, response }: HttpContext) {
     if (rawTipo !== undefined && rawTipo !== null && String(rawTipo).trim() !== '') {
       const tv = String(rawTipo).toUpperCase()
       if (!['MOTO', 'VEHICULO'].includes(tv)) {
-        return response.badRequest({ message: 'tipo_vehiculo inválido (MOTO o VEHICULO o vacío para Global)' })
+        return response.badRequest({
+          message: 'tipo_vehiculo inválido (MOTO o VEHICULO o vacío para Global)',
+        })
       }
       tipoVehiculo = tv
     }
@@ -790,8 +791,7 @@ public async show({ params, response }: HttpContext) {
     const valorRtmMoto = Math.max(0, toNumber(payload.valor_rtm_moto))
     const valorRtmVehiculo = Math.max(0, toNumber(payload.valor_rtm_vehiculo))
 
-    const existingQuery = Comision.query()
-      .where('es_config', true)
+    const existingQuery = Comision.query().where('es_config', true)
 
     if (tipoVehiculo === null) {
       existingQuery.whereNull('tipo_vehiculo')
@@ -882,9 +882,7 @@ public async show({ params, response }: HttpContext) {
     }
 
     if (payload.porcentaje_extra !== undefined) {
-      comision.porcentajeComisionMeta = String(
-        Math.max(0, toNumber(payload.porcentaje_extra))
-      )
+      comision.porcentajeComisionMeta = String(Math.max(0, toNumber(payload.porcentaje_extra)))
     }
 
     if (payload.valor_rtm_moto !== undefined) {

@@ -101,64 +101,73 @@ export default class OcrController {
     }
   }
 
-// ================== EXTRACTOR ESPECIALIZADO (ACTIVAUTOS) ==================
-private extractActivAutos(fullText: string) {
-  const txt = norm(fullText)
+  // ================== EXTRACTOR ESPECIALIZADO (ACTIVAUTOS) ==================
+  private extractActivAutos(fullText: string) {
+    const txt = norm(fullText)
 
-  // ——— Cabecera: líneas que contienen FECHA/HORA (pueden venir juntas) ———
-  const fechaLine = (txt.match(/(^|\n).*?FECHA[^\n]*/im) || [])[0] || ''
-  const horaLine  = fechaLine || (txt.match(/(^|\n).*?HORA[^\n]*/im) || [])[0] || ''
+    // ——— Cabecera: líneas que contienen FECHA/HORA (pueden venir juntas) ———
+    const fechaLine = (txt.match(/(^|\n).*?FECHA[^\n]*/im) || [])[0] || ''
+    const horaLine = fechaLine || (txt.match(/(^|\n).*?HORA[^\n]*/im) || [])[0] || ''
 
-  // Tokens robustos
-  const fechaTok = this.pickDate(fechaLine) || this.pickDate(matchAfterLabel(txt, /FECHA/i) || '')
-  const horaTok  = this.pickTime(horaLine) || this.pickTime(matchAfterLabel(txt, /HORA/i) || '')
+    // Tokens robustos
+    const fechaTok = this.pickDate(fechaLine) || this.pickDate(matchAfterLabel(txt, /FECHA/i) || '')
+    const horaTok = this.pickTime(horaLine) || this.pickTime(matchAfterLabel(txt, /HORA/i) || '')
 
-  const nit       = matchAfterLabel(txt, /NIT\b/i)
-  const vendedor  = matchAfterLabel(txt, /VEND(?:EDOR)?/i)
-  const placaRaw  = matchAfterLabel(txt, /PLACA\b/i)
-  const pinRaw    = matchAfterLabel(txt, /PIN\b/i)
-  const marcaRaw  = matchAfterLabel(txt, /MARCA\b/i)
+    const nit = matchAfterLabel(txt, /NIT\b/i)
+    const vendedor = matchAfterLabel(txt, /VEND(?:EDOR)?/i)
+    const placaRaw = matchAfterLabel(txt, /PLACA\b/i)
+    const pinRaw = matchAfterLabel(txt, /PIN\b/i)
+    const marcaRaw = matchAfterLabel(txt, /MARCA\b/i)
 
-  // En la misma línea de cabecera suele estar “FV FE: 1960” (o variantes)
-  const fvLinea = (txt.match(/(^|\n).*FV\s*FE\s*[:\-]?\s*([A-Z]{0,3})?[\s\-:]*?(\d{2,6}).*$/im) || [])[0] || ''
-  let prefijo: string | null = null, consecutivo: string | null = null
-  const mv = fvLinea.toUpperCase().match(/\b(FV|FE)\b/)
-  const mc = fvLinea.match(/\b(\d{2,6})\b/)
-  if (mv) prefijo = mv[1]
-  if (mc) consecutivo = mc[1]
+    // En la misma línea de cabecera suele estar “FV FE: 1960” (o variantes)
+    const fvLinea =
+      (txt.match(/(^|\n).*FV\s*FE\s*[:\-]?\s*([A-Z]{0,3})?[\s\-:]*?(\d{2,6}).*$/im) || [])[0] || ''
+    let prefijo: string | null = null,
+      consecutivo: string | null = null
+    const mv = fvLinea.toUpperCase().match(/\b(FV|FE)\b/)
+    const mc = fvLinea.match(/\b(\d{2,6})\b/)
+    if (mv) prefijo = mv[1]
+    if (mc) consecutivo = mc[1]
 
-  // Totales (líneas exactas)
-  const subLine = txt.match(/^\s*SUBTOTAL\s+([$\d\.\, ]+)/im)?.[1] || matchAfterLabel(txt, /SUB\s*TOTAL|SUBTOTAL/i)
-  const ivaLine = txt.match(/^\s*IVA\s+([$\d\.\, ]+)/im)?.[1]      || matchAfterLabel(txt, /IVA\b/i)
-  const totFac  = txt.match(/^\s*TOTAL\s+FACTURA\s+([$\d\.\, ]+)/im)?.[1]
-               || matchAfterLabel(txt, /TOTAL\s*FACTURA/i)
-               || matchAfterLabel(txt, /^TOTAL$/i)
+    // Totales (líneas exactas)
+    const subLine =
+      txt.match(/^\s*SUBTOTAL\s+([$\d\.\, ]+)/im)?.[1] ||
+      matchAfterLabel(txt, /SUB\s*TOTAL|SUBTOTAL/i)
+    const ivaLine = txt.match(/^\s*IVA\s+([$\d\.\, ]+)/im)?.[1] || matchAfterLabel(txt, /IVA\b/i)
+    const totFac =
+      txt.match(/^\s*TOTAL\s+FACTURA\s+([$\d\.\, ]+)/im)?.[1] ||
+      matchAfterLabel(txt, /TOTAL\s*FACTURA/i) ||
+      matchAfterLabel(txt, /^TOTAL$/i)
 
-  // Normalizaciones
-  const placa = this.normalizePlate(placaRaw || '')
-  const pin   = this.cleanPin((pinRaw || '').toUpperCase().replace(/[^A-Z0-9\- ]/g, '').trim())
-  const marca = this.cleanSimple(marcaRaw || '')
-  const vendedorOk = this.cleanSimple(vendedor || '')
+    // Normalizaciones
+    const placa = this.normalizePlate(placaRaw || '')
+    const pin = this.cleanPin(
+      (pinRaw || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9\- ]/g, '')
+        .trim()
+    )
+    const marca = this.cleanSimple(marcaRaw || '')
+    const vendedorOk = this.cleanSimple(vendedor || '')
 
-  // Fecha/hora finales en ISO local (hora opcional → 00:00:00)
-  const fechaHora = this.toLocalDatetimeISO(fechaTok || null, horaTok || null)
+    // Fecha/hora finales en ISO local (hora opcional → 00:00:00)
+    const fechaHora = this.toLocalDatetimeISO(fechaTok || null, horaTok || null)
 
-  return {
-    placa: placa || null,
-    nit: this.cleanNit(nit || ''),
-    pin,
-    marca,
-    vendedor: vendedorOk,
-    prefijo,
-    consecutivo,
-    fechaHora,
-    subtotal: moneyToInt(subLine),
-    iva:      moneyToInt(ivaLine),
-    totalFactura: moneyToInt(totFac),
-    total:       moneyToInt(totFac),
+    return {
+      placa: placa || null,
+      nit: this.cleanNit(nit || ''),
+      pin,
+      marca,
+      vendedor: vendedorOk,
+      prefijo,
+      consecutivo,
+      fechaHora,
+      subtotal: moneyToInt(subLine),
+      iva: moneyToInt(ivaLine),
+      totalFactura: moneyToInt(totFac),
+      total: moneyToInt(totFac),
+    }
   }
-}
-
 
   // ================= EXTRACCIÓN POR ROI =================
   private async extractByROI(imagePath: string, words: OCRWord[]) {
@@ -178,39 +187,39 @@ private extractActivAutos(fullText: string) {
 
     // ROIs
     const roiPlaca = roi(/^\s*PLACA\b/i)
-    const roiNit   = roi(/\bNIT\b/i)
-    const roiPin   = roi(/\bPIN\b/i)
+    const roiNit = roi(/\bNIT\b/i)
+    const roiPin = roi(/\bPIN\b/i)
     const roiMarca = roi(/\bMARCA\b/i)
-    const roiVen   = roi(/\bVEN(?:DEDOR)?\b/i)
-    const roiFV    = roi(/\b(FV|FE)\b/i)
-    const roiSub   = roi(/\bSUB\s*TOTAL\b|\bSUBTOTAL\b/i)
-    const roiIva   = roi(/\bIVA\b/i)
-    const roiTot   = roi(/\bTOTAL\s*FACTURA\b/i) || roi(/\bTOTAL\b/i)
+    const roiVen = roi(/\bVEN(?:DEDOR)?\b/i)
+    const roiFV = roi(/\b(FV|FE)\b/i)
+    const roiSub = roi(/\bSUB\s*TOTAL\b|\bSUBTOTAL\b/i)
+    const roiIva = roi(/\bIVA\b/i)
+    const roiTot = roi(/\bTOTAL\s*FACTURA\b/i) || roi(/\bTOTAL\b/i)
 
     // Lecturas con whitelist
     const placaRaw = await read(roiPlaca, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
     const nitRaw = await read(roiNit, '0123456789.- ')
-    const pinRaw   = await read(roiPin,   'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
+    const pinRaw = await read(roiPin, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
     const marcaRaw = await read(roiMarca)
-    const venRaw   = await read(roiVen)
-    const fvRaw    = await read(roiFV,    'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
-    const subRaw   = await read(roiSub,   '$0123456789., ')
-    const ivaRaw   = await read(roiIva,   '$0123456789., ')
-    const totRaw   = await read(roiTot,   '$0123456789., ')
+    const venRaw = await read(roiVen)
+    const fvRaw = await read(roiFV, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
+    const subRaw = await read(roiSub, '$0123456789., ')
+    const ivaRaw = await read(roiIva, '$0123456789., ')
+    const totRaw = await read(roiTot, '$0123456789., ')
 
-    const cleanMoney = (s?: string | null) => (s ? Number((s.replace(/[^\d]/g, '') || '0')) : 0)
-    const prefCons   = this.pickPrefijoConsec(fvRaw)
+    const cleanMoney = (s?: string | null) => (s ? Number(s.replace(/[^\d]/g, '') || '0') : 0)
+    const prefCons = this.pickPrefijoConsec(fvRaw)
 
     return {
       placa: this.normalizePlate(this.takeFirstToken(placaRaw)),
-      nit:   this.cleanNit(nitRaw),
-      pin:   this.cleanPin(this.takeFirstToken(pinRaw)),
+      nit: this.cleanNit(nitRaw),
+      pin: this.cleanPin(this.takeFirstToken(pinRaw)),
       marca: this.cleanSimple(marcaRaw),
       vendedor: this.cleanSimple(venRaw),
-      prefijo:    prefCons.prefijo,
+      prefijo: prefCons.prefijo,
       consecutivo: prefCons.consecutivo,
       subtotal: cleanMoney(subRaw),
-      iva:      cleanMoney(ivaRaw),
+      iva: cleanMoney(ivaRaw),
       totalFactura: cleanMoney(totRaw),
     }
   }
@@ -221,7 +230,12 @@ private extractActivAutos(fullText: string) {
     const top = Math.max(r.y0 - 6, 0)
     const width = Math.max(r.x1 - r.x0 + 12, 12)
     const height = Math.max(r.y1 - r.y0 + 12, 12)
-    return sharp(imagePath).extract({ left, top, width, height }).grayscale().normalize().toFormat('png').toBuffer()
+    return sharp(imagePath)
+      .extract({ left, top, width, height })
+      .grayscale()
+      .normalize()
+      .toFormat('png')
+      .toBuffer()
   }
 
   private takeFirstToken(s?: string | null) {
@@ -248,25 +262,29 @@ private extractActivAutos(fullText: string) {
 
     const placa = this.normalizePlate(
       this.takeFirstToken(pickLine(/PLACA/i)) ||
-      this.takeFirstToken(one.match(/\b([A-Z]{3}\d{2,3}[A-Z]?)\b/)?.[1])
+        this.takeFirstToken(one.match(/\b([A-Z]{3}\d{2,3}[A-Z]?)\b/)?.[1])
     )
-    const nit      = this.cleanNit(pickLine(/NIT/i))
-    const pin      = this.cleanPin(this.takeFirstToken(pickLine(/PIN/i)))
-    const marca    = this.cleanSimple(pickLine(/MARCA/i))
+    const nit = this.cleanNit(pickLine(/NIT/i))
+    const pin = this.cleanPin(this.takeFirstToken(pickLine(/PIN/i)))
+    const marca = this.cleanSimple(pickLine(/MARCA/i))
     const vendedor = this.cleanSimple(pickLine(/VEN(?:DEDOR)?/i))
 
     const fvfeRaw = pickLine(/(FV|FE)/i) || one
-    const fvfe    = fvfeRaw ? fvfeRaw.toUpperCase().match(/\b(FV|FE)[\s\-:]*[A-Z]*\s*[-:]?\s*(\d{2,6})\b/) : null
+    const fvfe = fvfeRaw
+      ? fvfeRaw.toUpperCase().match(/\b(FV|FE)[\s\-:]*[A-Z]*\s*[-:]?\s*(\d{2,6})\b/)
+      : null
     const prefijo = fvfe?.[1] || null
     const consecutivo = fvfe?.[2] || null
 
     // Línea que contenga FECHA y posiblemente HORA
     const rawFechaLine = (one.match(/(^|\n).*?FECHA[^\n]*$/im) || [])[0] || ''
     const fechaTok = this.pickDate(rawFechaLine) || this.pickDate(pickLine(/FECHA/i) || '')
-    const horaTok  = this.pickTime(rawFechaLine) || this.pickTime(pickLine(/HORA/i) || '')
+    const horaTok = this.pickTime(rawFechaLine) || this.pickTime(pickLine(/HORA/i) || '')
     const fechaHora = this.toLocalDatetimeISO(fechaTok, horaTok)
 
-    const mSub = one.match(/\bSUB\s*TOTAL[:\s]*\$?\s*([\d\.,]+)/i) || one.match(/\bSUBTOTAL[:\s]*\$?\s*([\d\.,]+)/i)
+    const mSub =
+      one.match(/\bSUB\s*TOTAL[:\s]*\$?\s*([\d\.,]+)/i) ||
+      one.match(/\bSUBTOTAL[:\s]*\$?\s*([\d\.,]+)/i)
     const mIva = one.match(/\bIVA(?:\s*\(\d+%?\))?[:\s]*\$?\s*([\d\.,]+)/i)
     const mTotFac = one.match(/\bTOTAL\s*FACTURA[:\s]*\$?\s*([\d\.,]+)/i)
     const mTot = one.match(/\bTOTAL[:\s]*\$?\s*([\d\.,]+)/i)
@@ -296,7 +314,10 @@ private extractActivAutos(fullText: string) {
     for (const w of sorted) {
       const cy = (w.bbox.y0 + w.bbox.y1) / 2
       const last = lines[lines.length - 1]
-      if (!last) { lines.push([w]); continue }
+      if (!last) {
+        lines.push([w])
+        continue
+      }
       const ly = (last[0].bbox.y0 + last[0].bbox.y1) / 2
       if (Math.abs(cy - ly) <= tol) last.push(w)
       else lines.push([w])
@@ -306,11 +327,12 @@ private extractActivAutos(fullText: string) {
   }
 
   private findRightROI(lines: OCRWord[][], keyRegex: RegExp) {
-    const labelRegex = /\b(PLACA|NIT|PIN|MARCA|VEN(?:DEDOR)?|FV|FE|SUB\s*TOTAL|SUBTOTAL|TOTAL\s*FACTURA|TOTAL|IVA|HORA|FECHA)\b/i
+    const labelRegex =
+      /\b(PLACA|NIT|PIN|MARCA|VEN(?:DEDOR)?|FV|FE|SUB\s*TOTAL|SUBTOTAL|TOTAL\s*FACTURA|TOTAL|IVA|HORA|FECHA)\b/i
     for (const line of lines) {
-      const lineText = line.map(w => w.text).join(' ')
+      const lineText = line.map((w) => w.text).join(' ')
       if (!keyRegex.test(lineText)) continue
-      const idx = line.findIndex(w => keyRegex.test(w.text))
+      const idx = line.findIndex((w) => keyRegex.test(w.text))
       if (idx === -1) continue
 
       let r = idx + 1
@@ -318,10 +340,10 @@ private extractActivAutos(fullText: string) {
       const toks = line.slice(idx + 1, r)
       if (!toks.length) continue
 
-      const x0 = Math.min(...toks.map(t => t.bbox.x0))
-      const x1 = Math.max(...toks.map(t => t.bbox.x1))
-      const y0 = Math.min(...toks.map(t => t.bbox.y0))
-      const y1 = Math.max(...toks.map(t => t.bbox.y1))
+      const x0 = Math.min(...toks.map((t) => t.bbox.x0))
+      const x1 = Math.max(...toks.map((t) => t.bbox.x1))
+      const y0 = Math.min(...toks.map((t) => t.bbox.y0))
+      const y1 = Math.max(...toks.map((t) => t.bbox.y1))
       if (x1 - x0 < 8 || y1 - y0 < 8) continue
       return { x0, y0, x1, y1 }
     }
@@ -331,9 +353,12 @@ private extractActivAutos(fullText: string) {
   // ================= NORMALIZADORES =================
   private cleanSimple(s?: string | null) {
     if (!s) return null
-    return s.replace(/\s{2,}/g, ' ')
-            .replace(/[^\wÁÉÍÓÚÑ°\s\-\.]/g, '')
-            .trim() || null
+    return (
+      s
+        .replace(/\s{2,}/g, ' ')
+        .replace(/[^\wÁÉÍÓÚÑ°\s\-\.]/g, '')
+        .trim() || null
+    )
   }
 
   private cleanNit(s?: string | null) {
@@ -356,7 +381,7 @@ private extractActivAutos(fullText: string) {
     if (s.length < 5 || s.length > 6) return s
 
     const toLetter: Record<string, string> = { '0': 'O', '1': 'I', '5': 'S', '8': 'B' }
-    const toDigit:  Record<string, string> = { O: '0', I: '1', S: '5', B: '8' }
+    const toDigit: Record<string, string> = { O: '0', I: '1', S: '5', B: '8' }
 
     // Primeros 3 usualmente letras
     for (let i = 0; i < Math.min(3, s.length); i++) {
@@ -377,8 +402,8 @@ private extractActivAutos(fullText: string) {
     // dd/mm/yyyy o dd-mm-yyyy (también con año 2 dígitos)
     const m1 = s.match(/(\b\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4}\b)/)
     if (m1) {
-      const d = m1[1].padStart(2,'0')
-      const m = m1[2].padStart(2,'0')
+      const d = m1[1].padStart(2, '0')
+      const m = m1[2].padStart(2, '0')
       const y = m1[3].length === 2 ? `20${m1[3]}` : m1[3]
       return `${d}/${m}/${y}`
     }
@@ -399,10 +424,12 @@ private extractActivAutos(fullText: string) {
     if (!fecha) return null
 
     // Soporta "dd/mm/yyyy" o "yyyy-mm-dd"
-    let yyyy = '', mm = '', dd = ''
+    let yyyy = ''
+    let mm = ''
+    let dd = ''
     const f = (fecha || '').trim()
     if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
-      [yyyy, mm, dd] = f.split('-')
+      ;[yyyy, mm, dd] = f.split('-')
     } else {
       const m = f.replace(/-/g, '/').match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
       if (!m) return null
@@ -430,17 +457,18 @@ private extractActivAutos(fullText: string) {
       if (!isPM && H === 12) H = 0
     }
     if (H < 0 || H > 23) return null
-    return `${String(H).padStart(2, '0')}:${String(mm || '00').padStart(2,'0')}:${String(ss || '00').padStart(2,'0')}`
+    return `${String(H).padStart(2, '0')}:${String(mm || '00').padStart(2, '0')}:${String(ss || '00').padStart(2, '0')}`
   }
 } // ← cierra la clase
 
 /* ===== Helpers fuera de la clase ===== */
 function norm(text: string) {
-  return text.replace(/\r/g, '')
-             .replace(/[·•]/g, '.')
-             .replace(/[“”]/g, '"')
-             .replace(/[ \t]+\n/g, '\n')
-             .replace(/\n[ \t]+/g, '\n')
+  return text
+    .replace(/\r/g, '')
+    .replace(/[·•]/g, '.')
+    .replace(/[“”]/g, '"')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
 }
 
 function matchAfterLabel(src: string, label: RegExp) {
@@ -451,5 +479,5 @@ function matchAfterLabel(src: string, label: RegExp) {
 }
 
 function moneyToInt(s?: string | null) {
-  return s ? Number((s.replace(/[^\d]/g, '') || '0')) : 0
+  return s ? Number(s.replace(/[^\d]/g, '') || '0') : 0
 }

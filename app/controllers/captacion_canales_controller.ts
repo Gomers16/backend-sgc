@@ -13,7 +13,7 @@ const createSchema = vine.compile(
       .regex(/^#([0-9A-Fa-f]{6})$/)
       .optional(),
     activo: vine.boolean().optional(),
-    orden: vine.number().unsigned().min(0).max(32767).optional(),
+    orden: vine.number().min(0).max(32767).optional(),
   })
 )
 
@@ -27,7 +27,7 @@ const updateSchema = vine.compile(
       .regex(/^#([0-9A-Fa-f]{6})$/)
       .optional(),
     activo: vine.boolean().optional(),
-    orden: vine.number().unsigned().min(0).max(32767).optional(),
+    orden: vine.number().min(0).max(32767).optional(),
   })
 )
 

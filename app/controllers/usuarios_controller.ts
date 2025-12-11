@@ -369,7 +369,9 @@ export default class UsuariosController {
       })
     }
     if (!foto.tmpPath) {
-      return response.internalServerError({ message: 'No se pudo leer la ruta temporal del archivo.' })
+      return response.internalServerError({
+        message: 'No se pudo leer la ruta temporal del archivo.',
+      })
     }
 
     const uploadDir = 'uploads/profile_pictures'

@@ -9,7 +9,15 @@ export default class CaptacionUtilController {
    */
   public async crearAutoPorConvenio({ request, response }: HttpContext) {
     const { placa, telefono, vehiculoId, clienteId, convenioId, prospectoId, agenteId } =
-      request.only(['placa','telefono','vehiculoId','clienteId','convenioId','prospectoId','agenteId'])
+      request.only([
+        'placa',
+        'telefono',
+        'vehiculoId',
+        'clienteId',
+        'convenioId',
+        'prospectoId',
+        'agenteId',
+      ])
 
     if (!convenioId || !prospectoId) {
       return response.badRequest({ message: 'convenioId y prospectoId son requeridos' })
