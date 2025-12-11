@@ -1258,7 +1258,9 @@ export default class ContratosController {
       const nuevoEstado: Estado =
         estadoRaw === 'activo' ? 'activo' : estadoRaw === 'inactivo' ? 'inactivo' : (null as any)
       if (!nuevoEstado)
-        return response.badRequest({ message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'." })
+        return response.badRequest({
+          message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'.",
+        })
 
       const oldEstado = contrato.estado
 
@@ -1360,9 +1362,13 @@ export default class ContratosController {
       const soloEstado =
         keys.length > 0 &&
         keys.every((k) =>
-          ['estado', 'motivoFinalizacion', 'fechaTerminacion', 'fechaFin', 'fechaFinalizacion'].includes(
-            k
-          )
+          [
+            'estado',
+            'motivoFinalizacion',
+            'fechaTerminacion',
+            'fechaFin',
+            'fechaFinalizacion',
+          ].includes(k)
         )
 
       if (soloEstado) {
@@ -1539,18 +1545,12 @@ export default class ContratosController {
 
       // fechas
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
-        contrato.fechaInicio = DateTime.fromFormat(
-          payload.fechaInicio,
-          'yyyy-MM-dd'
-        )
+        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd')
           .startOf('day')
           .toUTC()
       }
       if (aliasFechaTerm !== undefined && typeof aliasFechaTerm === 'string') {
-        contrato.fechaTerminacion = DateTime.fromFormat(
-          aliasFechaTerm,
-          'yyyy-MM-dd'
-        )
+        contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd')
           .startOf('day')
           .toUTC()
       }
@@ -1558,7 +1558,7 @@ export default class ContratosController {
       const fechaTermDef =
         aliasFechaTerm !== undefined
           ? this.toDateTime(aliasFechaTerm)
-          : contrato.fechaTerminacion ?? null
+          : (contrato.fechaTerminacion ?? null)
 
       const requiresEnd =
         tipoEff === 'prestacion' ||
@@ -1590,14 +1590,10 @@ export default class ContratosController {
       if (reqQuiereEliminarRec && contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
-          if (e.code !== 'ENOENT')
-            console.error('No se pudo eliminar recomendación (update):', e)
+          if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación (update):', e)
         }
         contrato.rutaArchivoRecomendacionMedica = null
         ;(contrato as any).tieneRecomendacionesMedicas = false
@@ -1784,8 +1780,7 @@ export default class ContratosController {
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
-      const estadoSeVolvioInactivo =
-        oldEstado !== contrato.estado && contrato.estado === 'inactivo'
+      const estadoSeVolvioInactivo = oldEstado !== contrato.estado && contrato.estado === 'inactivo'
 
       for (const campo of camposTrackeables) {
         if (
@@ -2247,10 +2242,7 @@ export default class ContratosController {
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
           if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación anterior:', e)
