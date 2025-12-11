@@ -1364,6 +1364,18 @@ router
       roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
     })
   ])
+  router
+  .get('/facturacion/tickets/:id/imagen', async (ctx) => {
+    const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+    return new Facturacion().servirImagen(ctx)
+  })
+  .where('id', /^[0-9]+$/)
+  .use([
+    middleware.auth(),
+    middleware.checkRole({
+      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+    })
+  ])
 
 /* ============================ CERTIFICACIONES ====================== */
 

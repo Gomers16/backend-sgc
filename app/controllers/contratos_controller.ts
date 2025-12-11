@@ -1161,7 +1161,12 @@ export default class ContratosController {
         { client: trx }
       )
 
-      await this.logContratoFisicoCambio(contrato, null, { nombre: fileName, url: publicUrl }, actorId)
+      await this.logContratoFisicoCambio(
+        contrato,
+        null,
+        { nombre: fileName, url: publicUrl },
+        actorId
+      )
       await this.logContratoFisicoObservacion(contrato, String(observacionArchivo ?? ''), actorId)
 
       // Recomendación médica opcional
@@ -1286,7 +1291,9 @@ export default class ContratosController {
         }
         if (terminoEff && !allowedByTipo[tipoEff].includes(terminoEff)) {
           await trx.rollback()
-          return response.badRequest({ message: `'terminoContrato' inválido para tipo '${tipoEff}'.` })
+          return response.badRequest({
+            message: `'terminoContrato' inválido para tipo '${tipoEff}'.`,
+          })
         }
 
         const requiereFin =
@@ -1616,23 +1623,20 @@ export default class ContratosController {
       const ansSent = Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
 
       const salarioFueEnviado = sbSent || bsSent || atSent || ansSent
-      let nuevoSalario:
-        | {
-            salarioBasico: number
-            bonoSalarial: number
-            auxilioTransporte: number
-            auxilioNoSalarial: number
-          }
-        | null = null
+      let nuevoSalario: {
+        salarioBasico: number
+        bonoSalarial: number
+        auxilioTransporte: number
+        auxilioNoSalarial: number
+      } | null = null
 
       if (salarioFueEnviado) {
-        const currentBase =
-          currentSalario || {
-            salarioBasico: contrato.salario ?? 0,
-            bonoSalarial: 0,
-            auxilioTransporte: 0,
-            auxilioNoSalarial: 0,
-          }
+        const currentBase = currentSalario || {
+          salarioBasico: contrato.salario ?? 0,
+          bonoSalarial: 0,
+          auxilioTransporte: 0,
+          auxilioNoSalarial: 0,
+        }
         const toNumberOr = (v: any, fallback: number) => {
           if (v === undefined || v === '' || v === null) return fallback
           const n = Number(v)
@@ -2303,14 +2307,10 @@ export default class ContratosController {
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
-          if (e.code !== 'ENOENT')
-            console.error('No se pudo eliminar archivo de recomendación:', e)
+          if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo de recomendación:', e)
         }
       }
 
