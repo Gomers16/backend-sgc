@@ -231,157 +231,167 @@ public async index({ request, response }: HttpContext) {
     perPage: meta.perPage,
   })
 }
-  /**
-   * GET /api/comisiones/metas-mensuales
-   * Resumen mensual por asesor:
-   *  - rtm_motos
-   *  - rtm_vehiculos
-   *  - meta_global_rtm
-   *  - porcentaje_comision_meta
-   *
-   * (Este endpoint es para la vista de resumen, NO para editar metas)
-   */
-  public async metasMensuales({ request, response }: HttpContext) {
-    const mes = request.input('mes') as string | undefined // "YYYY-MM"
-    const asesorIdParam = request.input('asesorId') as number | string | undefined
+ /**
+ * GET /api/comisiones/metas-mensuales
+ * Resumen mensual por asesor:
+ *  - rtm_motos
+ *  - rtm_vehiculos
+ *  - meta_global_rtm
+ *  - porcentaje_comision_meta
+ *
+ * 🔥 CORRECCIÓN: Solo muestra metas para asesores con configuración específica
+ * YA NO usa una "meta global" como fallback para todos los asesores
+ */
+public async metasMensuales({ request, response }: HttpContext) {
+  const mes = request.input('mes') as string | undefined // "YYYY-MM"
+  const asesorIdParam = request.input('asesorId') as number | string | undefined
 
-    // Mes a usar (por defecto, mes actual)
-    let year: number
-    let month: number
+  // Mes a usar (por defecto, mes actual)
+  let year: number
+  let month: number
 
-    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
-      const [y, m] = mes.split('-').map(Number)
-      year = y
-      month = m
-    } else {
-      const now = DateTime.now()
-      year = now.year
-      month = now.month
-    }
+  if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+    const [y, m] = mes.split('-').map(Number)
+    year = y
+    month = m
+  } else {
+    const now = DateTime.now()
+    year = now.year
+    month = now.month
+  }
 
-    const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
-    const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
+  const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
+  const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
 
-    const asesorId =
-      asesorIdParam !== undefined && asesorIdParam !== null ? Number(asesorIdParam) : undefined
+  const asesorId =
+    asesorIdParam !== undefined && asesorIdParam !== null ? Number(asesorIdParam) : undefined
 
-    // 1️⃣ Agregamos RTM por asesor (motos / vehículos)
-    const baseQ = Database.from('comisiones')
-      .where((q) => {
-        q.where('es_config', false).orWhereNull('es_config')
-      })
-      .andWhere('tipo_servicio', 'RTM')
-      .whereIn('estado', ['PENDIENTE', 'APROBADA', 'PAGADA'])
-      .whereNotNull('asesor_id')
+  // 1️⃣ Agregamos RTM por asesor (motos / vehículos)
+  const baseQ = Database.from('comisiones')
+    .where((q) => {
+      q.where('es_config', false).orWhereNull('es_config')
+    })
+    .andWhere('tipo_servicio', 'RTM')
+    .whereIn('estado', ['PENDIENTE', 'APROBADA', 'PAGADA'])
+    .whereNotNull('asesor_id')
 
-    if (start && end) {
-      baseQ.whereBetween('fecha_calculo', [start, end])
-    }
+  if (start && end) {
+    baseQ.whereBetween('fecha_calculo', [start, end])
+  }
 
-    if (asesorId) {
-      baseQ.andWhere('asesor_id', asesorId)
-    }
+  if (asesorId) {
+    baseQ.andWhere('asesor_id', asesorId)
+  }
 
-    const agregados = await baseQ
-      .select('asesor_id')
-      .select(Database.raw("SUM(CASE WHEN tipo_vehiculo = 'MOTO' THEN 1 ELSE 0 END) AS rtm_motos"))
-      .select(
-        Database.raw(
-          "SUM(CASE WHEN tipo_vehiculo = 'VEHICULO' OR tipo_vehiculo IS NULL THEN 1 ELSE 0 END) AS rtm_vehiculos"
-        )
+  const agregados = await baseQ
+    .select('asesor_id')
+    .select(Database.raw("SUM(CASE WHEN tipo_vehiculo = 'MOTO' THEN 1 ELSE 0 END) AS rtm_motos"))
+    .select(
+      Database.raw(
+        "SUM(CASE WHEN tipo_vehiculo = 'VEHICULO' OR tipo_vehiculo IS NULL THEN 1 ELSE 0 END) AS rtm_vehiculos"
       )
-      .groupBy('asesor_id')
+    )
+    .groupBy('asesor_id')
 
-    const countsByAsesor = new Map<number, { rtm_motos: number; rtm_vehiculos: number }>()
-    for (const row of agregados as any[]) {
-      const id = Number(row.asesor_id)
-      if (!Number.isFinite(id)) continue
-      countsByAsesor.set(id, {
-        rtm_motos: Number(row.rtm_motos || 0),
-        rtm_vehiculos: Number(row.rtm_vehiculos || 0),
-      })
+  const countsByAsesor = new Map<number, { rtm_motos: number; rtm_vehiculos: number }>()
+  for (const row of agregados as any[]) {
+    const id = Number(row.asesor_id)
+    if (!Number.isFinite(id)) continue
+    countsByAsesor.set(id, {
+      rtm_motos: Number(row.rtm_motos || 0),
+      rtm_vehiculos: Number(row.rtm_vehiculos || 0),
+    })
+  }
+
+  // 2️⃣ Configs de meta (es_config = true, meta_rtm > 0)
+  const cfgRows = await Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
+
+  // 🔥 CAMBIO: Ya NO usamos cfgGlobal - solo metas específicas por asesor
+  const cfgByAsesor = new Map<number, Comision>()
+
+  for (const c of cfgRows) {
+    // Solo guardamos metas con asesor_id específico
+    if (c.asesorId !== null) {
+      cfgByAsesor.set(c.asesorId, c)
     }
+    // Si asesor_id es null, la ignoramos (no aplica a todos)
+  }
 
-    // 2️⃣ Configs de meta (es_config = true, meta_rtm > 0)
-    const cfgRows = await Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
+  // 🎯 CORRECCIÓN: Solo mostrar asesores que tienen meta ESPECÍFICA configurada
+  // Si se solicita un asesor específico, incluirlo aunque no tenga meta
+  const allIds = new Set<number>()
 
-    let cfgGlobal: Comision | null = null
-    const cfgByAsesor = new Map<number, Comision>()
-
-    for (const c of cfgRows) {
-      if (c.asesorId === null) {
-        if (!cfgGlobal) cfgGlobal = c
-      } else {
-        cfgByAsesor.set(c.asesorId, c)
-      }
-    }
-
-    // Set de asesores a mostrar:
-    //  - los que tienen RTM
-    //  - los que tienen una meta específica
-    const allIds = new Set<number>()
+  if (asesorId) {
+    // Si se pide un asesor específico, incluirlo siempre
+    allIds.add(asesorId)
+  } else {
+    // Si no, solo mostrar asesores con RTM o con meta específica
     countsByAsesor.forEach((_v, id) => allIds.add(id))
     cfgByAsesor.forEach((_v, id) => allIds.add(id))
-
-    const asesorIds = Array.from(allIds)
-    const asesoresMap = new Map<number, { nombre: string; tipo: string | null }>()
-
-    if (asesorIds.length > 0) {
-      const asesores = await AgenteCaptacion.query().whereIn('id', asesorIds)
-      for (const a of asesores) {
-        asesoresMap.set(a.id, {
-          nombre: a.nombre,
-          tipo: (a as any).tipo ?? null,
-        })
-      }
-    }
-
-    const rows = asesorIds.map((id) => {
-      const counts = countsByAsesor.get(id) ?? { rtm_motos: 0, rtm_vehiculos: 0 }
-      const cfg = cfgByAsesor.get(id) ?? cfgGlobal
-
-      const metaRtm = cfg ? (cfg.metaRtm ?? 0) : 0
-      const pctMeta = cfg ? toNumber(cfg.porcentajeComisionMeta ?? 0) : 0
-
-      // 💵 Valores unitarios de referencia para RTM
-      const valorRtmMoto = cfg ? (cfg.valorRtmMoto ?? 0) : 0
-      const valorRtmVehiculo = cfg ? (cfg.valorRtmVehiculo ?? 0) : 0
-
-      // 📈 Facturación real estimada según las unidades y los valores de RTM
-      const totalFacturacionMotos = counts.rtm_motos * valorRtmMoto
-      const totalFacturacionVehiculos = counts.rtm_vehiculos * valorRtmVehiculo
-      const totalFacturacionGlobal = totalFacturacionMotos + totalFacturacionVehiculos
-
-      const info = asesoresMap.get(id)
-
-      return {
-        asesor_id: id,
-        asesor_nombre: info?.nombre ?? '—',
-        asesor_tipo: info?.tipo ?? null,
-
-        // Cantidades
-        rtm_motos: counts.rtm_motos,
-        rtm_vehiculos: counts.rtm_vehiculos,
-        total_rtm_motos: counts.rtm_motos,
-        total_rtm_vehiculos: counts.rtm_vehiculos,
-
-        // Meta y % meta (en cantidad)
-        meta_global_rtm: metaRtm,
-        porcentaje_comision_meta: pctMeta,
-
-        // Valores unitarios configurados para RTM
-        valor_rtm_moto: valorRtmMoto,
-        valor_rtm_vehiculo: valorRtmVehiculo,
-
-        // Facturación calculada
-        total_facturacion_motos: totalFacturacionMotos,
-        total_facturacion_vehiculos: totalFacturacionVehiculos,
-        total_facturacion_global: totalFacturacionGlobal,
-      }
-    })
-
-    return response.ok({ data: rows })
   }
+
+  const asesorIds = Array.from(allIds)
+  const asesoresMap = new Map<number, { nombre: string; tipo: string | null }>()
+
+  if (asesorIds.length > 0) {
+    const asesores = await AgenteCaptacion.query().whereIn('id', asesorIds)
+    for (const a of asesores) {
+      asesoresMap.set(a.id, {
+        nombre: a.nombre,
+        tipo: (a as any).tipo ?? null,
+      })
+    }
+  }
+
+  const rows = asesorIds.map((id) => {
+    const counts = countsByAsesor.get(id) ?? { rtm_motos: 0, rtm_vehiculos: 0 }
+
+    // 🔥 CORRECCIÓN: Solo usar meta específica del asesor, NO global
+    const cfg = cfgByAsesor.get(id) ?? null  // 👈 YA NO USA cfgGlobal
+
+    const metaRtm = cfg ? (cfg.metaRtm ?? 0) : 0
+    const pctMeta = cfg ? toNumber(cfg.porcentajeComisionMeta ?? 0) : 0
+
+    // 💵 Valores unitarios de referencia para RTM
+    // Si no hay cfg específico, usar valores por defecto
+    const valorRtmMoto = cfg ? (cfg.valorRtmMoto ?? 126100) : 126100
+    const valorRtmVehiculo = cfg ? (cfg.valorRtmVehiculo ?? 208738) : 208738
+
+    // 📈 Facturación real estimada según las unidades y los valores de RTM
+    const totalFacturacionMotos = counts.rtm_motos * valorRtmMoto
+    const totalFacturacionVehiculos = counts.rtm_vehiculos * valorRtmVehiculo
+    const totalFacturacionGlobal = totalFacturacionMotos + totalFacturacionVehiculos
+
+    const info = asesoresMap.get(id)
+
+    return {
+      asesor_id: id,
+      asesor_nombre: info?.nombre ?? '—',
+      asesor_tipo: info?.tipo ?? null,
+
+      // Cantidades
+      rtm_motos: counts.rtm_motos,
+      rtm_vehiculos: counts.rtm_vehiculos,
+      total_rtm_motos: counts.rtm_motos,
+      total_rtm_vehiculos: counts.rtm_vehiculos,
+
+      // Meta y % meta (en cantidad) - será 0 si no tiene cfg
+      meta_global_rtm: metaRtm,
+      porcentaje_comision_meta: pctMeta,
+
+      // Valores unitarios configurados para RTM
+      valor_rtm_moto: valorRtmMoto,
+      valor_rtm_vehiculo: valorRtmVehiculo,
+
+      // Facturación calculada
+      total_facturacion_motos: totalFacturacionMotos,
+      total_facturacion_vehiculos: totalFacturacionVehiculos,
+      total_facturacion_global: totalFacturacionGlobal,
+    }
+  })
+
+  return response.ok({ data: rows })
+}
 
   // app/controllers/comisiones_controller.ts
 // REEMPLAZA el método show() (aproximadamente línea 210-250)
