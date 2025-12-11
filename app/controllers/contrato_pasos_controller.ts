@@ -85,16 +85,14 @@ export default class ContratoPasosController {
       }
 
       const pasos = await query
-        .orderByRaw(
-          `
+        .orderByRaw(`
           CASE fase
             WHEN 'inicio' THEN 1
             WHEN 'desarrollo' THEN 2
             WHEN 'fin' THEN 3
             ELSE 4
           END
-        `
-        )
+        `)
         .orderBy('orden', 'asc')
         .orderBy('id', 'asc')
         .preload('usuario', (q) => q.select(USER_SELECT)) // ✅ incluir usuario

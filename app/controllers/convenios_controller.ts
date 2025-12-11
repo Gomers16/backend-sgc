@@ -66,30 +66,30 @@ export default class ConveniosController {
     if (!conv) return response.notFound({ message: 'Convenio no encontrado' })
     return conv
   }
-  // AGREGAR ESTE MÉTODO después del método show() en convenios_controller.ts
-  // (aproximadamente después de la línea 70)
+// AGREGAR ESTE MÉTODO después del método show() en convenios_controller.ts
+// (aproximadamente después de la línea 70)
 
-  /**
-   * 🆕 GET /convenios/buscar-por-nombre?nombre=Parqueadero Mi Casa
-   * Busca UN convenio por nombre EXACTO (case-insensitive)
-   */
-  public async buscarPorNombre({ request, response }: HttpContext) {
-    const nombre = String(request.input('nombre') || '').trim()
+/**
+ * 🆕 GET /convenios/buscar-por-nombre?nombre=Parqueadero Mi Casa
+ * Busca UN convenio por nombre EXACTO (case-insensitive)
+ */
+public async buscarPorNombre({ request, response }: HttpContext) {
+  const nombre = String(request.input('nombre') || '').trim()
 
-    if (!nombre) {
-      return response.badRequest({ message: 'Parámetro "nombre" requerido' })
-    }
-
-    const convenio = await Convenio.query()
-      .whereRaw('UPPER(TRIM(nombre)) = ?', [nombre.toUpperCase()])
-      .first()
-
-    if (!convenio) {
-      return response.notFound({ message: 'Convenio no encontrado' })
-    }
-
-    return response.ok(convenio)
+  if (!nombre) {
+    return response.badRequest({ message: 'Parámetro "nombre" requerido' })
   }
+
+  const convenio = await Convenio.query()
+    .whereRaw('UPPER(TRIM(nombre)) = ?', [nombre.toUpperCase()])
+    .first()
+
+  if (!convenio) {
+    return response.notFound({ message: 'Convenio no encontrado' })
+  }
+
+  return response.ok(convenio)
+}
   /** POST /convenios */
   public async store({ request, response }: HttpContext) {
     const {

@@ -17,7 +17,7 @@ export default class ContratoCambiosController {
     const { campo, oldValue, newValue } = request.only(['campo', 'oldValue', 'newValue'])
 
     const cambio = await ContratoCambio.create({
-      contratoId: Number(params.contratoId),
+      contratoId: Number(params.contratoId),z
       usuarioId: actorId,
       campo,
       oldValue: oldValue ?? null,
