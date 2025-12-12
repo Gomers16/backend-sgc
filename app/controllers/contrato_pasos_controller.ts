@@ -12,7 +12,7 @@ type FasePaso = 'inicio' | 'desarrollo' | 'fin'
 const ALLOWED_EXTS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'] as const
 const MAX_FILE_SIZE = '10mb' as const
 
-const USER_SELECT = ['id', 'nombres', 'apellidos', 'correo'] as const
+const USER_SELECT = ['id', 'nombres', 'apellidos', 'correo']
 
 function toBoolean(val: unknown): boolean | undefined {
   if (val === undefined || val === null || val === '') return undefined
@@ -44,7 +44,7 @@ function resolveActorId(ctx: HttpContext): number | null {
 
   // Prioridad: auth.user.id → body.actorId → header x-actor-id
   const fromAuth = (auth as any)?.user?.id
-  if (fromAuth != null) return Number(fromAuth)
+  if (fromAuth !== null) return Number(fromAuth)
 
   const fromBody = toIntOrNull(request.input('actorId'))
   if (fromBody) return fromBody
@@ -85,14 +85,16 @@ export default class ContratoPasosController {
       }
 
       const pasos = await query
-        .orderByRaw(`
+        .orderByRaw(
+          `
           CASE fase
             WHEN 'inicio' THEN 1
             WHEN 'desarrollo' THEN 2
             WHEN 'fin' THEN 3
             ELSE 4
           END
-        `)
+        `
+        )
         .orderBy('orden', 'asc')
         .orderBy('id', 'asc')
         .preload('usuario', (q) => q.select(USER_SELECT)) // ✅ incluir usuario
@@ -176,7 +178,7 @@ export default class ContratoPasosController {
     try {
       // Si no llega 'orden', asignar el siguiente dentro de esa fase
       let ordenFinal = orden
-      if (ordenFinal == null) {
+      if (ordenFinal === null || ordenFinal === undefined) {
         const last = await ContratoPaso.query()
           .where('contrato_id', contratoId)
           .where('fase', fase)

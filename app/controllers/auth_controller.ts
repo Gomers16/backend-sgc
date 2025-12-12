@@ -44,7 +44,7 @@ export default class AuthController {
       }
 
       return response.internalServerError({
-        message: 'Error interno del servidor'
+        message: 'Error interno del servidor',
       })
     }
   }

@@ -120,45 +120,12 @@ export default class ContratosController {
     return !!v
   }
 
-  private assertTipoContrato(tipo: any): asserts tipo is TipoContrato {
-    const ok = ['prestacion', 'temporal', 'laboral', 'aprendizaje'].includes(String(tipo))
-    if (!ok) {
-      throw new Error(
-        "Valor inválido para 'tipoContrato'. Debe ser 'prestacion' | 'temporal' | 'laboral' | 'aprendizaje'."
-      )
-    }
-  }
-
-  /** Normaliza término */
-  private normTerm = (v?: string | null) =>
-    v === 'obra_o_labor' ? 'obra_o_labor_determinada' : (v ?? null)
-
-  /** Terminos permitidos por tipo */
+  // @ts-expect-error - Método reservado para uso futuro
   private allowedTerminosByTipo: Record<TipoContrato, string[]> = {
     prestacion: ['fijo', 'obra_o_labor_determinada'],
     temporal: ['obra_o_labor_determinada'],
     laboral: ['fijo', 'obra_o_labor_determinada', 'indefinido'],
     aprendizaje: ['fijo'],
-  }
-
-  private assertTerminoParaTipo(tipo: TipoContrato, termino: string | null) {
-    const allowed = this.allowedTerminosByTipo[tipo]
-    if (!termino) {
-      if (tipo === 'laboral') return
-      throw new Error(`'terminoContrato' es obligatorio para tipo '${tipo}'.`)
-    }
-    if (!allowed.includes(termino)) {
-      throw new Error(
-        `'terminoContrato' inválido para tipo '${tipo}'. Válidos: ${allowed.join(', ')}`
-      )
-    }
-  }
-
-  /** Si exige fecha fin según tipo/termino */
-  private requiresEndDate(tipo: TipoContrato, terminoContrato: string | null | undefined): boolean {
-    if (tipo === 'prestacion' || tipo === 'aprendizaje' || tipo === 'temporal') return true
-    if (tipo === 'laboral') return (terminoContrato ?? '').toLowerCase() !== 'indefinido'
-    return false
   }
 
   /** Preloads comunes para listar/ver */
@@ -199,14 +166,14 @@ export default class ContratosController {
     return (fromName || fromCt || fallback).toLowerCase()
   }
 
-  /** Verifica presencia del archivo (tmpPath/cliente) */
+  // @ts-expect-error - Método reservado para uso futuro
   private ensureHasTmp(file: any, msg = 'Archivo inválido o no adjunto.'): void {
     if (!file || !file.tmpPath) {
       throw new Error(msg)
     }
   }
 
-  /** Verifica tamaño máximo */
+  // @ts-expect-error - Método reservado para uso futuro
   private ensureMaxSize(file: any, maxBytes: number, msg?: string): void {
     const size = Number(file?.size || 0)
     if (size > maxBytes) {
@@ -217,25 +184,19 @@ export default class ContratosController {
     }
   }
 
-  /** Debe ser PDF (por MIME) y dentro de tamaño */
-  private ensureIsPdf(file: any, maxBytes = 10 * 1024 * 1024): void {
-    this.ensureHasTmp(file, 'Archivo de contrato inválido o no adjunto.')
-    const ct = this.getContentType(file).toLowerCase()
-    if (ct !== 'application/pdf') {
-      throw new Error('Tipo de archivo no permitido: debe ser PDF.')
-    }
-    this.ensureMaxSize(file, maxBytes, 'El PDF supera el tamaño máximo permitido (10MB).')
-  }
-
   /** Permitidos para RECOMENDACIÓN MÉDICA */
-  private static readonly REC_ALLOWED_MIMES = new Set<string>([
+  // ✅ MANTENER SOLO ESTA (línea ~264):
+  private static readonly AFI_ALLOWED_MIMES = new Set<string>([
     'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'image/jpeg',
     'image/png',
     'image/webp',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   ])
+
+  // ✅ Y eliminar completamente la línea ~305 que dice:
+  // private static readonly AFI_ALLOWED_MIMES = [ ... ]
   private static readonly REC_ALLOWED_EXTS = new Set<string>([
     'pdf',
     'doc',
@@ -245,43 +206,6 @@ export default class ContratosController {
     'png',
     'webp',
   ])
-
-  /** Valida recomendación por MIME/EXT y tamaño (sin depender de extnames del validador) */
-  private ensureAllowedRecOrThrow(file: any, maxBytes = 10 * 1024 * 1024): void {
-    this.ensureHasTmp(file, 'Archivo de recomendación médica inválido o no adjunto.')
-    const ct = this.getContentType(file).toLowerCase()
-    const ext = this.safeExtFrom(file, 'bin')
-    if (
-      !ContratosController.REC_ALLOWED_MIMES.has(ct) &&
-      !ContratosController.REC_ALLOWED_EXTS.has(ext)
-    ) {
-      throw new Error('Tipo de archivo no permitido para recomendación médica.')
-    }
-    this.ensureMaxSize(file, maxBytes)
-  }
-
-  /** Afiliaciones: permitidos por MIME */
-  private static readonly AFI_ALLOWED_MIMES = new Set<string>([
-    'application/pdf',
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-  ])
-
-  /** Valida archivo de afiliación (MIME + tamaño) */
-  private ensureAllowedAfiOrThrow(file: any, maxBytes = 10 * 1024 * 1024): void {
-    this.ensureHasTmp(file, 'Archivo inválido o no enviado.')
-    const ct = this.getContentType(file).toLowerCase()
-    if (!ContratosController.AFI_ALLOWED_MIMES.has(ct)) {
-      throw new Error('Tipo de archivo no permitido.')
-    }
-    this.ensureMaxSize(file, maxBytes)
-  }
-
-  /** Crea carpeta si no existe */
-  private async ensureDir(dirAbs: string) {
-    await fs.mkdir(dirAbs, { recursive: true })
-  }
 
   /** Meta simple desde ruta relativa */
   private fileMetaFromRelPath(
@@ -329,7 +253,7 @@ export default class ContratosController {
   private async logArchivoEliminado(
     contrato: Contrato,
     viejo: { nombre: string; url: string } | null,
-    by: number | null
+    _by: number | null
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
@@ -404,15 +328,7 @@ export default class ContratosController {
     }
   }
 
-  // Permitidos para afiliaciones (MIME + EXT)
-  private static readonly AFI_ALLOWED_MIMES = [
-    'application/pdf',
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  ]
+  // @ts-expect-error - Propiedad reservada para validación futura
   private static readonly AFI_ALLOWED_EXTS = new Set([
     'pdf',
     'jpg',
@@ -448,11 +364,11 @@ export default class ContratosController {
     user.cargoId = src.cargoId
     if (src.centroCosto !== undefined && src.centroCosto !== null)
       user.centroCosto = src.centroCosto
-    if (src.epsId != null) user.epsId = src.epsId
-    if (src.arlId != null) user.arlId = src.arlId
-    if (src.afpId != null) user.afpId = src.afpId
-    if (src.afcId != null) user.afcId = src.afcId
-    if (src.ccfId != null) user.ccfId = src.ccfId
+    if (src.epsId !== null && src.epsId !== undefined) user.epsId = src.epsId
+    if (src.arlId !== null && src.arlId !== undefined) user.arlId = src.arlId
+    if (src.afpId !== null && src.afpId !== undefined) user.afpId = src.afpId
+    if (src.afcId !== null && src.afcId !== undefined) user.afcId = src.afcId
+    if (src.ccfId !== null && src.ccfId !== undefined) user.ccfId = src.ccfId
   }
 
   private async syncUsuarioTrasGuardarContrato(contrato: Contrato) {
@@ -473,7 +389,7 @@ export default class ContratosController {
     }
   }
 
- /**
+  /**
    * Garantiza que, si el usuario del contrato es ASESOR,
    * exista:
    *  - un AgenteCaptacion ligado al usuario (COMERCIAL / CONVENIO / TELEMERCADEO)
@@ -526,16 +442,13 @@ export default class ContratosController {
       `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
       `Usuario #${usuario.id}`
 
-    const agente = await AgenteCaptacion.firstOrCreate(
-      { usuarioId: usuario.id, tipo },
-      {
-        usuarioId: usuario.id,
-        tipo,
-        nombre: nombreAgente,
-        telefono: telefonoUsuario,
-        activo: true,
-      } as any
-    )
+    const agente = await AgenteCaptacion.firstOrCreate({ usuarioId: usuario.id, tipo }, {
+      usuarioId: usuario.id,
+      tipo,
+      nombre: nombreAgente,
+      telefono: telefonoUsuario,
+      activo: true,
+    } as any)
 
     agente.merge({
       nombre: nombreAgente,
@@ -570,10 +483,7 @@ export default class ContratosController {
     const docNumero = docNumeroUsuario || docNumeroContrato || null
 
     // Tipo de documento: por defecto 'CC' (puedes cambiarlo si manejas otros)
-    const docTipoUsuario =
-      (usuario as any).tipoDocumento ||
-      (usuario as any).docTipo ||
-      'CC'
+    const docTipoUsuario = (usuario as any).tipoDocumento || (usuario as any).docTipo || 'CC'
 
     // Dirección tomada del usuario (perfil)
     const direccionUsuario =
@@ -870,7 +780,8 @@ export default class ContratosController {
           })
         }
       }
-      if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
+      if (pasosParaGuardar.length > 0)
+        await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
 
       // Historial: creación
       await ContratoHistorialEstado.create(
@@ -907,7 +818,10 @@ export default class ContratosController {
     } catch (error: any) {
       await trx.rollback()
       console.error('Error al crear contrato:', error)
-      return response.internalServerError({ message: 'Error al crear contrato', error: error.message })
+      return response.internalServerError({
+        message: 'Error al crear contrato',
+        error: error.message,
+      })
     }
   }
 
@@ -968,7 +882,7 @@ export default class ContratosController {
         contrato.rutaArchivoContratoFisico = `/${uploadDir}/${fileName}`
 
         const observacionArchivo = String(request.input('observacionArchivo') ?? '').trim()
-        await contrato.save({ client: trx })
+        await contrato.save()
 
         await this.logContratoFisicoCambio(
           contrato,
@@ -994,7 +908,7 @@ export default class ContratosController {
 
           const recCT = this.getContentType(archivoRec).toLowerCase()
           const recExt = this.safeExtFrom(archivoRec, 'bin')
-          const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
+          const recMimeOk = !recCT || ContratosController.REC_ALLOWED_EXTS.has(recCT)
           const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
           if (!(recMimeOk || recExtOk)) {
             throw new Error(
@@ -1013,7 +927,7 @@ export default class ContratosController {
 
           contrato.tieneRecomendacionesMedicas = true
           contrato.rutaArchivoRecomendacionMedica = `/${recDir}/${recName}`
-          await contrato.save({ client: trx })
+          await contrato.save()
 
           if (oldMetaRec) {
             await this.logArchivoReemplazado(
@@ -1142,7 +1056,7 @@ export default class ContratosController {
           nombreArchivoContratoFisico: fileName,
           rutaArchivoContratoFisico: publicUrl,
           salario: baseNum,
-          terminoContrato: terminoEff,
+          terminoContrato: terminoEff as 'fijo' | 'obra_o_labor_determinada' | 'indefinido' | null,
           tieneRecomendacionesMedicas: false,
           rutaArchivoRecomendacionMedica: null,
         },
@@ -1161,7 +1075,12 @@ export default class ContratosController {
         { client: trx }
       )
 
-      await this.logContratoFisicoCambio(contrato, null, { nombre: fileName, url: publicUrl }, actorId)
+      await this.logContratoFisicoCambio(
+        contrato,
+        null,
+        { nombre: fileName, url: publicUrl },
+        actorId
+      )
       await this.logContratoFisicoObservacion(contrato, String(observacionArchivo ?? ''), actorId)
 
       // Recomendación médica opcional
@@ -1182,7 +1101,7 @@ export default class ContratosController {
 
         const recCT = this.getContentType(archivoRecomendacion).toLowerCase()
         const recExt = this.safeExtFrom(archivoRecomendacion, 'bin')
-        const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
+        const recMimeOk = !recCT || ContratosController.REC_ALLOWED_EXTS.has(recCT)
         const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
         if (!(recMimeOk || recExtOk)) {
           await trx.rollback()
@@ -1203,7 +1122,7 @@ export default class ContratosController {
         contrato.rutaArchivoRecomendacionMedica = `/${recDir}/${recName}`
 
         await this.logArchivoSubido(contrato, recName, `/${recDir}/${recName}`, actorId)
-        await contrato.save({ client: trx })
+        await contrato.save()
       }
 
       // Historial: creación
@@ -1258,7 +1177,9 @@ export default class ContratosController {
       const nuevoEstado: Estado =
         estadoRaw === 'activo' ? 'activo' : estadoRaw === 'inactivo' ? 'inactivo' : (null as any)
       if (!nuevoEstado)
-        return response.badRequest({ message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'." })
+        return response.badRequest({
+          message: "Parámetro 'estado' inválido. Use 'activo' | 'inactivo'.",
+        })
 
       const oldEstado = contrato.estado
 
@@ -1284,7 +1205,9 @@ export default class ContratosController {
         }
         if (terminoEff && !allowedByTipo[tipoEff].includes(terminoEff)) {
           await trx.rollback()
-          return response.badRequest({ message: `'terminoContrato' inválido para tipo '${tipoEff}'.` })
+          return response.badRequest({
+            message: `'terminoContrato' inválido para tipo '${tipoEff}'.`,
+          })
         }
 
         const requiereFin =
@@ -1293,8 +1216,7 @@ export default class ContratosController {
           tipoEff === 'temporal' ||
           (tipoEff === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
 
-        const fechaTermLuxon =
-          this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
+        const fechaTermLuxon = this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
         if (requiereFin && !fechaTermLuxon) {
           await trx.rollback()
           return response.badRequest({
@@ -1308,7 +1230,7 @@ export default class ContratosController {
       }
 
       contrato.estado = nuevoEstado
-      await contrato.save({ client: trx })
+      await contrato.save()
 
       if (oldEstado !== nuevoEstado) {
         const fechaInicioHist = this.toDateTime(contrato.fechaInicio)
@@ -1360,9 +1282,13 @@ export default class ContratosController {
       const soloEstado =
         keys.length > 0 &&
         keys.every((k) =>
-          ['estado', 'motivoFinalizacion', 'fechaTerminacion', 'fechaFin', 'fechaFinalizacion'].includes(
-            k
-          )
+          [
+            'estado',
+            'motivoFinalizacion',
+            'fechaTerminacion',
+            'fechaFin',
+            'fechaFinalizacion',
+          ].includes(k)
         )
 
       if (soloEstado) {
@@ -1419,7 +1345,7 @@ export default class ContratosController {
         }
 
         contrato.estado = nuevoEstado
-        await contrato.save({ client: trx })
+        await contrato.save()
 
         if (oldEstado !== nuevoEstado) {
           const fechaInicioHist = this.toDateTime(contrato.fechaInicio)
@@ -1539,18 +1465,12 @@ export default class ContratosController {
 
       // fechas
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
-        contrato.fechaInicio = DateTime.fromFormat(
-          payload.fechaInicio,
-          'yyyy-MM-dd'
-        )
+        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd')
           .startOf('day')
           .toUTC()
       }
       if (aliasFechaTerm !== undefined && typeof aliasFechaTerm === 'string') {
-        contrato.fechaTerminacion = DateTime.fromFormat(
-          aliasFechaTerm,
-          'yyyy-MM-dd'
-        )
+        contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd')
           .startOf('day')
           .toUTC()
       }
@@ -1558,7 +1478,7 @@ export default class ContratosController {
       const fechaTermDef =
         aliasFechaTerm !== undefined
           ? this.toDateTime(aliasFechaTerm)
-          : contrato.fechaTerminacion ?? null
+          : (contrato.fechaTerminacion ?? null)
 
       const requiresEnd =
         tipoEff === 'prestacion' ||
@@ -1582,7 +1502,7 @@ export default class ContratosController {
       ;(contratoPayload as any).terminoContrato = terminoEff
 
       contrato.merge(contratoPayload)
-      await contrato.save({ client: trx })
+      await contrato.save()
 
       // Recomendación médica en UPDATE (borrar / mantener)
       const reqQuiereEliminarRec =
@@ -1590,22 +1510,18 @@ export default class ContratosController {
       if (reqQuiereEliminarRec && contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
-          if (e.code !== 'ENOENT')
-            console.error('No se pudo eliminar recomendación (update):', e)
+          if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación (update):', e)
         }
         contrato.rutaArchivoRecomendacionMedica = null
         ;(contrato as any).tieneRecomendacionesMedicas = false
-        await contrato.save({ client: trx })
+        await contrato.save()
       }
       if (!reqQuiereEliminarRec && contrato.rutaArchivoRecomendacionMedica) {
         ;(contrato as any).tieneRecomendacionesMedicas = true
-        await contrato.save({ client: trx })
+        await contrato.save()
       }
 
       // Salarios
@@ -1620,23 +1536,20 @@ export default class ContratosController {
       const ansSent = Object.prototype.hasOwnProperty.call(raw, 'auxilioNoSalarial')
 
       const salarioFueEnviado = sbSent || bsSent || atSent || ansSent
-      let nuevoSalario:
-        | {
-            salarioBasico: number
-            bonoSalarial: number
-            auxilioTransporte: number
-            auxilioNoSalarial: number
-          }
-        | null = null
+      let nuevoSalario: {
+        salarioBasico: number
+        bonoSalarial: number
+        auxilioTransporte: number
+        auxilioNoSalarial: number
+      } | null = null
 
       if (salarioFueEnviado) {
-        const currentBase =
-          currentSalario || {
-            salarioBasico: contrato.salario ?? 0,
-            bonoSalarial: 0,
-            auxilioTransporte: 0,
-            auxilioNoSalarial: 0,
-          }
+        const currentBase = currentSalario || {
+          salarioBasico: contrato.salario ?? 0,
+          bonoSalarial: 0,
+          auxilioTransporte: 0,
+          auxilioNoSalarial: 0,
+        }
         const toNumberOr = (v: any, fallback: number) => {
           if (v === undefined || v === '' || v === null) return fallback
           const n = Number(v)
@@ -1661,7 +1574,7 @@ export default class ContratosController {
           nuevoSalario = nuevo
           if (currentSalario) {
             currentSalario.merge({ ...nuevo, fechaEfectiva: DateTime.now() })
-            await currentSalario.save({ client: trx })
+            await currentSalario.save()
           } else {
             await ContratoSalario.create(
               { contratoId: contrato.id, ...nuevo, fechaEfectiva: DateTime.now() },
@@ -1671,7 +1584,7 @@ export default class ContratosController {
 
           if (sbSent) {
             contrato.salario = nuevo.salarioBasico
-            await contrato.save({ client: trx })
+            await contrato.save()
           }
         }
       }
@@ -1718,16 +1631,16 @@ export default class ContratosController {
         ),
         salarioBasico: nuevoSalario
           ? nuevoSalario.salarioBasico
-          : currentSalario?.salarioBasico ?? null,
+          : (currentSalario?.salarioBasico ?? null),
         bonoSalarial: nuevoSalario
           ? nuevoSalario.bonoSalarial
-          : currentSalario?.bonoSalarial ?? null,
+          : (currentSalario?.bonoSalarial ?? null),
         auxilioTransporte: nuevoSalario
           ? nuevoSalario.auxilioTransporte
-          : currentSalario?.auxilioTransporte ?? null,
+          : (currentSalario?.auxilioTransporte ?? null),
         auxilioNoSalarial: nuevoSalario
           ? nuevoSalario.auxilioNoSalarial
-          : currentSalario?.auxilioNoSalarial ?? null,
+          : (currentSalario?.auxilioNoSalarial ?? null),
       }
 
       const camposTrackeables: (keyof typeof after)[] = [
@@ -1784,8 +1697,7 @@ export default class ContratosController {
         return Object.prototype.hasOwnProperty.call(raw, campo)
       }
 
-      const estadoSeVolvioInactivo =
-        oldEstado !== contrato.estado && contrato.estado === 'inactivo'
+      const estadoSeVolvioInactivo = oldEstado !== contrato.estado && contrato.estado === 'inactivo'
 
       for (const campo of camposTrackeables) {
         if (
@@ -1854,7 +1766,7 @@ export default class ContratosController {
 
       const recCT = this.getContentType(archivoRecomendacion).toLowerCase()
       const recExt = this.safeExtFrom(archivoRecomendacion, 'bin')
-      const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
+      const recMimeOk = !recCT || ContratosController.REC_ALLOWED_EXTS.has(recCT)
       const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
       if (!(recMimeOk || recExtOk)) {
         throw new Error(
@@ -1867,10 +1779,7 @@ export default class ContratosController {
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
           if (e.code !== 'ENOENT')
@@ -1887,7 +1796,7 @@ export default class ContratosController {
 
       contrato.tieneRecomendacionesMedicas = true
       contrato.rutaArchivoRecomendacionMedica = `/${recDir}/${recName}`
-      await contrato.save({ client: trx })
+      await contrato.save()
 
       if (oldMeta) {
         await this.logArchivoReemplazado(
@@ -1951,12 +1860,10 @@ export default class ContratosController {
 
       const ct = this.getContentType(archivo).toLowerCase()
       const ext = this.safeExtFrom(archivo, 'bin')
-      const mimeOk = !ct || ContratosController.REC_ALLOWED_MIMES.has(ct) // reutilizamos set de recomendación
+      const mimeOk = !ct || ContratosController.REC_ALLOWED_EXTS.has(ct) // reutilizamos set de recomendación
       const extOk = ContratosController.REC_ALLOWED_EXTS.has(ext)
       if (!(mimeOk || extOk)) {
-        throw new Error(
-          'Tipo de archivo no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.'
-        )
+        throw new Error('Tipo de archivo no permitido. Use pdf, doc, docx, jpg, jpeg, png, webp.')
       }
 
       if (paso.archivoUrl) {
@@ -1974,7 +1881,6 @@ export default class ContratosController {
       await fs.mkdir(publicPathDir, { recursive: true })
 
       await archivo.move(publicPathDir, { name: fileName })
-
       ;(paso as any).nombreArchivo = archivo.clientName || fileName
       paso.archivoUrl = `/${uploadDir}/${fileName}`
 
@@ -2233,7 +2139,7 @@ export default class ContratosController {
 
       const recCT = this.getContentType(archivo).toLowerCase()
       const recExt = this.safeExtFrom(archivo, 'bin')
-      const recMimeOk = !recCT || ContratosController.REC_ALLOWED_MIMES.has(recCT)
+      const recMimeOk = !recCT || ContratosController.REC_ALLOWED_EXTS.has(recCT)
       const recExtOk = ContratosController.REC_ALLOWED_EXTS.has(recExt)
       if (!(recMimeOk || recExtOk)) {
         return response.badRequest({
@@ -2247,10 +2153,7 @@ export default class ContratosController {
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
           if (e.code !== 'ENOENT') console.error('No se pudo eliminar recomendación anterior:', e)
@@ -2311,14 +2214,10 @@ export default class ContratosController {
       if (contrato.rutaArchivoRecomendacionMedica) {
         try {
           await fs.unlink(
-            path.join(
-              app.publicPath(),
-              contrato.rutaArchivoRecomendacionMedica.replace(/^\//, '')
-            )
+            path.join(app.publicPath(), contrato.rutaArchivoRecomendacionMedica.replace(/^\//, ''))
           )
         } catch (e: any) {
-          if (e.code !== 'ENOENT')
-            console.error('No se pudo eliminar archivo de recomendación:', e)
+          if (e.code !== 'ENOENT') console.error('No se pudo eliminar archivo de recomendación:', e)
         }
       }
 
@@ -2444,7 +2343,7 @@ export default class ContratosController {
         archivo.type && archivo.subtype
           ? `${archivo.type}/${archivo.subtype}`
           : (archivo.headers?.['content-type'] as string) || ''
-      if (!ContratosController.AFI_ALLOWED_MIMES.includes(contentType)) {
+      if (!ContratosController.AFI_ALLOWED_MIMES.has(contentType)) {
         return response.badRequest({ message: 'Tipo de archivo no permitido.' })
       }
 

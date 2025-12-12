@@ -160,8 +160,8 @@ export default class CaptacionDateosController {
         await trx.commit()
         procesados++
       } catch (e) {
-      await trx.rollback()
-      console.error(`❌ Error procesando dateo ${dateo.id}:`, e)
+        await trx.rollback()
+        console.error(`❌ Error procesando dateo ${dateo.id}:`, e)
       }
     }
 
@@ -548,7 +548,7 @@ export default class CaptacionDateosController {
     const imagenOrigenId = request.input('imagen_origen_id') as string | number | undefined
     const imagenSubidaPorRaw = request.input('imagen_subida_por') as unknown
 
-  const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
+    const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
 
     // ✅ ACTUALIZAR PLACA
     if (placa !== undefined) {
@@ -630,7 +630,7 @@ export default class CaptacionDateosController {
     return { ...toSnake(out), reserva, turnoInfo }
   }
 
-    /** DELETE /captacion-dateos/:id */
+  /** DELETE /captacion-dateos/:id */
   public async destroy({ params, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })

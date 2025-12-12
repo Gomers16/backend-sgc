@@ -63,7 +63,9 @@ export default class ContratoEventoController {
       })
 
       if (!contratoId || !payload.tipo || !payload.fechaInicio) {
-        return response.badRequest({ message: 'Faltan campos requeridos: contratoId, tipo o fechaInicio.' })
+        return response.badRequest({
+          message: 'Faltan campos requeridos: contratoId, tipo o fechaInicio.',
+        })
       }
 
       const evento = new ContratoEvento()
@@ -126,9 +128,11 @@ export default class ContratoEventoController {
       // Campos básicos
       if (payload.tipo) evento.tipo = String(payload.tipo).toLowerCase() as any
       if (payload.subtipo !== undefined) evento.subtipo = (payload.subtipo ?? '').trim() || null
-      if (payload.descripcion !== undefined) evento.descripcion = (payload.descripcion ?? '').trim() || null
+      if (payload.descripcion !== undefined)
+        evento.descripcion = (payload.descripcion ?? '').trim() || null
       if (payload.fechaInicio) evento.fechaInicio = DateTime.fromISO(payload.fechaInicio)
-      if (payload.fechaFin !== undefined) evento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : null
+      if (payload.fechaFin !== undefined)
+        evento.fechaFin = payload.fechaFin ? DateTime.fromISO(payload.fechaFin) : null
 
       // Mantener el usuario si no llega actorId; si llega, actualizar
       if (actorId !== null) {
