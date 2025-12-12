@@ -37,198 +37,198 @@ router
     })
 
     /* ============================== TURNOS ============================= */
-router
-  .get('/turnos-rtm', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .get('/turnos-rtm', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .get('/turnos-rtm/siguiente-turno', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().siguienteTurno(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .get('/turnos-rtm/siguiente-turno', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().siguienteTurno(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .get('/turnos-rtm/export-excel', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().exportExcel(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .get('/turnos-rtm/export-excel', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().exportExcel(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .post('/turnos-rtm', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .post('/turnos-rtm', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .post('/turnos-rtm/:id/cerrar', async (ctx) => {
-    const { default: TurnosCierreController } = await import(
-      '../app/controllers/turnos_cierre_controller.js'
-    )
-    return new TurnosCierreController().cerrar(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .post('/turnos-rtm/:id/cerrar', async (ctx) => {
+        const { default: TurnosCierreController } = await import(
+          '../app/controllers/turnos_cierre_controller.js'
+        )
+        return new TurnosCierreController().cerrar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .get('/turnos-rtm/:id', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().show(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .get('/turnos-rtm/:id', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .put('/turnos-rtm/:id', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .put('/turnos-rtm/:id', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .put('/turnos-rtm/:id/salida', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().registrarSalida(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .put('/turnos-rtm/:id/salida', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().registrarSalida(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .patch('/turnos-rtm/:id/activar', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().activar(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .patch('/turnos-rtm/:id/activar', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().activar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .patch('/turnos-rtm/:id/cancelar', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().cancelar(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .patch('/turnos-rtm/:id/cancelar', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().cancelar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-router
-  .patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
-    const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
-    return new TurnosRtmController().destroy(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    router
+      .patch('/turnos-rtm/:id/inhabilitar', async (ctx) => {
+        const { default: TurnosRtmController } = await import('#controllers/turnos_rtms_controller')
+        return new TurnosRtmController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-/* =========================== REP GENERAL RTM ======================= */
-router
-  .post('/rtm/rep-general/import', async (ctx) => {
-    const { default: RepGeneralImportController } = await import(
-      '#controllers/rep_general_imports_controller'
-    )
-    return new RepGeneralImportController().import(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] })
-  ])
+    /* =========================== REP GENERAL RTM ======================= */
+    router
+      .post('/rtm/rep-general/import', async (ctx) => {
+        const { default: RepGeneralImportController } = await import(
+          '#controllers/rep_general_imports_controller'
+        )
+        return new RepGeneralImportController().import(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
 
-  /* ============================== USUARIOS =========================== */
-router
-  .get('/usuarios', async (ctx) => {
-    const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-    return new UsuariosController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    /* ============================== USUARIOS =========================== */
+    router
+      .get('/usuarios', async (ctx) => {
+        const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+        return new UsuariosController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .post('/usuarios', async (ctx) => {
-    const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-    return new UsuariosController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/usuarios', async (ctx) => {
+        const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+        return new UsuariosController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/usuarios/:id', async (ctx) => {
-    const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-    return new UsuariosController().show(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/usuarios/:id', async (ctx) => {
+        const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+        return new UsuariosController().show(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .put('/usuarios/:id', async (ctx) => {
-    const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-    return new UsuariosController().update(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .put('/usuarios/:id', async (ctx) => {
+        const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+        return new UsuariosController().update(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .delete('/usuarios/:id', async (ctx) => {
-    const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-    return new UsuariosController().destroy(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }) // Solo admin y gerencia pueden eliminar
-  ])
+    router
+      .delete('/usuarios/:id', async (ctx) => {
+        const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+        return new UsuariosController().destroy(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }), // Solo admin y gerencia pueden eliminar
+      ])
 
-router
-  .post('/usuarios/:id/upload-photo', async (ctx) => {
-    const { default: UsuariosController } = await import('#controllers/usuarios_controller')
-    return new UsuariosController().uploadProfilePicture(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/usuarios/:id/upload-photo', async (ctx) => {
+        const { default: UsuariosController } = await import('#controllers/usuarios_controller')
+        return new UsuariosController().uploadProfilePicture(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
     /* ============================== SELECTORES ========================= */
     const selectors = [
       { path: 'roles', controller: '#controllers/roles_controller' },
@@ -260,289 +260,289 @@ router
       return new EntidadesSaludsController().show(ctx)
     })
 
-   /* =============================== CONTRATOS ========================= */
-router
-  .get('/contratos', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    /* =============================== CONTRATOS ========================= */
+    router
+      .get('/contratos', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/usuarios/:usuarioId/contratos', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().getContratosUsuario(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/usuarios/:usuarioId/contratos', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().getContratosUsuario(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .post('/contratos', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/contratos', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .post('/contratos/anexar-fisico', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().anexarFisico(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/contratos/anexar-fisico', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().anexarFisico(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:id', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().show(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:id', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().show(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .patch('/contratos/:id', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().update(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .patch('/contratos/:id', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().update(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .delete('/contratos/:id', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().destroy(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .delete('/contratos/:id', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().destroy(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:id/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().descargarArchivo(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:id/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().descargarArchivo(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:id/archivo/meta', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().getArchivoContratoMeta(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:id/archivo/meta', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().getArchivoContratoMeta(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .delete('/contratos/:id/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().eliminarArchivoContrato(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .delete('/contratos/:id/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().eliminarArchivoContrato(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:id/recomendacion/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().getRecomendacionMedicaMeta(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:id/recomendacion/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().getRecomendacionMedicaMeta(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .post('/contratos/:id/recomendacion/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().subirRecomendacionMedica(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/contratos/:id/recomendacion/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().subirRecomendacionMedica(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .delete('/contratos/:id/recomendacion/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().eliminarRecomendacionMedica(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .delete('/contratos/:id/recomendacion/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().eliminarRecomendacionMedica(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:id/recomendacion/descargar', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().descargarRecomendacionMedica(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:id/recomendacion/descargar', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().descargarRecomendacionMedica(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().getAfiliacionArchivo(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().getAfiliacionArchivo(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .post('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().subirAfiliacionArchivo(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().subirAfiliacionArchivo(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .delete('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().eliminarAfiliacionArchivo(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .delete('/contratos/:id/afiliacion/:tipo/archivo', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().eliminarAfiliacionArchivo(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .group(() => {
-    router.get('/', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().index(ctx)
-    })
-    router.post('/', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().store(ctx)
-    })
-    router.get('/:id', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().show(ctx)
-    })
-    router.put('/:id', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().update(ctx)
-    })
-    router.delete('/:id', async (ctx) => {
-      const { default: ContratoPasosController } = await import(
-        '#controllers/contrato_pasos_controller'
-      )
-      return new ContratoPasosController().destroy(ctx)
-    })
-  })
-  .prefix('/contratos/:contratoId/pasos')
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .group(() => {
+        router.get('/', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().index(ctx)
+        })
+        router.post('/', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().store(ctx)
+        })
+        router.get('/:id', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().show(ctx)
+        })
+        router.put('/:id', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().update(ctx)
+        })
+        router.delete('/:id', async (ctx) => {
+          const { default: ContratoPasosController } = await import(
+            '#controllers/contrato_pasos_controller'
+          )
+          return new ContratoPasosController().destroy(ctx)
+        })
+      })
+      .prefix('/contratos/:contratoId/pasos')
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .group(() => {
-    router.get('/', async (ctx) => {
-      const { default: ContratoEventoController } = await import(
-        '#controllers/contrato_evento_controller'
-      )
-      return new ContratoEventoController().index(ctx)
-    })
-    router.post('/', async (ctx) => {
-      const { default: ContratoEventoController } = await import(
-        '#controllers/contrato_evento_controller'
-      )
-      return new ContratoEventoController().store(ctx)
-    })
-    router.put('/:id', async (ctx) => {
-      const { default: ContratoEventoController } = await import(
-        '#controllers/contrato_evento_controller'
-      )
-      return new ContratoEventoController().update(ctx)
-    })
-    router.delete('/:id', async (ctx) => {
-      const { default: ContratoEventoController } = await import(
-        '#controllers/contrato_evento_controller'
-      )
-      return new ContratoEventoController().destroy(ctx)
-    })
-  })
-  .prefix('/contratos/:contratoId/eventos')
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .group(() => {
+        router.get('/', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().index(ctx)
+        })
+        router.post('/', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().store(ctx)
+        })
+        router.put('/:id', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().update(ctx)
+        })
+        router.delete('/:id', async (ctx) => {
+          const { default: ContratoEventoController } = await import(
+            '#controllers/contrato_evento_controller'
+          )
+          return new ContratoEventoController().destroy(ctx)
+        })
+      })
+      .prefix('/contratos/:contratoId/eventos')
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .group(() => {
-    router.get('/', async (ctx) => {
-      const { default: ContratoCambiosController } = await import(
-        '#controllers/contrato_cambios_controller'
-      )
-      return new ContratoCambiosController().index(ctx)
-    })
-    router.post('/', async (ctx) => {
-      const { default: ContratoCambiosController } = await import(
-        '#controllers/contrato_cambios_controller'
-      )
-      return new ContratoCambiosController().store(ctx)
-    })
-  })
-  .prefix('/contratos/:contratoId/cambios')
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .group(() => {
+        router.get('/', async (ctx) => {
+          const { default: ContratoCambiosController } = await import(
+            '#controllers/contrato_cambios_controller'
+          )
+          return new ContratoCambiosController().index(ctx)
+        })
+        router.post('/', async (ctx) => {
+          const { default: ContratoCambiosController } = await import(
+            '#controllers/contrato_cambios_controller'
+          )
+          return new ContratoCambiosController().store(ctx)
+        })
+      })
+      .prefix('/contratos/:contratoId/cambios')
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .post('/contratos/:contratoId/salarios', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().storeSalario(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .post('/contratos/:contratoId/salarios', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().storeSalario(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
 
-router
-  .get('/contratos/:contratoId/salarios', async (ctx) => {
-    const { default: ContratosController } = await import('#controllers/contratos_controller')
-    return new ContratosController().listSalarios(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] })
-  ])
+    router
+      .get('/contratos/:contratoId/salarios', async (ctx) => {
+        const { default: ContratosController } = await import('#controllers/contratos_controller')
+        return new ContratosController().listSalarios(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+      ])
     /* =============================== CIUDADES ========================== */
     router.get('/ciudades/:id', async (ctx) => {
       const { default: CiudadesController } = await import('#controllers/ciudades_controller')
@@ -633,470 +633,452 @@ router
       const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
       return new VehiculosController().destroy(ctx)
     })
-/* ========================= AGENTES CAPTACIÓN ======================= */
+    /* ========================= AGENTES CAPTACIÓN ======================= */
 
-router
-  .get('/agentes-captacion', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] })
-  ])
+    router
+      .get('/agentes-captacion', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/agentes-captacion/light', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().light(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .get('/agentes-captacion/light', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().light(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-// ❌ CONTABILIDAD NO puede ver /me (no tiene agente asignado)
-router
-  .get('/agentes-captacion/me', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().me(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
-  ])
+    // ❌ CONTABILIDAD NO puede ver /me (no tiene agente asignado)
+    router
+      .get('/agentes-captacion/me', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().me(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
+      ])
 
-// ✅ CONTABILIDAD SÍ puede ver fichas individuales de asesores
-router
-  .get('/agentes-captacion/:id', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().show(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    // ✅ CONTABILIDAD SÍ puede ver fichas individuales de asesores
+    router
+      .get('/agentes-captacion/:id', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .post('/agentes-captacion', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })
-  ])
+    router
+      .post('/agentes-captacion', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().store(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
-router
-  .put('/agentes-captacion/:id', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })
-  ])
+    router
+      .put('/agentes-captacion/:id', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
-router
-  .delete('/agentes-captacion/:id', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().destroy(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })
-  ])
+    router
+      .delete('/agentes-captacion/:id', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
-// ✅ CONTABILIDAD SÍ puede ver resumen de asesor
-router
-  .get('/agentes-captacion/:id/resumen', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().resumen(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    // ✅ CONTABILIDAD SÍ puede ver resumen de asesor
+    router
+      .get('/agentes-captacion/:id/resumen', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().resumen(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-// ✅ CONTABILIDAD SÍ puede ver prospectos de asesor
-router
-  .get('/agentes-captacion/:id/prospectos', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().prospectos(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    // ✅ CONTABILIDAD SÍ puede ver prospectos de asesor
+    router
+      .get('/agentes-captacion/:id/prospectos', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().prospectos(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/agentes-captacion/by-user/:userId', async (ctx) => {
-    const { default: AgentesCaptacionController } = await import(
-      '#controllers/agentes_captacion_controller'
-    )
-    return new AgentesCaptacionController().byUser(ctx)
-  })
-  .where('userId', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .get('/agentes-captacion/by-user/:userId', async (ctx) => {
+        const { default: AgentesCaptacionController } = await import(
+          '#controllers/agentes_captacion_controller'
+        )
+        return new AgentesCaptacionController().byUser(ctx)
+      })
+      .where('userId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-// ✅ CONTABILIDAD SÍ puede ver convenios de asesor
-router
-  .get('/agentes-captacion/:id/convenios', async (ctx) => {
-    const { default: AgentesConveniosController } = await import(
-      '#controllers/agentes_convenios_controller'
-    )
-    return new AgentesConveniosController().listByAsesor(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
-/* ============================== DATEOS ============================= */
+    // ✅ CONTABILIDAD SÍ puede ver convenios de asesor
+    router
+      .get('/agentes-captacion/:id/convenios', async (ctx) => {
+        const { default: AgentesConveniosController } = await import(
+          '#controllers/agentes_convenios_controller'
+        )
+        return new AgentesConveniosController().listByAsesor(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
+    /* ============================== DATEOS ============================= */
 
-router
-  .get('/captacion-dateos', async (ctx) => {
-    const { default: CaptacionDateosController } = await import(
-      '#controllers/captacion_dateos_controller'
-    )
-    return new CaptacionDateosController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .get('/captacion-dateos', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/captacion-dateos/:id', async (ctx) => {
-    const { default: CaptacionDateosController } = await import(
-      '#controllers/captacion_dateos_controller'
-    )
-    return new CaptacionDateosController().show(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] })
-  ])
+    router
+      .get('/captacion-dateos/:id', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-// ❌ CONTABILIDAD NO puede crear dateos
-router
-  .post('/captacion-dateos', async (ctx) => {
-    const { default: CaptacionDateosController } = await import(
-      '#controllers/captacion_dateos_controller'
-    )
-    return new CaptacionDateosController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
-  ])
+    // ❌ CONTABILIDAD NO puede crear dateos
+    router
+      .post('/captacion-dateos', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
+      ])
 
-// ❌ CONTABILIDAD NO puede verificar vencidos
-router
-  .post('/captacion-dateos/verificar-vencidos', async (ctx) => {
-    const { default: CaptacionDateosController } = await import(
-      '#controllers/captacion_dateos_controller'
-    )
-    return new CaptacionDateosController().verificarVencidos(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
-  ])
+    // ❌ CONTABILIDAD NO puede verificar vencidos
+    router
+      .post('/captacion-dateos/verificar-vencidos', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().verificarVencidos(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
+      ])
 
-router
-  .put('/captacion-dateos/:id', async (ctx) => {
-    const { default: CaptacionDateosController } = await import(
-      '#controllers/captacion_dateos_controller'
-    )
-    return new CaptacionDateosController().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })
-  ])
+    router
+      .put('/captacion-dateos/:id', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
-router
-  .delete('/captacion-dateos/:id', async (ctx) => {
-    const { default: CaptacionDateosController } = await import(
-      '#controllers/captacion_dateos_controller'
-    )
-    return new CaptacionDateosController().destroy(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })
-  ])
+    router
+      .delete('/captacion-dateos/:id', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
-router
-  .post('/captacion-dateos/auto-convenio', async (ctx) => {
-    const { default: CaptacionUtilController } = await import(
-      '#controllers/captacion_util_controller'
-    )
-    return new CaptacionUtilController().crearAutoPorConvenio(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })
-  ])
-  /* =============================== PROSPECTOS ======================== */
+    router
+      .post('/captacion-dateos/auto-convenio', async (ctx) => {
+        const { default: CaptacionUtilController } = await import(
+          '#controllers/captacion_util_controller'
+        )
+        return new CaptacionUtilController().crearAutoPorConvenio(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+    /* =============================== PROSPECTOS ======================== */
 
-router
-  .get('/prospectos', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .get('/prospectos', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .post('/prospectos', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .post('/prospectos', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/prospectos/:id', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().show(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .get('/prospectos/:id', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .put('/prospectos/:id', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] })
-  ])
+    router
+      .put('/prospectos/:id', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .patch('/prospectos/:id', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] })
-  ])
+    router
+      .patch('/prospectos/:id', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .post('/prospectos/:id/asignar', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().asignar(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .post('/prospectos/:id/asignar', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().asignar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .post('/prospectos/:id/retirar', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().retirar(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .post('/prospectos/:id/retirar', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().retirar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .post('/prospectos/:id/datear', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().datear(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .post('/prospectos/:id/datear', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().datear(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/asesores/:id/resumen', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().resumenByAsesor(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .get('/asesores/:id/resumen', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().resumenByAsesor(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/prospectos/by-placa', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().findByPlaca(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .get('/prospectos/by-placa', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().findByPlaca(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .get('/prospectos/asesor/:id/list', async (ctx) => {
-    const { default: ProspectosController } = await import('#controllers/prospectos_controller')
-    return new ProspectosController().listByAsesor(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .get('/prospectos/asesor/:id/list', async (ctx) => {
+        const { default: ProspectosController } = await import('#controllers/prospectos_controller')
+        return new ProspectosController().listByAsesor(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
     /* =============================== CONVENIOS ========================= */
 
-router
-  .get('/convenios/buscar-por-nombre', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().buscarPorNombre(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
-    }),
-  ])
+    router
+      .get('/convenios/buscar-por-nombre', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().buscarPorNombre(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
 
-router
-  .get('/convenios/asignados', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().asignadosPorAsesor(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
-  ])
+    router
+      .get('/convenios/asignados', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().asignadosPorAsesor(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
 
-router
-  .get('/convenios/light', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().light(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
-  ])
+    router
+      .get('/convenios/light', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().light(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .get('/convenios', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
-  ])
+    router
+      .get('/convenios', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .post('/convenios', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .post('/convenios', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .get('/convenios/:id', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().show(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
-  ])
+    router
+      .get('/convenios/:id', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .patch('/convenios/:id', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .patch('/convenios/:id', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .get('/convenios/:id/asesor-activo', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().asesorActivo(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
-    }),
-  ])
+    router
+      .get('/convenios/:id/asesor-activo', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().asesorActivo(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
 
-router
-  .post('/convenios/:id/asignar', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().asignarAsesor(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .post('/convenios/:id/asignar', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().asignarAsesor(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
-router
-  .post('/convenios/:id/retirar', async (ctx) => {
-    const { default: ConveniosController } = await import('#controllers/convenios_controller')
-    return new ConveniosController().retirarAsesor(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })
-  ])
+    router
+      .post('/convenios/:id/retirar', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().retirarAsesor(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
     /* =============================== COMISIONES ======================== */
 
     router
@@ -1162,18 +1144,14 @@ router
 
     router
       .post('/comisiones/metas', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().metasUpsert(ctx)
       })
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
     router
       .patch('/comisiones/metas/:id', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().metasUpdate(ctx)
       })
       .where('id', /^[0-9]+$/)
@@ -1181,9 +1159,7 @@ router
 
     router
       .delete('/comisiones/metas/:id', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().metasDestroy(ctx)
       })
       .where('id', /^[0-9]+$/)
@@ -1191,9 +1167,7 @@ router
 
     router
       .get('/comisiones/:id', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().show(ctx)
       })
       .where('id', /^[0-9]+$/)
@@ -1204,9 +1178,7 @@ router
 
     router
       .patch('/comisiones/:id/valores', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().actualizarValores(ctx)
       })
       .where('id', /^[0-9]+$/)
@@ -1217,9 +1189,7 @@ router
 
     router
       .post('/comisiones/:id/aprobar', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().aprobar(ctx)
       })
       .where('id', /^[0-9]+$/)
@@ -1230,9 +1200,7 @@ router
 
     router
       .post('/comisiones/:id/pagar', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().pagar(ctx)
       })
       .where('id', /^[0-9]+$/)
@@ -1243,170 +1211,156 @@ router
 
     router
       .post('/comisiones/:id/anular', async (ctx) => {
-        const { default: ComisionesController } = await import(
-          '#controllers/comisiones_controller'
-        )
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().anular(ctx)
       })
       .where('id', /^[0-9]+$/)
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
-/* ============================ FACTURACIÓN ========================== */
+    /* ============================ FACTURACIÓN ========================== */
 
-router
-  .get('/facturacion/tickets', async (ctx) => {
-    const { default: Facturacion } = await import(
-      '#controllers/facturacion_tickets_controller'
-    )
-    return new Facturacion().index(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .get('/facturacion/tickets', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .get('/facturacion/tickets/:id', async (ctx) => {
-    const { default: Facturacion } = await import(
-      '#controllers/facturacion_tickets_controller'
-    )
-    return new Facturacion().show(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .get('/facturacion/tickets/:id', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .get('/facturacion/tickets/hash-exists/:hash', async (ctx) => {
-    const { default: Facturacion } = await import(
-      '#controllers/facturacion_tickets_controller'
-    )
-    return new Facturacion().hashExists(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .get('/facturacion/tickets/hash-exists/:hash', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().hashExists(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .get('/facturacion/tickets/duplicados', async (ctx) => {
-    const { default: Facturacion } = await import(
-      '#controllers/facturacion_tickets_controller'
-    )
-    return new Facturacion().checkDuplicados(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .get('/facturacion/tickets/duplicados', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().checkDuplicados(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .post('/facturacion/tickets', async (ctx) => {
-    const { default: Facturacion } = await import(
-      '#controllers/facturacion_tickets_controller'
-    )
-    return new Facturacion().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .post('/facturacion/tickets', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .post('/facturacion/tickets/:id/reocr', async (ctx) => {
-    const { default: Facturacion } = await import(
-      '#controllers/facturacion_tickets_controller'
-    )
-    return new Facturacion().reocr(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .post('/facturacion/tickets/:id/reocr', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().reocr(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .patch('/facturacion/tickets/:id', async (ctx) => {
-    const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
-    return new Facturacion().update(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .patch('/facturacion/tickets/:id', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .post('/facturacion/tickets/:id/confirmar', async (ctx) => {
-    const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
-    return new Facturacion().confirmar(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
-  router
-  .get('/facturacion/tickets/:id/imagen', async (ctx) => {
-    const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
-    return new Facturacion().servirImagen(ctx)
-  })
-  .where('id', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
-    })
-  ])
+    router
+      .post('/facturacion/tickets/:id/confirmar', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().confirmar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
+    router
+      .get('/facturacion/tickets/:id/imagen', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().servirImagen(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-/* ============================ CERTIFICACIONES ====================== */
+    /* ============================ CERTIFICACIONES ====================== */
 
-router
-  .post('/certificaciones', async (ctx) => {
-    const { default: CertificacionesController } = await import(
-      '#controllers/certificaciones_controller'
-    )
-    return new CertificacionesController().store(ctx)
-  })
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS']
-    })
-  ])
+    router
+      .post('/certificaciones', async (ctx) => {
+        const { default: CertificacionesController } = await import(
+          '#controllers/certificaciones_controller'
+        )
+        return new CertificacionesController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
-router
-  .get('/certificaciones/turno/:turnoId', async (ctx) => {
-    const { default: CertificacionesController } = await import(
-      '#controllers/certificaciones_controller'
-    )
-    return new CertificacionesController().showByTurno(ctx)
-  })
-  .where('turnoId', /^[0-9]+$/)
-  .use([
-    middleware.auth(),
-    middleware.checkRole({
-      roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS']
-    })
-  ])
+    router
+      .get('/certificaciones/turno/:turnoId', async (ctx) => {
+        const { default: CertificacionesController } = await import(
+          '#controllers/certificaciones_controller'
+        )
+        return new CertificacionesController().showByTurno(ctx)
+      })
+      .where('turnoId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'],
+        }),
+      ])
 
     /* =============================== OCR (BACKEND) ===================== */
 

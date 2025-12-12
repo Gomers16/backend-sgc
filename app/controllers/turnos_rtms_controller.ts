@@ -173,7 +173,8 @@ export default class TurnosRtmController {
       // Servicio
       if (servicioId) {
         const sid = Number(servicioId)
-        if (Number.isNaN(sid)) return response.badRequest({ message: 'servicioId debe ser numérico' })
+        if (Number.isNaN(sid))
+          return response.badRequest({ message: 'servicioId debe ser numérico' })
         query.where('servicio_id', sid)
       } else if (servicioCodigo) {
         const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
@@ -186,7 +187,8 @@ export default class TurnosRtmController {
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
         const c = String(canalAtribucion).toUpperCase() as CanalAtrib
-        if (!allowed.includes(c)) return response.badRequest({ message: 'canalAtribucion inválido' })
+        if (!allowed.includes(c))
+          return response.badRequest({ message: 'canalAtribucion inválido' })
         query.where('canal_atribucion', c)
       }
       if (agenteId) query.where('agente_captacion_id', Number(agenteId))
@@ -247,7 +249,7 @@ export default class TurnosRtmController {
           id: r.id,
           fechaStr: toMySQLDate(r.fecha as DateTime),
           clienteNombre: getClienteNombre(r.cliente),
-          servicioCodigo: r.servicio ? (r.servicio as any).codigoServicio ?? null : null,
+          servicioCodigo: r.servicio ? ((r.servicio as any).codigoServicio ?? null) : null,
         }))
       }
 
@@ -312,7 +314,7 @@ export default class TurnosRtmController {
         .preload('servicio')
         .preload('vehiculo', (q) => q.preload('clase'))
         .preload('cliente')
-        .preload('conductor')                      // 👈 NUEVO
+        .preload('conductor') // 👈 NUEVO
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
         .preload('certificaciones')
@@ -585,7 +587,8 @@ export default class TurnosRtmController {
           const cNorm = normalizeCanal(cRaw)
           if (cNorm) canalAtribucion = cNorm
           // @ts-ignore
-          agenteCaptacionId = (dateo as any).agenteId ?? (dateo as any).agente_id ?? agenteCaptacionId
+          agenteCaptacionId =
+            (dateo as any).agenteId ?? (dateo as any).agente_id ?? agenteCaptacionId
           captacionDateoId = dateo.id
         } else {
           dateo = null
@@ -613,7 +616,7 @@ export default class TurnosRtmController {
         clienteId,
         claseVehiculoId,
 
-        conductorId,                             // 👈 NUEVO
+        conductorId, // 👈 NUEVO
         canalAtribucion,
         agenteCaptacionId,
         captacionDateoId: captacionDateoId ?? null,
@@ -646,7 +649,7 @@ export default class TurnosRtmController {
       await turno.load('servicio')
       await turno.load('vehiculo')
       await turno.load('cliente')
-      await turno.load('conductor')            // 👈 NUEVO
+      await turno.load('conductor') // 👈 NUEVO
       await turno.load('agenteCaptacion')
       await turno.load('captacionDateo', (q) => q.preload('agente').preload('convenio'))
 
@@ -733,12 +736,7 @@ export default class TurnosRtmController {
         canalAtribucionNext = normalizeCanal(raw.canal)
       }
 
-      let medioBDNext:
-        | 'Fachada'
-        | 'Redes Sociales'
-        | 'Call Center'
-        | 'Asesor Comercial'
-        | undefined
+      let medioBDNext: 'Fachada' | 'Redes Sociales' | 'Call Center' | 'Asesor Comercial' | undefined
       if (canalAtribucionNext) {
         medioBDNext = medioFromCanal(canalAtribucionNext)
       }

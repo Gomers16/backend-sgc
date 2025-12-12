@@ -40,7 +40,8 @@ export default class OcrController {
       } as any)
 
       const text = (data?.text || '').trim()
-      const words = (data?.words || []) as OCRWord[]
+      // Accede a las palabras con type assertion
+      const words = ((data as any)?.words || []) as OCRWord[]
       const one = text.replace(/\s{2,}/g, ' ')
 
       // 3) Detector de plantilla Activautos → extractor dedicado
@@ -86,7 +87,7 @@ export default class OcrController {
       const mod = await import('sharp').catch(() => null)
       const sharp = mod?.default
       if (!sharp) return false
-      await sharp(src, { failOn: false })
+      await sharp(src) // 👈 Remueve el objeto failOn
         .rotate()
         .resize({ width: 2200, withoutEnlargement: true })
         .grayscale()
@@ -119,11 +120,13 @@ export default class OcrController {
     const pinRaw = matchAfterLabel(txt, /PIN\b/i)
     const marcaRaw = matchAfterLabel(txt, /MARCA\b/i)
 
-    // En la misma línea de cabecera suele estar “FV FE: 1960” (o variantes)
+    // En la misma línea de cabecera suele estar "FV FE: 1960" (o variantes)
     const fvLinea =
       (txt.match(/(^|\n).*FV\s*FE\s*[:\-]?\s*([A-Z]{0,3})?[\s\-:]*?(\d{2,6}).*$/im) || [])[0] || ''
-    let prefijo: string | null = null,
-      consecutivo: string | null = null
+
+    let prefijo: string | null = null
+    let consecutivo: string | null = null
+
     const mv = fvLinea.toUpperCase().match(/\b(FV|FE)\b/)
     const mc = fvLinea.match(/\b(\d{2,6})\b/)
     if (mv) prefijo = mv[1]

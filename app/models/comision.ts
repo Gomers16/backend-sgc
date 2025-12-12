@@ -149,4 +149,5 @@ export default class Comision extends BaseModel {
     foreignKey: 'asesorSecundarioId',
   })
   declare asesorSecundario: BelongsTo<typeof AgenteCaptacion>
+  valorTotal: any
 }

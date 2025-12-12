@@ -9,7 +9,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
       table.increments('id')
 
       // Evidencia / archivo
-      table.string('hash', 128).notNullable()  // ← AQUÍ SE QUITÓ .unique()
+      table.string('hash', 128).notNullable() // ← AQUÍ SE QUITÓ .unique()
       table.string('file_path', 512).notNullable()
       table.string('file_mime', 64).nullable()
       table.integer('file_size').unsigned().nullable()

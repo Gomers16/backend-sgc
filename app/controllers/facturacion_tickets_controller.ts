@@ -22,40 +22,44 @@ const DUP_WINDOW_MINUTES = 60
 
 /* ============================== Tipos DTO / Snapshots ============================== */
 
-interface IAgenteDTO {
+interface AgenteDTO {
   id: number
   nombre: string
   tipo?: string | null
 }
-interface IConvenioDTO {
+
+interface ConvenioDTO {
   id: number
   codigo?: string | null
   nombre: string
 }
-interface IUsuarioDTO {
+
+interface UsuarioDTO {
   id: number
   nombres?: string | null
   apellidos?: string | null
 }
-interface ISedeDTO {
+
+interface SedeDTO {
   id: number
   nombre: string
 }
-interface IServicioDTO {
+
+interface ServicioDTO {
   id: number
   codigoServicio?: string | null
   nombreServicio?: string | null
 }
 
-interface IDateoDTO {
+interface DateoDTO {
   id: number
   canal: string
-  agente: IAgenteDTO | null
-  asesorConvenio: IAgenteDTO | null
-  convenio: IConvenioDTO | null
+  agente: AgenteDTO | null
+  asesorConvenio: AgenteDTO | null
+  convenio: ConvenioDTO | null
 }
 
-interface ITurnoDTO {
+interface TurnoDTO {
   id: number
   turnoNumero?: number | null
   turnoNumeroServicio?: number | null
@@ -69,15 +73,15 @@ interface ITurnoDTO {
   tipoVehiculo?: string | null
   medioEntero?: string | null
   canalAtribucion?: string | null
-  servicio: IServicioDTO | null
-  usuario: IUsuarioDTO | null
-  sede: ISedeDTO | null
-  agenteCaptacion: IAgenteDTO | null
-  asesorConvenio: IAgenteDTO | null
-  convenio: IConvenioDTO | null
+  servicio: ServicioDTO | null
+  usuario: UsuarioDTO | null
+  sede: SedeDTO | null
+  agenteCaptacion: AgenteDTO | null
+  asesorConvenio: AgenteDTO | null
+  convenio: ConvenioDTO | null
 }
 
-interface ITurnoSnapshotReadable {
+interface TurnoSnapshotReadable {
   turnoNumero?: number | null
   turnoNumeroServicio?: number | null
   turnoCodigo?: string | null
@@ -108,7 +112,7 @@ interface ITurnoSnapshotReadable {
   }
 }
 
-interface IComisionLiteDTO {
+interface ComisionLiteDTO {
   id: number
   estado: 'PENDIENTE' | 'APROBADA' | 'PAGADA' | 'ANULADA'
   monto: number
@@ -116,7 +120,7 @@ interface IComisionLiteDTO {
   convenio?: { id: number; nombre: string } | null
 }
 
-interface ITicketDTO {
+interface TicketDTO {
   id: number
   estado: FactEstado
   hash: string
@@ -159,12 +163,11 @@ interface ITicketDTO {
   canalAtribucion: string | null
   medioEntero: string | null
 
-  turno: ITurnoDTO | null
-  dateo: IDateoDTO | null
+  turno: TurnoDTO | null
+  dateo: DateoDTO | null
 
-  comisiones?: IComisionLiteDTO[]
+  comisiones?: ComisionLiteDTO[]
 }
-
 /* ============================== Controlador ============================== */
 
 export default class FacturacionTicketsController {
@@ -210,7 +213,7 @@ export default class FacturacionTicketsController {
       estado: t.estado,
       placa: t.placa ?? null,
       fecha_pago: t.fechaPago ?? null,
-      total_factura: (t.totalFactura ?? t.total) ?? null,
+      total_factura: t.totalFactura ?? t.total ?? null,
 
       servicio_nombre: t.servicioNombre ?? null,
       sede_nombre: t.sedeNombre ?? null,
@@ -235,9 +238,7 @@ export default class FacturacionTicketsController {
       .preload('agente')
       .preload('sede')
       .preload('servicio')
-      .preload('dateo', (q) =>
-        q.preload('agente').preload('asesorConvenio').preload('convenio')
-      )
+      .preload('dateo', (q) => q.preload('agente').preload('asesorConvenio').preload('convenio'))
       .preload('turno', (q) => {
         q.preload('servicio')
           .preload('usuario')
@@ -323,11 +324,7 @@ export default class FacturacionTicketsController {
     }
 
     const now = DateTime.now()
-    const outDir = path.join(
-      UPLOAD_BASE_DIR,
-      String(now.year),
-      String(now.month).padStart(2, '0')
-    )
+    const outDir = path.join(UPLOAD_BASE_DIR, String(now.year), String(now.month).padStart(2, '0'))
     await fs.mkdir(outDir, { recursive: true })
     const filename = `${cuid()}.${file.extname}`
     const filePath = path.join(outDir, filename)
@@ -337,7 +334,7 @@ export default class FacturacionTicketsController {
     const ticket = new FacturacionTicket()
     ticket.hash = hash
     ticket.filePath = filePath.replace(app.makePath(), '')
-    ticket.fileMime = file.type
+    ticket.fileMime = file.type ?? null // 👈 Cambia esto
     ticket.fileSize = buffer.length
     ticket.imageRotation = imageRotation
     ticket.estado = 'BORRADOR'
@@ -371,9 +368,11 @@ export default class FacturacionTicketsController {
         }
         ticket.agenteId = dateo.agenteId ?? ticket.agenteId ?? null
         ticket.captacionCanal = dateo.canal ?? null
-        ticket.agenteComercialNombre = dateo.$preloaded?.agente?.nombre ?? null
-        ticket.asesorConvenioNombre = dateo.$preloaded?.asesorConvenio?.nombre ?? null
-        ticket.convenioNombre = dateo.$preloaded?.convenio?.nombre ?? null
+
+        // 👇 Opción 1: Type assertion inline
+        ticket.agenteComercialNombre = (dateo.agente as any)?.nombre ?? null
+        ticket.asesorConvenioNombre = (dateo.asesorConvenio as any)?.nombre ?? null
+        ticket.convenioNombre = (dateo.convenio as any)?.nombre ?? null
       }
     }
 
@@ -388,7 +387,7 @@ export default class FacturacionTicketsController {
     }
 
     if (turno) {
-      const turnSnap = turno as unknown as ITurnoSnapshotReadable
+      const turnSnap = turno as unknown as TurnoSnapshotReadable
       if (!ticket.placa && (turnSnap.placa || '').trim()) {
         ticket.placa = (turnSnap.placa || '').toUpperCase().replace(/\s+/g, '')
       }
@@ -481,7 +480,10 @@ export default class FacturacionTicketsController {
     // === DETECTAR SI ES SOAT/PREV/PERI ===
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
 
-    if ('placa' in up) ticket.placa = String(up.placa || '').toUpperCase().replace(/\s+/g, '')
+    if ('placa' in up)
+      ticket.placa = String(up.placa || '')
+        .toUpperCase()
+        .replace(/\s+/g, '')
     if ('total' in up) ticket.total = toNumberOrZero(up.total)
     if ('fecha_pago' in up)
       ticket.fechaPago = up.fecha_pago ? DateTime.fromISO(String(up.fecha_pago)) : null
@@ -489,9 +491,9 @@ export default class FacturacionTicketsController {
     if ('agente_id' in up) ticket.agenteId = toIntOrNull(up.agente_id)
     if ('prefijo' in up) ticket.prefijo = nullIfEmpty(up.prefijo)
     if ('consecutivo' in up) ticket.consecutivo = nullIfEmpty(up.consecutivo)
-    if ('forma_pago' in up) ticket.formaPago = nullIfEmpty(up.forma_pago)
+    if ('forma_pago' in up) ticket.formaPago = nullIfEmpty(up.forma_pago) as any // 👈 Añade 'as any'
     if ('servicio_id' in up) ticket.servicioId = toIntOrNull(up.servicio_id)
-    if ('doc_tipo' in up) ticket.docTipo = nullIfEmpty(up.doc_tipo)
+    if ('doc_tipo' in up) ticket.docTipo = nullIfEmpty(up.doc_tipo) as any // 👈 Añade 'as any'
     if ('doc_numero' in up) ticket.docNumero = nullIfEmpty(up.doc_numero)
     if ('nombre' in up) ticket.nombre = nullIfEmpty(up.nombre)
     if ('telefono' in up) ticket.telefono = nullIfEmpty(up.telefono)
@@ -512,8 +514,7 @@ export default class FacturacionTicketsController {
     if ('iva' in up) ticket.iva = toNumberOrZero(up.iva)
     if ('total_factura' in up) ticket.totalFactura = toNumberOrZero(up.total_factura)
 
-    if ('pago_consignacion' in up)
-      ticket.pagoConsignacion = toNumberOrZero(up.pago_consignacion)
+    if ('pago_consignacion' in up) ticket.pagoConsignacion = toNumberOrZero(up.pago_consignacion)
     if ('pago_tarjeta' in up) ticket.pagoTarjeta = toNumberOrZero(up.pago_tarjeta)
     if ('pago_efectivo' in up) ticket.pagoEfectivo = toNumberOrZero(up.pago_efectivo)
     if ('pago_cambio' in up) ticket.pagoCambio = toNumberOrZero(up.pago_cambio)
@@ -547,8 +548,11 @@ export default class FacturacionTicketsController {
     }
 
     // === PARA SOAT/PREV/PERI: NO VALIDAR CAMPOS OBLIGATORIOS ===
-    if (!esSOAT && canConfirm(ticket, false) &&
-        (ticket.estado === 'BORRADOR' || ticket.estado === 'OCR_LISTO')) {
+    if (
+      !esSOAT &&
+      canConfirm(ticket, false) &&
+      (ticket.estado === 'BORRADOR' || ticket.estado === 'OCR_LISTO')
+    ) {
       ticket.estado = 'LISTA_CONFIRMAR'
     }
 
@@ -585,11 +589,10 @@ export default class FacturacionTicketsController {
       if (d) {
         ticket.captacionCanal = d.canal ?? ticket.captacionCanal ?? null
         ticket.agenteComercialNombre =
-          d.$preloaded?.agente?.nombre ?? ticket.agenteComercialNombre ?? null
+          (d.agente as any)?.nombre ?? ticket.agenteComercialNombre ?? null
         ticket.asesorConvenioNombre =
-          d.$preloaded?.asesorConvenio?.nombre ?? ticket.asesorConvenioNombre ?? null
-        ticket.convenioNombre =
-          d.$preloaded?.convenio?.nombre ?? ticket.convenioNombre ?? null
+          (d.asesorConvenio as any)?.nombre ?? ticket.asesorConvenioNombre ?? null
+        ticket.convenioNombre = (d.convenio as any)?.nombre ?? ticket.convenioNombre ?? null
       }
     }
 
@@ -617,7 +620,9 @@ export default class FacturacionTicketsController {
 
     // === PARA SOAT/PREV/PERI: SOLO VALIDAR QUE TENGA IMAGEN ===
     if (esSOAT && !ticket.filePath) {
-      return response.badRequest({ message: 'Servicio simplificado requiere al menos la imagen de la factura' })
+      return response.badRequest({
+        message: 'Servicio simplificado requiere al menos la imagen de la factura',
+      })
     }
 
     // Duplicado por contenido (solo si NO es SOAT/PREV/PERI)
@@ -777,8 +782,8 @@ export default class FacturacionTicketsController {
 
     let asesorConvenioIdReal: number | null = null
 
-    if (dateo.convenioId && dateo.$preloaded?.convenio?.$preloaded?.asesorConvenio) {
-      asesorConvenioIdReal = dateo.$preloaded.convenio.$preloaded.asesorConvenio.id
+    if (dateo.convenioId && (dateo.convenio as any)?.$preloaded?.asesorConvenio) {
+      asesorConvenioIdReal = (dateo.convenio as any).$preloaded.asesorConvenio.id
 
       const cfgConvenio = await findConfigComisionDateo({
         asesorId: asesorConvenioIdReal,
@@ -797,7 +802,9 @@ export default class FacturacionTicketsController {
       valorPlacaConvenio === 0 &&
       valorDateoConvenio === 0
     ) {
-      console.warn(`⚠️ No hay configuración de comisión para tipo_vehiculo: ${tipoVehiculoComision}`)
+      console.warn(
+        `⚠️ No hay configuración de comisión para tipo_vehiculo: ${tipoVehiculoComision}`
+      )
       return
     }
 
@@ -915,7 +922,7 @@ export default class FacturacionTicketsController {
   }
 
   private async fillSnapshotsFromTurno(ticket: FacturacionTicket, turno: TurnoRtm) {
-    const t = turno as unknown as ITurnoSnapshotReadable
+    const t = turno as unknown as TurnoSnapshotReadable
 
     ticket.turnoNumeroGlobal = t.turnoNumero ?? ticket.turnoNumeroGlobal ?? null
     ticket.turnoNumeroServicio = t.turnoNumeroServicio ?? ticket.turnoNumeroServicio ?? null
@@ -943,15 +950,13 @@ export default class FacturacionTicketsController {
     }
   }
 
-  private async getTicketDTOById(id: number): Promise<ITicketDTO> {
+  private async getTicketDTOById(id: number): Promise<TicketDTO> {
     const t = await FacturacionTicket.query()
       .where('id', id)
       .preload('servicio')
       .preload('sede')
       .preload('agente')
-      .preload('dateo', (dq) =>
-        dq.preload('agente').preload('asesorConvenio').preload('convenio')
-      )
+      .preload('dateo', (dq) => dq.preload('agente').preload('asesorConvenio').preload('convenio'))
       .preload('turno', (tq) =>
         tq
           .preload('servicio')
@@ -967,7 +972,7 @@ export default class FacturacionTicketsController {
     const dto = buildTicketDTO(t)
 
     const pre = (t as any).$preloaded || {}
-    const dateoIdFromTurno = pre.turno?.$preloaded?.captacionDateo?.id ?? null
+    const dateoIdFromTurno = (pre.turno as any)?.captacionDateo?.id ?? null
     const dateoId: number | null = (t as any).dateoId ?? dateoIdFromTurno ?? null
 
     if (dateoId) {
@@ -977,22 +982,22 @@ export default class FacturacionTicketsController {
         .preload('asesor')
         .preload('convenio')
 
-      dto.comisiones = comisiones.map((c) => ({
-        id: c.id,
-        estado: c.estado,
-        monto: Number(c.monto ?? 0),
-        asesor: c.$preloaded?.asesor
-          ? { id: c.$preloaded.asesor.id, nombre: c.$preloaded.asesor.nombre }
-          : null,
-        convenio: c.$preloaded?.convenio
-          ? { id: c.$preloaded.convenio.id, nombre: c.$preloaded.convenio.nombre }
-          : null,
-      }))
+      dto.comisiones = comisiones.map((c) => {
+        const asesor = c.asesor as any
+        const convenio = c.convenio as any
+
+        return {
+          id: c.id,
+          estado: c.estado,
+          monto: Number(c.monto ?? 0),
+          asesor: asesor ? { id: asesor.id, nombre: asesor.nombre } : null,
+          convenio: convenio ? { id: convenio.id, nombre: convenio.nombre } : null,
+        }
+      })
     }
 
     return dto
   }
-
   /**
    * GET /facturacion/tickets/:id/imagen
    * Sirve la imagen del ticket de facturación
@@ -1015,9 +1020,7 @@ export default class FacturacionTicketsController {
       await fs.access(absolutePath)
 
       // Servir el archivo con el tipo MIME correcto
-      return response
-        .header('Content-Type', ticket.fileMime || 'image/jpeg')
-        .download(absolutePath)
+      return response.header('Content-Type', ticket.fileMime || 'image/jpeg').download(absolutePath)
     } catch (err) {
       console.error('Error sirviendo imagen del ticket:', err)
       return response.notFound({ message: 'No se pudo cargar la imagen del ticket' })
@@ -1120,10 +1123,10 @@ async function isContentDuplicate(t: FacturacionTicket): Promise<boolean> {
 
 /* =================== DTO / Serializadores =================== */
 
-function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
-  const t = turno as unknown as ITurnoSnapshotReadable
+function serializeTurnoEnriquecido(turno: TurnoRtm): TurnoDTO {
+  const t = turno as unknown as TurnoSnapshotReadable
 
-  const servicio: IServicioDTO | null = t.$preloaded?.servicio
+  const servicio: ServicioDTO | null = t.$preloaded?.servicio
     ? {
         id: t.$preloaded.servicio.id,
         codigoServicio: t.$preloaded.servicio.codigoServicio ?? null,
@@ -1131,7 +1134,7 @@ function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
       }
     : null
 
-  const usuario: IUsuarioDTO | null = t.$preloaded?.usuario
+  const usuario: UsuarioDTO | null = t.$preloaded?.usuario
     ? {
         id: t.$preloaded.usuario.id,
         nombres: t.$preloaded.usuario.nombres ?? null,
@@ -1139,11 +1142,11 @@ function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
       }
     : null
 
-  const sede: ISedeDTO | null = t.$preloaded?.sede
+  const sede: SedeDTO | null = t.$preloaded?.sede
     ? { id: t.$preloaded.sede.id, nombre: t.$preloaded.sede.nombre }
     : null
 
-  const agenteCaptacion: IAgenteDTO | null = t.$preloaded?.agenteCaptacion
+  const agenteCaptacion: AgenteDTO | null = t.$preloaded?.agenteCaptacion
     ? {
         id: t.$preloaded.agenteCaptacion.id,
         nombre: t.$preloaded.agenteCaptacion.nombre,
@@ -1152,7 +1155,7 @@ function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
     : null
 
   const dateo = t.$preloaded?.captacionDateo ?? null
-  const asesorConvenio: IAgenteDTO | null = dateo?.asesorConvenio
+  const asesorConvenio: AgenteDTO | null = dateo?.asesorConvenio
     ? {
         id: dateo.asesorConvenio.id,
         nombre: dateo.asesorConvenio.nombre,
@@ -1160,7 +1163,7 @@ function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
       }
     : null
 
-  const convenio: IConvenioDTO | null = dateo?.convenio
+  const convenio: ConvenioDTO | null = dateo?.convenio
     ? {
         id: dateo.convenio.id,
         codigo: dateo.convenio.codigo ?? null,
@@ -1191,18 +1194,18 @@ function serializeTurnoEnriquecido(turno: TurnoRtm): ITurnoDTO {
   }
 }
 
-function buildTicketDTO(ticket: FacturacionTicket): ITicketDTO {
+function buildTicketDTO(ticket: FacturacionTicket): TicketDTO {
   const s = ticket.serialize() as any
 
   const pick = (camel: string, snake: string) => s[camel] ?? s[snake] ?? null
 
   const pre = (ticket as any).$preloaded || {}
-  const turnoDTO: ITurnoDTO | null = pre.turno
+  const turnoDTO: TurnoDTO | null = pre.turno
     ? serializeTurnoEnriquecido(pre.turno as TurnoRtm)
     : null
   const dateoFromTurno = (pre.turno as any)?.$preloaded?.captacionDateo ?? null
 
-  const dateoEnriquecido: IDateoDTO | null =
+  const dateoEnriquecido: DateoDTO | null =
     s.dateo ??
     (dateoFromTurno
       ? {
@@ -1233,21 +1236,13 @@ function buildTicketDTO(ticket: FacturacionTicket): ITicketDTO {
       : null)
 
   const servicioCodigo =
-    pick('servicioCodigo', 'servicio_codigo') ??
-    turnoDTO?.servicio?.codigoServicio ??
-    null
+    pick('servicioCodigo', 'servicio_codigo') ?? turnoDTO?.servicio?.codigoServicio ?? null
   const servicioNombre =
-    pick('servicioNombre', 'servicio_nombre') ??
-    turnoDTO?.servicio?.nombreServicio ??
-    null
+    pick('servicioNombre', 'servicio_nombre') ?? turnoDTO?.servicio?.nombreServicio ?? null
   const tipoVehiculoSnapshot =
-    pick('tipoVehiculoSnapshot', 'tipo_vehiculo') ??
-    turnoDTO?.tipoVehiculo ??
-    null
+    pick('tipoVehiculoSnapshot', 'tipo_vehiculo') ?? turnoDTO?.tipoVehiculo ?? null
   const turnoGlobal =
-    pick('turnoNumeroGlobal', 'turno_numero_global') ??
-    turnoDTO?.turnoNumero ??
-    null
+    pick('turnoNumeroGlobal', 'turno_numero_global') ?? turnoDTO?.turnoNumero ?? null
   const turnoServicio =
     pick('turnoNumeroServicio', 'turno_numero_servicio') ?? turnoDTO?.turnoNumeroServicio ?? null
   const turnoCodigo = pick('turnoCodigo', 'turno_codigo') ?? turnoDTO?.turnoCodigo ?? null
@@ -1257,21 +1252,14 @@ function buildTicketDTO(ticket: FacturacionTicket): ITicketDTO {
   const funcionarioNombre =
     pick('funcionarioNombre', 'funcionario_nombre') ??
     (turnoDTO?.usuario
-      ? [turnoDTO.usuario.nombres, turnoDTO.usuario.apellidos]
-          .filter(Boolean)
-          .join(' ')
+      ? [turnoDTO.usuario.nombres, turnoDTO.usuario.apellidos].filter(Boolean).join(' ')
       : null)
 
   const canalAtribucion =
-    pick('canalAtribucion', 'canal_atribucion') ??
-    turnoDTO?.canalAtribucion ??
-    null
-  const medioEntero =
-    pick('medioEntero', 'medio_entero') ??
-    turnoDTO?.medioEntero ??
-    null
+    pick('canalAtribucion', 'canal_atribucion') ?? turnoDTO?.canalAtribucion ?? null
+  const medioEntero = pick('medioEntero', 'medio_entero') ?? turnoDTO?.medioEntero ?? null
 
-  const dto: ITicketDTO = {
+  const dto: TicketDTO = {
     id: s.id,
     estado: s.estado,
     hash: s.hash,
@@ -1329,11 +1317,7 @@ function inferTipoVehiculoComision(opts: {
   ticketTipo?: string | null
   turnoTipo?: string | null
 }): TipoVehiculoComision | null {
-  const normalize = (v?: string | null) =>
-    (v ?? '')
-      .toString()
-      .toUpperCase()
-      .trim()
+  const normalize = (v?: string | null) => (v ?? '').toString().toUpperCase().trim()
 
   const t1 = normalize(opts.ticketTipo)
   const t2 = normalize(opts.turnoTipo)

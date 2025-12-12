@@ -17,7 +17,7 @@ import EntidadSalud from '#models/entidad_salud'
 const USER_SELECT = ['id', 'nombres', 'apellidos', 'correo'] as const
 
 /** Helper para precargar TODO lo necesario en Usuario (evita duplicar lógica) */
-function preloadUsuarioCompleto(loader: ReturnType<typeof Usuario.prototype.load>) {
+function preloadUsuarioCompleto(loader: any) {
   loader
     .preload('rol')
     .preload('razonSocial')
@@ -28,7 +28,7 @@ function preloadUsuarioCompleto(loader: ReturnType<typeof Usuario.prototype.load
     .preload('afp')
     .preload('afc')
     .preload('ccf')
-    .preload('contratos', (contractQuery) => {
+    .preload('contratos', (contractQuery: any) => {
       contractQuery
         .orderBy('fecha_inicio', 'desc')
         .preload('cargo')
@@ -39,25 +39,24 @@ function preloadUsuarioCompleto(loader: ReturnType<typeof Usuario.prototype.load
         .preload('afc')
         .preload('ccf')
         // Eventos con su usuario (actor) y ordenados
-        .preload('eventos', (ev) => {
-          ev.preload('usuario', (u) => u.select(USER_SELECT))
+        .preload('eventos', (ev: any) => {
+          ev.preload('usuario', (u: any) => u.select(USER_SELECT))
           ev.orderBy('created_at', 'desc')
         })
         // PASOS: ahora también traen el usuario (actor)
-        .preload('pasos', (p) => {
+        .preload('pasos', (p: any) => {
           // Si prefieres fase/orden: p.orderBy('fase').orderBy('orden', 'asc').orderBy('id', 'asc')
           p.orderBy('created_at', 'desc')
-          p.preload('usuario', (u) => u.select(USER_SELECT))
+          p.preload('usuario', (u: any) => u.select(USER_SELECT))
         })
-        .preload('historialEstados', (historialQuery) => {
+        .preload('historialEstados', (historialQuery: any) => {
           historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
         })
-        .preload('cambios', (c) => {
+        .preload('cambios', (c: any) => {
           c.preload('usuario').orderBy('created_at', 'desc')
         })
     })
 }
-
 export default class UsuariosController {
   /** Lista de usuarios (opcionalmente filtrados por razón social) */
   public async index({ request, response }: HttpContext) {
@@ -74,7 +73,7 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos', (contractQuery) => {
+        .preload('contratos', (contractQuery: any) => {
           contractQuery
             .orderBy('fecha_inicio', 'desc')
             .preload('cargo')
@@ -85,20 +84,20 @@ export default class UsuariosController {
             .preload('afc')
             .preload('ccf')
             // 👇 eventos con usuario
-            .preload('eventos', (ev) => {
-              ev.preload('usuario', (u) => u.select(USER_SELECT))
+            .preload('eventos', (ev: any) => {
+              ev.preload('usuario', (u: any) => u.select(...USER_SELECT))
               ev.orderBy('created_at', 'desc')
             })
             // 👇 pasos con usuario (actor)
-            .preload('pasos', (p) => {
+            .preload('pasos', (p: any) => {
               // Si prefieres fase/orden: p.orderBy('fase').orderBy('orden', 'asc').orderBy('id', 'asc')
               p.orderBy('created_at', 'desc')
-              p.preload('usuario', (u) => u.select(USER_SELECT))
+              p.preload('usuario', (u: any) => u.select(...USER_SELECT))
             })
-            .preload('historialEstados', (historialQuery) => {
+            .preload('historialEstados', (historialQuery: any) => {
               historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
             })
-            .preload('cambios', (c) => {
+            .preload('cambios', (c: any) => {
               c.preload('usuario').orderBy('created_at', 'desc')
             })
         })
@@ -130,7 +129,7 @@ export default class UsuariosController {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        .preload('contratos', (contractQuery) => {
+        .preload('contratos', (contractQuery: any) => {
           contractQuery
             .orderBy('fecha_inicio', 'desc')
             .preload('cargo')
@@ -141,20 +140,20 @@ export default class UsuariosController {
             .preload('afc')
             .preload('ccf')
             // 👇 eventos con su usuario
-            .preload('eventos', (ev) => {
-              ev.preload('usuario', (u) => u.select(USER_SELECT))
+            .preload('eventos', (ev: any) => {
+              ev.preload('usuario', (u: any) => u.select(...USER_SELECT))
               ev.orderBy('created_at', 'desc')
             })
             // 👇 pasos con usuario (actor)
-            .preload('pasos', (p) => {
+            .preload('pasos', (p: any) => {
               // Si prefieres fase/orden: p.orderBy('fase').orderBy('orden', 'asc').orderBy('id', 'asc')
               p.orderBy('created_at', 'desc')
-              p.preload('usuario', (u) => u.select(USER_SELECT))
+              p.preload('usuario', (u: any) => u.select(...USER_SELECT))
             })
-            .preload('historialEstados', (historialQuery) => {
+            .preload('historialEstados', (historialQuery: any) => {
               historialQuery.orderBy('fecha_cambio', 'desc').preload('usuario')
             })
-            .preload('cambios', (c) => {
+            .preload('cambios', (c: any) => {
               c.preload('usuario').orderBy('created_at', 'desc')
             })
         })

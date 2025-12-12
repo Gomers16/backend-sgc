@@ -3,6 +3,7 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import type { NextFn } from '@adonisjs/core/types/http'
 import type { Authenticators } from '@adonisjs/auth/types'
+import db from '@adonisjs/lucid/services/db'
 
 /**
  * Auth middleware con manejo robusto de errores JSON para MySQL
@@ -20,7 +21,7 @@ export default class AuthMiddleware {
     try {
       await ctx.auth.authenticateUsing(options.guards, { loginRoute: this.redirectTo })
       return next()
-    } catch (error) {
+    } catch (error: any) {
       // 🔥 Detectar errores específicos de JSON corrupto
       const isJsonError =
         error.message?.includes('Unexpected end of JSON input') ||
@@ -37,14 +38,14 @@ export default class AuthMiddleware {
             const tokenValue = authHeader.replace('Bearer ', '').replace('oat_', '').trim()
 
             // Eliminar tokens corruptos de este hash
-            await ctx.db
+            await db
               .from('auth_access_tokens')
               .where('hash', 'like', `%${tokenValue.substring(0, 15)}%`)
               .delete()
 
             console.log('✅ Token corrupto eliminado de BD')
           }
-        } catch (cleanupError) {
+        } catch (cleanupError: any) {
           console.error('⚠️ Error al limpiar token:', cleanupError.message)
         }
 
@@ -52,7 +53,7 @@ export default class AuthMiddleware {
         return ctx.response.unauthorized({
           message: 'Token inválido. Por favor, inicia sesión nuevamente.',
           code: 'INVALID_TOKEN',
-          details: 'Token corrupto detectado y eliminado'
+          details: 'Token corrupto detectado y eliminado',
         })
       }
 
@@ -61,7 +62,7 @@ export default class AuthMiddleware {
 
       return ctx.response.unauthorized({
         message: 'No autenticado',
-        code: 'UNAUTHENTICATED'
+        code: 'UNAUTHENTICATED',
       })
     }
   }

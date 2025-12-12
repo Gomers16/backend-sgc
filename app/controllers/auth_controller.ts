@@ -5,6 +5,12 @@ import Usuario from '#models/usuario'
 import hash from '@adonisjs/core/services/hash'
 
 export default class AuthController {
+  resetPassword(_ctx: HttpContext): any {
+    throw new Error('Method not implemented.')
+  }
+  forgotPassword(_ctx: HttpContext): any {
+    throw new Error('Method not implemented.')
+  }
   public async login({ request, response }: HttpContext) {
     const { correo, password } = request.only(['correo', 'password'])
 
@@ -36,7 +42,7 @@ export default class AuthController {
         token: token.value!.release(), // Token completo con prefijo oat_
         user: userData,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Error en login:', error)
 
       if (error.code === 'E_ROW_NOT_FOUND') {
@@ -67,7 +73,7 @@ export default class AuthController {
       return response.ok({
         user: userData,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Error en /me:', error)
       return response.unauthorized({ message: 'No autenticado' })
     }
@@ -83,7 +89,7 @@ export default class AuthController {
       }
 
       return response.ok({ message: 'Sesión cerrada exitosamente' })
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Error en logout:', error)
       return response.internalServerError({ message: 'Error al cerrar sesión' })
     }

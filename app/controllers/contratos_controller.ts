@@ -731,30 +731,24 @@ export default class ContratosController {
 
       const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
 
-      const contrato = await Contrato.create(
-        {
-          ...contratoDataNorm,
-          razonSocialId: contratoDataNorm.razonSocialId,
-          fechaInicio: fechaInicioLuxon,
-          fechaTerminacion: fechaTerminacionLuxon || null,
-          estado: 'activo',
-          salario: baseNum,
-          terminoContrato: terminoEff,
-        },
-        { client: trx }
-      )
+      const contrato = await Contrato.create({
+        ...contratoDataNorm,
+        razonSocialId: contratoDataNorm.razonSocialId,
+        fechaInicio: fechaInicioLuxon,
+        fechaTerminacion: fechaTerminacionLuxon || null,
+        estado: 'activo',
+        salario: baseNum,
+        terminoContrato: terminoEff,
+      })
 
-      await ContratoSalario.create(
-        {
-          contratoId: contrato.id,
-          salarioBasico: Number(salarioBasico) || baseNum,
-          bonoSalarial: Number(bonoSalarial) || 0,
-          auxilioTransporte: Number(auxilioTransporte) || 0,
-          auxilioNoSalarial: Number(auxilioNoSalarial) || 0,
-          fechaEfectiva: DateTime.now(),
-        },
-        { client: trx }
-      )
+      await ContratoSalario.create({
+        contratoId: contrato.id,
+        salarioBasico: Number(salarioBasico) || baseNum,
+        bonoSalarial: Number(bonoSalarial) || 0,
+        auxilioTransporte: Number(auxilioTransporte) || 0,
+        auxilioNoSalarial: Number(auxilioNoSalarial) || 0,
+        fechaEfectiva: DateTime.now(),
+      })
 
       // pasos (opcional)
       let pasosRecibidos: any[] = []
@@ -780,33 +774,26 @@ export default class ContratosController {
           })
         }
       }
-      if (pasosParaGuardar.length > 0)
-        await ContratoPaso.createMany(pasosParaGuardar, { client: trx })
+      if (pasosParaGuardar.length > 0) await ContratoPaso.createMany(pasosParaGuardar)
 
       // Historial: creación
-      await ContratoHistorialEstado.create(
-        {
-          contratoId: contrato.id,
-          usuarioId: actorId ?? null,
-          oldEstado: 'inactivo',
-          newEstado: 'activo',
-          fechaCambio: DateTime.now(),
-          fechaInicioContrato: contrato.fechaInicio,
-          motivo: 'Creación de contrato',
-        },
-        { client: trx }
-      )
+      await ContratoHistorialEstado.create({
+        contratoId: contrato.id,
+        usuarioId: actorId ?? null,
+        oldEstado: 'inactivo',
+        newEstado: 'activo',
+        fechaCambio: DateTime.now(),
+        fechaInicioContrato: contrato.fechaInicio,
+        motivo: 'Creación de contrato',
+      })
 
-      await ContratoCambio.create(
-        {
-          contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
-          campo: 'creacion',
-          oldValue: this.json(null),
-          newValue: this.json({ estado: 'activo', by: actorId ?? null }),
-        },
-        { client: trx }
-      )
+      await ContratoCambio.create({
+        contratoId: contrato.id,
+        usuarioId: contrato.usuarioId,
+        campo: 'creacion',
+        oldValue: this.json(null),
+        newValue: this.json({ estado: 'activo', by: actorId ?? null }),
+      })
 
       await trx.commit()
       await this.syncUsuarioTrasGuardarContrato(contrato)
@@ -1592,18 +1579,15 @@ export default class ContratosController {
       // ======= Historial de estado =======
       if (oldEstado !== contrato.estado) {
         const fechaInicioHist = this.toDateTime(contrato.fechaInicio)
-        await ContratoHistorialEstado.create(
-          {
-            contratoId: contrato.id,
-            usuarioId: actorId ?? null,
-            oldEstado,
-            newEstado: contrato.estado,
-            fechaCambio: DateTime.now(),
-            fechaInicioContrato: fechaInicioHist ?? null,
-            motivo: contrato.estado === 'inactivo' ? contrato.motivoFinalizacion : null,
-          },
-          { client: trx }
-        )
+        await ContratoHistorialEstado.create({
+          contratoId: contrato.id,
+          usuarioId: actorId ?? null,
+          oldEstado,
+          newEstado: contrato.estado,
+          fechaCambio: DateTime.now(),
+          fechaInicioContrato: fechaInicioHist ?? null,
+          motivo: contrato.estado === 'inactivo' ? contrato.motivoFinalizacion : null,
+        })
       }
 
       // Cambios de tracking
@@ -1728,7 +1712,7 @@ export default class ContratosController {
         })
       }
 
-      if (cambios.length > 0) await ContratoCambio.createMany(cambios, { client: trx })
+      if (cambios.length > 0) await ContratoCambio.createMany(cambios)
 
       await trx.commit()
       await this.syncUsuarioTrasGuardarContrato(contrato)
