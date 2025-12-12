@@ -625,18 +625,118 @@ export default class FacturacionTicketsController {
    * Genera comisiones según reglas RTM + dateo.
    */
   public async confirmar({ params, request, response, auth }: HttpContext) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    console.log('🟢 INICIO CONFIRMAR - Ticket ID:', params.id)
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
     const forzar = Boolean(request.input('forzar'))
     const ticket = await FacturacionTicket.find(params.id)
+
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
-    // === DETECTAR SI ES SOAT/PREV/PERI ===
-    const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
+    console.log('📋 TICKET ANTES DE PROCESAR:')
+    console.log('   - ID:', ticket.id)
+    console.log('   - placa:', ticket.placa)
+    console.log('   - total:', ticket.total)
+    console.log('   - totalFactura:', ticket.totalFactura)
+    console.log('   - fechaPago:', ticket.fechaPago?.toISO())
+    console.log('   - sedeId:', ticket.sedeId)
+    console.log('   - agenteId:', ticket.agenteId)
+    console.log('   - turnoId:', ticket.turnoId)
+    console.log('   - dateoId:', ticket.dateoId)
+    console.log('   - servicioCodigo:', ticket.servicioCodigo)
+    console.log('   - servicioNombre:', ticket.servicioNombre)
 
-    // === VALIDACIÓN OBLIGATORIOS (excepto para SOAT/PREV/PERI) ===
-    if (!esSOAT && !canConfirm(ticket, true)) {
-      return response.badRequest({ message: 'Faltan campos obligatorios para confirmar' })
+    const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
+    console.log('🔍 Es SOAT/PREV/PERI:', esSOAT)
+
+    // COMPLETAR desde dateo
+    if (!ticket.agenteId && ticket.dateoId) {
+      console.log('🔄 Intentando obtener agenteId desde dateo:', ticket.dateoId)
+      const d = await CaptacionDateo.find(ticket.dateoId)
+      console.log('   Dateo encontrado:', !!d)
+      if (d) {
+        const agenteIdFromDateo = (d as any)?.agenteId ?? (d as any)?.agente_id ?? null
+        console.log('   agenteId en dateo:', agenteIdFromDateo)
+        if (agenteIdFromDateo) {
+          ticket.agenteId = agenteIdFromDateo
+          console.log('   ✅ agenteId asignado:', ticket.agenteId)
+        }
+      }
     }
 
+    // COMPLETAR desde turno
+    if (!ticket.sedeId && ticket.turnoId) {
+      console.log('🔄 Intentando obtener sedeId desde turno:', ticket.turnoId)
+      const t = await TurnoRtm.find(ticket.turnoId)
+      console.log('   Turno encontrado:', !!t)
+      if (t) {
+        console.log('   Turno completo:', JSON.stringify(t.serialize(), null, 2))
+        const sedeIdFromTurno = (t as any)?.sedeId ?? (t as any)?.sede_id ?? null
+        console.log('   sedeId en turno:', sedeIdFromTurno)
+        if (sedeIdFromTurno) {
+          ticket.sedeId = sedeIdFromTurno
+          console.log('   ✅ sedeId asignado:', ticket.sedeId)
+        }
+      }
+    }
+
+    if (!ticket.agenteId && ticket.turnoId) {
+      console.log('🔄 Intentando obtener agenteId desde turno:', ticket.turnoId)
+      const t = await TurnoRtm.find(ticket.turnoId)
+      if (t) {
+        const agenteIdFromTurno =
+          (t as any)?.agenteCaptacionId ?? (t as any)?.agente_captacion_id ?? null
+        console.log('   agenteCaptacionId en turno:', agenteIdFromTurno)
+        if (agenteIdFromTurno) {
+          ticket.agenteId = agenteIdFromTurno
+          console.log('   ✅ agenteId asignado:', ticket.agenteId)
+        }
+      }
+    }
+
+    console.log('📋 TICKET DESPUÉS DE COMPLETAR CAMPOS:')
+    console.log('   - sedeId:', ticket.sedeId)
+    console.log('   - agenteId:', ticket.agenteId)
+
+    // Guardar cambios
+    await ticket.save()
+    console.log('💾 Ticket guardado')
+
+    // VALIDACIÓN
+    if (!esSOAT) {
+      console.log('🔍 VALIDANDO CAMPOS OBLIGATORIOS (no es SOAT):')
+      const totalNum = ticket.total && ticket.total > 0 ? ticket.total : ticket.totalFactura || 0
+      console.log('   - placa:', ticket.placa)
+      console.log('   - placaValida:', placaValida(ticket.placa))
+      console.log('   - totalNum:', totalNum)
+      console.log('   - totalNum > 0:', totalNum > 0)
+      console.log('   - fechaPago:', ticket.fechaPago?.toISO())
+      console.log('   - !!fechaPago:', !!ticket.fechaPago)
+      console.log('   - sedeId:', ticket.sedeId)
+      console.log('   - agenteId:', ticket.agenteId)
+      console.log('   - sedeId || agenteId:', !!(ticket.sedeId || ticket.agenteId))
+
+      const puedeConfirmar = canConfirm(ticket, true)
+      console.log('   🎯 canConfirm resultado:', puedeConfirmar)
+
+      if (!puedeConfirmar) {
+        console.log('❌ FALLO canConfirm - Respondiendo badRequest')
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+        return response.badRequest({ message: 'Faltan campos obligatorios para confirmar' })
+      }
+    }
+
+    console.log('✅ VALIDACIÓN PASÓ - Continuando con confirmación...')
+
+    // === PARA SOAT/PREV/PERI: SOLO VALIDAR QUE TENGA IMAGEN ===
+    if (esSOAT && !ticket.filePath) {
+      return response.badRequest({
+        message: 'Servicio simplificado requiere al menos la imagen de la factura',
+      })
+    }
+
+    // ... resto del código de confirmar sin cambios ...
     // === PARA SOAT/PREV/PERI: SOLO VALIDAR QUE TENGA IMAGEN ===
     if (esSOAT && !ticket.filePath) {
       return response.badRequest({
@@ -1109,7 +1209,8 @@ function sanitizeNit(v: string): string {
 
 function placaValida(placa?: string | null): boolean {
   if (!placa) return false
-  const rex = /^(?:[A-Z]{3}\d{3}|[A-Z]{3}\d{2}[A-Z])$/
+  const rex = /^(?:[A-Z]{3}\d{3}|[A-Z]{3}\d{2}[A-Z]|\d{3}[A-Z]{3})$/
+  //                                              ^^^^^^^^^ NUEVO: acepta 123TYU (motos viejas)
   return rex.test(placa.toUpperCase())
 }
 

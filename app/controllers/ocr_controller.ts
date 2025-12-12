@@ -87,7 +87,7 @@ export default class OcrController {
       const mod = await import('sharp').catch(() => null)
       const sharp = mod?.default
       if (!sharp) return false
-      await sharp(src) // 👈 Remueve el objeto failOn
+      await sharp(src)
         .rotate()
         .resize({ width: 2200, withoutEnlargement: true })
         .grayscale()
@@ -423,14 +423,118 @@ export default class OcrController {
     return m ? m[1].replace(/\./g, ':') : null
   }
 
+  /**
+   * 🔥 NUEVA FUNCIÓN: Corrige errores comunes del OCR en fechas
+   * Recibe formato DD/MM/YYYY y devuelve formato corregido DD/MM/YYYY
+   */
+  private corregirFechaOCR(fechaStr: string): string {
+    if (!fechaStr) return fechaStr
+
+    // Separar componentes (puede venir DD/MM/YYYY o DD-MM-YYYY)
+    const parts = fechaStr.replace(/-/g, '/').split('/')
+    if (parts.length !== 3) return fechaStr
+
+    let [dia, mes, ano] = parts.map((p) => Number.parseInt(p, 10))
+
+    // 🔥 CORRECCIONES COMUNES DEL OCR
+
+    // 1. Año absurdo (>2030 o <2020) - probablemente el OCR confundió dígitos
+    if (ano > 2030 || ano < 2020) {
+      // Si el año es 26XX, probablemente es 20XX (6→0)
+      if (ano >= 2600 && ano <= 2699) {
+        ano = 2000 + (ano - 2600)
+        console.log('🔧 OCR Backend: Año 26XX → 20XX:', ano)
+      }
+      // Si el año es 21XX, probablemente es 20XX (1→0 al inicio)
+      else if (ano >= 2100 && ano <= 2199) {
+        ano = 2000 + (ano - 2100)
+        console.log('🔧 OCR Backend: Año 21XX → 20XX:', ano)
+      }
+      // Si el año es 30XX, probablemente es 20XX (3→2)
+      else if (ano >= 3000 && ano <= 3099) {
+        ano = 2000 + (ano - 3000)
+        console.log('🔧 OCR Backend: Año 30XX → 20XX:', ano)
+      }
+    }
+
+    // 2. Mes inválido (>12) - intentar corregir
+    if (mes > 12) {
+      // Si el mes es 18, probablemente es 10 (1→1, 8→0) o 08
+      if (mes === 18) {
+        mes = 10
+        console.log('🔧 OCR Backend: Mes 18 → 10')
+      }
+      // Si el mes es 13-17, probablemente es 03-07 (1X→0X)
+      else if (mes >= 13 && mes <= 17) {
+        mes = mes - 10
+        console.log('🔧 OCR Backend: Mes 1X → 0X:', mes)
+      }
+      // Si el mes es 19, probablemente es 09
+      else if (mes === 19) {
+        mes = 9
+        console.log('🔧 OCR Backend: Mes 19 → 09')
+      }
+      // Si el mes es 20-29, probablemente es 00-09 (2→0)
+      else if (mes >= 20 && mes <= 29) {
+        mes = mes - 20
+        console.log('🔧 OCR Backend: Mes 2X → 0X:', mes)
+      }
+    }
+
+    // 3. Día inválido (>31) - intentar corregir
+    if (dia > 31) {
+      // Si el día es 38, probablemente es 28 (3→2)
+      if (dia === 38) {
+        dia = 28
+        console.log('🔧 OCR Backend: Día 38 → 28')
+      }
+      // Si el día es 32-37, probablemente es 22-27
+      else if (dia >= 32 && dia <= 37) {
+        dia = dia - 10
+        console.log('🔧 OCR Backend: Día 3X → 2X:', dia)
+      }
+      // Si el día es 39, probablemente es 29
+      else if (dia === 39) {
+        dia = 29
+        console.log('🔧 OCR Backend: Día 39 → 29')
+      }
+    }
+
+    // 4. Validación final de rangos
+    if (dia < 1 || dia > 31) {
+      console.warn('⚠️ OCR Backend: Día fuera de rango después de corrección:', dia)
+      return fechaStr // Devolver original si no se puede corregir
+    }
+    if (mes < 1 || mes > 12) {
+      console.warn('⚠️ OCR Backend: Mes fuera de rango después de corrección:', mes)
+      return fechaStr
+    }
+    if (ano < 2020 || ano > 2030) {
+      console.warn('⚠️ OCR Backend: Año fuera de rango después de corrección:', ano)
+      return fechaStr
+    }
+
+    // Reconstruir fecha corregida en formato DD/MM/YYYY
+    const fechaCorregida = `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`
+    console.log('✅ OCR Backend: Fecha corregida:', fechaStr, '→', fechaCorregida)
+
+    return fechaCorregida
+  }
+
+  /**
+   * 🔥 FUNCIÓN MODIFICADA: Aplica corrección de errores OCR antes de convertir a ISO
+   */
   private toLocalDatetimeISO(fecha?: string | null, hora?: string | null): string | null {
     if (!fecha) return null
+
+    // 🔥 APLICAR CORRECCIÓN DE ERRORES OCR ANTES DE PROCESAR
+    const fechaCorregida = this.corregirFechaOCR(fecha)
 
     // Soporta "dd/mm/yyyy" o "yyyy-mm-dd"
     let yyyy = ''
     let mm = ''
     let dd = ''
-    const f = (fecha || '').trim()
+    const f = (fechaCorregida || '').trim()
     if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
       ;[yyyy, mm, dd] = f.split('-')
     } else {
@@ -469,7 +573,7 @@ function norm(text: string) {
   return text
     .replace(/\r/g, '')
     .replace(/[·•]/g, '.')
-    .replace(/[“”]/g, '"')
+    .replace(/[""]/g, '"')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
 }
