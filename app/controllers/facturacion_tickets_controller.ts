@@ -439,6 +439,7 @@ export default class FacturacionTicketsController {
   }
 
   /** PATCH /facturacion/tickets/:id */
+  /** PATCH /facturacion/tickets/:id */
   public async update({ params, request, response }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
@@ -485,15 +486,31 @@ export default class FacturacionTicketsController {
         .toUpperCase()
         .replace(/\s+/g, '')
     if ('total' in up) ticket.total = toNumberOrZero(up.total)
-    if ('fecha_pago' in up)
-      ticket.fechaPago = up.fecha_pago ? DateTime.fromISO(String(up.fecha_pago)) : null
+
+    // 🔥 CORRECCIÓN: Validar que el DateTime sea válido antes de asignar
+    if ('fecha_pago' in up) {
+      if (up.fecha_pago) {
+        const dt = DateTime.fromISO(String(up.fecha_pago))
+        if (dt.isValid) {
+          ticket.fechaPago = dt
+        } else {
+          return response.badRequest({
+            message: 'Fecha de pago inválida',
+            detalles: 'El formato de fecha proporcionado no es válido',
+          })
+        }
+      } else {
+        ticket.fechaPago = null
+      }
+    }
+
     if ('sede_id' in up) ticket.sedeId = toIntOrNull(up.sede_id)
     if ('agente_id' in up) ticket.agenteId = toIntOrNull(up.agente_id)
     if ('prefijo' in up) ticket.prefijo = nullIfEmpty(up.prefijo)
     if ('consecutivo' in up) ticket.consecutivo = nullIfEmpty(up.consecutivo)
-    if ('forma_pago' in up) ticket.formaPago = nullIfEmpty(up.forma_pago) as any // 👈 Añade 'as any'
+    if ('forma_pago' in up) ticket.formaPago = nullIfEmpty(up.forma_pago) as any
     if ('servicio_id' in up) ticket.servicioId = toIntOrNull(up.servicio_id)
-    if ('doc_tipo' in up) ticket.docTipo = nullIfEmpty(up.doc_tipo) as any // 👈 Añade 'as any'
+    if ('doc_tipo' in up) ticket.docTipo = nullIfEmpty(up.doc_tipo) as any
     if ('doc_numero' in up) ticket.docNumero = nullIfEmpty(up.doc_numero)
     if ('nombre' in up) ticket.nombre = nullIfEmpty(up.nombre)
     if ('telefono' in up) ticket.telefono = nullIfEmpty(up.telefono)
@@ -537,9 +554,12 @@ export default class FacturacionTicketsController {
       if (!ticket.totalFactura && tf) ticket.totalFactura = tf
       if (!ticket.total && tf) ticket.total = tf
 
+      // 🔥 CORRECCIÓN: Validar fechaHora antes de asignar
       if (!ticket.fechaPago && c.fechaHora) {
         const dt = DateTime.fromISO(String(c.fechaHora))
-        if (dt.isValid) ticket.fechaPago = dt
+        if (dt.isValid) {
+          ticket.fechaPago = dt
+        }
       }
 
       if (!ticket.placa && c.placa) {
@@ -599,7 +619,6 @@ export default class FacturacionTicketsController {
     await ticket.save()
     return ticket
   }
-
   /**
    * POST /facturacion/tickets/:id/confirmar
    * Confirma y persiste snapshots del turno/servicio en la fila.
