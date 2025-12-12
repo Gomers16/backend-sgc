@@ -140,19 +140,20 @@ public async show({ params, response, auth }: HttpContext) {
       .select('id')
       .first()
 
-    const userAgenteId = userAgenteRow?.id
+      const userAgenteId = userAgenteRow?.id
 
     console.log('🔍 Validación COMERCIAL:', {
       userRole,
       userId: auth.user.id,
       userAgenteId,
       requestedId: row.id,
-      allowed: userAgenteId && Number(row.id) === Number(userAgenteId)
+        allowed: userAgenteId && Number(row.id) === Number(userAgenteId),
     })
 
     if (!userAgenteId || Number(row.id) !== Number(userAgenteId)) {
       return response.forbidden({
-        message: 'No tienes permiso para ver esta ficha comercial. Solo puedes ver tu propia ficha.'
+          message:
+            'No tienes permiso para ver esta ficha comercial. Solo puedes ver tu propia ficha.',
       })
     }
   }

@@ -296,12 +296,31 @@ export default class FacturacionTicketsController {
     const buffer = await fs.readFile(file.tmpPath!)
     const hash = digestSHA256(buffer)
 
-    const dup = await FacturacionTicket.findBy('hash', hash)
-    if (dup)
-      return response.conflict({
-        message: 'Este ticket ya fue cargado (hash duplicado)',
-        id: dup.id,
-      })
+    // === OBTENER servicioId PRIMERO para detectar si es servicio simplificado ===
+    const turnoId = toIntOrNull(request.input('turno_id'))
+    const dateoId = toIntOrNull(request.input('dateo_id'))
+    const sedeId = toIntOrNull(request.input('sede_id'))
+    const servicioId = toIntOrNull(request.input('servicio_id'))
+
+    // === DETECTAR SI ES SERVICIO SIMPLIFICADO (SOAT/PREV/PERI) ===
+    let esServicioSimplificado = false
+    if (servicioId) {
+      const s = await Servicio.find(servicioId)
+      if (s) {
+        esServicioSimplificado = isSOAT(s.codigoServicio, s.nombreServicio)
+      }
+    }
+
+    // === VALIDAR HASH DUPLICADO SOLO SI NO ES SERVICIO SIMPLIFICADO ===
+    if (!esServicioSimplificado) {
+      const dup = await FacturacionTicket.findBy('hash', hash)
+      if (dup) {
+        return response.conflict({
+          message: 'Este ticket ya fue cargado (hash duplicado)',
+          id: dup.id,
+        })
+      }
+    }
 
     const now = DateTime.now()
     const outDir = path.join(
@@ -313,11 +332,6 @@ export default class FacturacionTicketsController {
     const filename = `${cuid()}.${file.extname}`
     const filePath = path.join(outDir, filename)
     await fs.copyFile(file.tmpPath!, filePath)
-
-    const turnoId = toIntOrNull(request.input('turno_id'))
-    const dateoId = toIntOrNull(request.input('dateo_id'))
-    const sedeId = toIntOrNull(request.input('sede_id'))
-    const servicioId = toIntOrNull(request.input('servicio_id'))
     const imageRotation = Number(request.input('image_rotation') || 0)
 
     const ticket = new FacturacionTicket()
@@ -334,12 +348,10 @@ export default class FacturacionTicketsController {
     ticket.sedeId = sedeId
     ticket.servicioId = servicioId
 
-    // === DETECTAR SI ES SOAT ===
-    let esSOAT = false
-    if (servicioId) {
+    // === ESTABLECER CAMPOS DE SERVICIO (la detección ya se hizo arriba) ===
+    if (servicioId && esServicioSimplificado) {
       const s = await Servicio.find(servicioId)
       if (s) {
-        esSOAT = isSOAT(s.codigoServicio, s.nombreServicio)
         ticket.servicioCodigo = s.codigoServicio ?? null
         ticket.servicioNombre = s.nombreServicio ?? null
       }
@@ -384,7 +396,7 @@ export default class FacturacionTicketsController {
       ticket.agenteId = ticket.agenteId || turnSnap.agenteCaptacionId || null
       ticket.servicioId = ticket.servicioId || turnSnap.servicioId || null
       await this.fillSnapshotsFromTurno(ticket, turno)
-    } else if (ticket.servicioId && !esSOAT) {
+    } else if (ticket.servicioId && !esServicioSimplificado) {
       const s = await Servicio.find(ticket.servicioId)
       if (s) {
         ticket.servicioCodigo = s.codigoServicio ?? null
@@ -401,10 +413,10 @@ export default class FacturacionTicketsController {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
-    // === NO HACER OCR SI ES SOAT ===
+    // === NO HACER OCR SI ES SOAT/PREV/PERI ===
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
     if (esSOAT) {
-      return response.ok({ message: 'SOAT no requiere OCR', ticket })
+      return response.ok({ message: 'Servicio simplificado no requiere OCR', ticket })
     }
 
     const res = fakeOCR()
@@ -466,7 +478,7 @@ export default class FacturacionTicketsController {
       'ocr_campos',
     ]) as Record<string, unknown>
 
-    // === DETECTAR SI ES SOAT ===
+    // === DETECTAR SI ES SOAT/PREV/PERI ===
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
 
     if ('placa' in up) ticket.placa = String(up.placa || '').toUpperCase().replace(/\s+/g, '')
@@ -534,7 +546,7 @@ export default class FacturacionTicketsController {
       }
     }
 
-    // === PARA SOAT: NO VALIDAR CAMPOS OBLIGATORIOS ===
+    // === PARA SOAT/PREV/PERI: NO VALIDAR CAMPOS OBLIGATORIOS ===
     if (!esSOAT && canConfirm(ticket, false) &&
         (ticket.estado === 'BORRADOR' || ticket.estado === 'OCR_LISTO')) {
       ticket.estado = 'LISTA_CONFIRMAR'
@@ -595,20 +607,20 @@ export default class FacturacionTicketsController {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
-    // === DETECTAR SI ES SOAT ===
+    // === DETECTAR SI ES SOAT/PREV/PERI ===
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
 
-    // === VALIDACIÓN OBLIGATORIOS (excepto para SOAT) ===
+    // === VALIDACIÓN OBLIGATORIOS (excepto para SOAT/PREV/PERI) ===
     if (!esSOAT && !canConfirm(ticket, true)) {
       return response.badRequest({ message: 'Faltan campos obligatorios para confirmar' })
     }
 
-    // === PARA SOAT: SOLO VALIDAR QUE TENGA IMAGEN ===
+    // === PARA SOAT/PREV/PERI: SOLO VALIDAR QUE TENGA IMAGEN ===
     if (esSOAT && !ticket.filePath) {
-      return response.badRequest({ message: 'SOAT requiere al menos la imagen de la factura' })
+      return response.badRequest({ message: 'Servicio simplificado requiere al menos la imagen de la factura' })
     }
 
-    // Duplicado por contenido (solo si NO es SOAT)
+    // Duplicado por contenido (solo si NO es SOAT/PREV/PERI)
     if (!esSOAT) {
       const dup = await isContentDuplicate(ticket)
       ticket.duplicadoPorContenido = dup
@@ -671,7 +683,7 @@ export default class FacturacionTicketsController {
       }
     }
 
-    // === COMISIONES: SOLO PARA RTM (NO PARA SOAT) ===
+    // === COMISIONES: SOLO PARA RTM (NO PARA SOAT/PREV/PERI) ===
     if (!esSOAT) {
       try {
         await this.applyCommissionHook(ticket)
@@ -1026,11 +1038,24 @@ function isRTM(codigo?: string | null, nombre?: string | null): boolean {
   return false
 }
 
-/** Detecta si un servicio es SOAT por código o nombre */
+/**
+ * Detecta si un servicio es SOAT, PREVENTIVA o PERITAJE (servicios simplificados)
+ * Estos servicios NO requieren OCR completo ni generan comisiones automáticas
+ */
 function isSOAT(codigo?: string | null, nombre?: string | null): boolean {
   const c = (codigo || '').toUpperCase().trim()
   const n = (nombre || '').toUpperCase().trim()
-  return c.includes('SOAT') || n.includes('SOAT')
+
+  // SOAT
+  if (c.includes('SOAT') || n.includes('SOAT')) return true
+
+  // PREVENTIVA
+  if (c.includes('PREV') || n.includes('PREVENTIVA')) return true
+
+  // PERITAJE
+  if (c.includes('PERI') || n.includes('PERITAJE')) return true
+
+  return false
 }
 
 function digestSHA256(buffer: Buffer): string {

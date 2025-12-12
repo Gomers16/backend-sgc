@@ -1,9 +1,9 @@
-import type { HttpContext } from '@adonisjs/core/http'
+/**import type { HttpContext } from '@adonisjs/core/http'
 import vine from '@vinejs/vine'
 import AgenteCaptacion from '#models/agente_captacion'
 import CaptacionCanal from '#models/captacion_canal'
 
-/** Schema para crear/editar la membresía (attach / updatePivot) */
+
 const upsertSchema = vine.compile(
   vine.object({
     canalId: vine.number().positive(),
@@ -21,7 +21,7 @@ function parseBool(q: unknown): boolean | undefined {
 }
 
 export default class AgenteCanalMembresiasController {
-  /** GET /api/agentes-captacion/:agenteId/canales */
+  GET /api/agentes-captacion/:agenteId/canales
   async listByAgente({ params }: HttpContext) {
     const agente = await AgenteCaptacion.query()
       .where('id', params.agenteId)
@@ -37,11 +37,11 @@ export default class AgenteCanalMembresiasController {
       colorHex: c.colorHex,
       activo: c.activo,
       orden: c.orden,
-      pivot: c.$extras.pivot_agente_canal_membresias, // { is_default, activo, created_at, updated_at }
+      pivot: c.$extras.pivot_agente_canal_membresias,  { is_default, activo, created_at, updated_at }
     }))
   }
 
-  /** GET /api/captacion-canales/:canalId/agentes?tipo=&activo= */
+   GET /api/captacion-canales/:canalId/agentes?tipo=&activo=
   async listByCanal({ params, request }: HttpContext) {
     const tipo = request.input('tipo') as
       | 'ASESOR_INTERNO'
@@ -70,13 +70,13 @@ export default class AgenteCanalMembresiasController {
     }
   }
 
-  /** POST /api/agentes-captacion/:agenteId/canales */
+   POST /api/agentes-captacion/:agenteId/canales
   async attach({ params, request, response }: HttpContext) {
     const payload = await request.validateUsing(upsertSchema)
     const agente = await AgenteCaptacion.findOrFail(params.agenteId)
     const canal = await CaptacionCanal.findOrFail(payload.canalId)
 
-    // Regla: EXTERNO solo canal ASESOR
+    Regla: EXTERNO solo canal ASESOR
     if (agente.tipo === 'ASESOR_EXTERNO' && canal.codigo !== 'ASESOR') {
       return response.badRequest({
         message: 'Un asesor EXTERNO solo puede pertenecer al canal ASESOR',
@@ -91,7 +91,7 @@ export default class AgenteCanalMembresiasController {
       .first()
 
     if (existing) {
-      // Si ya existe, actualiza flags preservando los actuales si no llegan en el payload
+       Si ya existe, actualiza flags preservando los actuales si no llegan en el payload
       await agente.related('canales').sync(
         {
           [payload.canalId]: {
@@ -113,7 +113,7 @@ export default class AgenteCanalMembresiasController {
     return { ok: true }
   }
 
-  /** PUT /api/agentes-captacion/:agenteId/canales/:canalId */
+  PUT /api/agentes-captacion/:agenteId/canales/:canalId
   async updatePivot({ params, request, response }: HttpContext) {
     const payload = await request.validateUsing(upsertSchema)
     const agente = await AgenteCaptacion.findOrFail(params.agenteId)
@@ -138,10 +138,10 @@ export default class AgenteCanalMembresiasController {
     return { ok: true }
   }
 
-  /** DELETE /api/agentes-captacion/:agenteId/canales/:canalId */
+  DELETE /api/agentes-captacion/:agenteId/canales/:canalId 
   async detach({ params }: HttpContext) {
     const agente = await AgenteCaptacion.findOrFail(params.agenteId)
     await agente.related('canales').detach([Number(params.canalId)])
     return { ok: true }
   }
-}
+} **/
