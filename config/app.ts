@@ -13,14 +13,15 @@ export const appKey = new Secret(env.get('APP_KEY'))
  * The configuration settings used by the HTTP server
  */
 export const http = defineConfig({
+  /**
+   * Generate request id for every HTTP request
+   */
   generateRequestId: true,
-  allowMethodSpoofing: false,
 
   /**
-   * 🔥 CONFIGURACIÓN DEL SERVIDOR
+   * Allow method spoofing using `_method` field
    */
-  host: env.get('HOST', '0.0.0.0'),
-  port: env.get('PORT', 3333),
+  allowMethodSpoofing: false,
 
   /**
    * Enabling async local storage will let you access HTTP context
