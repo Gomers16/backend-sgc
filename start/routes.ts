@@ -1215,7 +1215,7 @@ router
         return new ComisionesController().anular(ctx)
       })
       .where('id', /^[0-9]+$/)
-      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })])
 
     /* ============================ FACTURACIÓN ========================== */
 

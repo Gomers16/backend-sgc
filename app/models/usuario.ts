@@ -27,7 +27,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column({ isPrimary: true })
   declare id: number
 
-  // === Mapea FKs a snake_case si tu migración las creó así ===
+  // === Mapea FKs a snake_case ===
   @column({ columnName: 'razon_social_id' })
   declare razonSocialId: number
 
@@ -40,7 +40,6 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column({ columnName: 'sede_id' })
   declare sedeId: number
 
-  // 🆕 Campo virtual para agenteId (se obtiene de la relación)
   @column({ columnName: 'agente_id' })
   declare agenteId?: number | null
 
@@ -62,6 +61,20 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare direccion?: string
 
+  // Correo Personal
+  @column({ columnName: 'correo_personal' })
+  declare correoPersonal?: string
+
+  // ✅ NUEVOS CAMPOS
+  @column({ columnName: 'tipo_sangre' })
+  declare tipoSangre?: 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-' | null
+
+  @column({ columnName: 'contacto_emergencia_nombre' })
+  declare contactoEmergenciaNombre?: string
+
+  @column({ columnName: 'contacto_emergencia_telefono' })
+  declare contactoEmergenciaTelefono?: string
+
   @column()
   declare celularPersonal?: string
 
@@ -77,7 +90,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column()
   declare recomendaciones: boolean
 
-  // Entidades de salud (mapea si están en snake_case)
+  // Entidades de salud
   @column({ columnName: 'eps_id' })
   declare epsId: number
 
@@ -102,7 +115,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @column.dateTime({ columnName: 'deleted_at' })
   declare deletedAt: DateTime | null
 
-  // Relaciones existentes
+  // Relaciones
   @belongsTo(() => RazonSocial, { foreignKey: 'razonSocialId' })
   declare razonSocial: BelongsTo<typeof RazonSocial>
 
@@ -133,10 +146,7 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   @hasMany(() => Contrato, { foreignKey: 'usuarioId' })
   declare contratos: HasMany<typeof Contrato>
 
-  // 🆕 Relación con AgenteCaptacion (1:1)
-  @hasOne(() => AgenteCaptacion, {
-    foreignKey: 'usuarioId',
-  })
+  @hasOne(() => AgenteCaptacion, { foreignKey: 'usuarioId' })
   declare agenteCaptacion: HasOne<typeof AgenteCaptacion>
 
   static accessTokens = DbAccessTokensProvider.forModel(Usuario, {

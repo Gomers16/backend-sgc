@@ -12,6 +12,7 @@ import RazonSocial from '#models/razon_social'
 import Sede from '#models/sede'
 import Cargo from '#models/cargo'
 import EntidadSalud from '#models/entidad_salud'
+import AgenteCaptacion from '#models/agente_captacion'
 
 /** Campos a seleccionar cuando se precarga el usuario actor */
 const USER_SELECT = ['id', 'nombres', 'apellidos', 'correo'] as const
@@ -38,14 +39,11 @@ function preloadUsuarioCompleto(loader: any) {
         .preload('afp')
         .preload('afc')
         .preload('ccf')
-        // Eventos con su usuario (actor) y ordenados
         .preload('eventos', (ev: any) => {
           ev.preload('usuario', (u: any) => u.select(USER_SELECT))
           ev.orderBy('created_at', 'desc')
         })
-        // PASOS: ahora también traen el usuario (actor)
         .preload('pasos', (p: any) => {
-          // Si prefieres fase/orden: p.orderBy('fase').orderBy('orden', 'asc').orderBy('id', 'asc')
           p.orderBy('created_at', 'desc')
           p.preload('usuario', (u: any) => u.select(USER_SELECT))
         })
@@ -57,6 +55,7 @@ function preloadUsuarioCompleto(loader: any) {
         })
     })
 }
+
 export default class UsuariosController {
   /** Lista de usuarios (opcionalmente filtrados por razón social) */
   public async index({ request, response }: HttpContext) {
@@ -83,14 +82,11 @@ export default class UsuariosController {
             .preload('afp')
             .preload('afc')
             .preload('ccf')
-            // 👇 eventos con usuario
             .preload('eventos', (ev: any) => {
               ev.preload('usuario', (u: any) => u.select(...USER_SELECT))
               ev.orderBy('created_at', 'desc')
             })
-            // 👇 pasos con usuario (actor)
             .preload('pasos', (p: any) => {
-              // Si prefieres fase/orden: p.orderBy('fase').orderBy('orden', 'asc').orderBy('id', 'asc')
               p.orderBy('created_at', 'desc')
               p.preload('usuario', (u: any) => u.select(...USER_SELECT))
             })
@@ -139,14 +135,11 @@ export default class UsuariosController {
             .preload('afp')
             .preload('afc')
             .preload('ccf')
-            // 👇 eventos con su usuario
             .preload('eventos', (ev: any) => {
               ev.preload('usuario', (u: any) => u.select(...USER_SELECT))
               ev.orderBy('created_at', 'desc')
             })
-            // 👇 pasos con usuario (actor)
             .preload('pasos', (p: any) => {
-              // Si prefieres fase/orden: p.orderBy('fase').orderBy('orden', 'asc').orderBy('id', 'asc')
               p.orderBy('created_at', 'desc')
               p.preload('usuario', (u: any) => u.select(...USER_SELECT))
             })
@@ -177,6 +170,7 @@ export default class UsuariosController {
       'nombres',
       'apellidos',
       'correo',
+      'correoPersonal',
       'password',
       'rolId',
       'razonSocialId',
@@ -194,6 +188,10 @@ export default class UsuariosController {
       'afpId',
       'afcId',
       'ccfId',
+      // ✅ NUEVOS CAMPOS
+      'tipoSangre',
+      'contactoEmergenciaNombre',
+      'contactoEmergenciaTelefono',
     ])
 
     try {
@@ -207,6 +205,31 @@ export default class UsuariosController {
         afcId: payload.afcId ?? null,
         ccfId: payload.ccfId ?? null,
       })
+
+      // ✅ Si el rol es COMERCIAL, crear agente de captación automáticamente
+      if (payload.rolId) {
+        const rol = await Rol.find(payload.rolId)
+
+        if (rol && rol.nombre === 'COMERCIAL') {
+          const nombreCompleto = `${user.nombres} ${user.apellidos}`.trim()
+
+          const agente = await AgenteCaptacion.create({
+            usuarioId: user.id,
+            tipo: 'ASESOR_COMERCIAL',
+            nombre: nombreCompleto,
+            telefono: user.celularPersonal ? String(user.celularPersonal).replace(/\D/g, '') : null,
+            docTipo: null,
+            docNumero: null,
+            activo: user.estado === 'activo',
+          })
+
+          // Relación bidireccional
+          user.agenteId = agente.id
+          await user.save()
+
+          console.log(`✅ Agente creado automáticamente: ${agente.nombre} (ID: ${agente.id})`)
+        }
+      }
 
       await user.load((loader) => preloadUsuarioCompleto(loader))
 
@@ -231,6 +254,7 @@ export default class UsuariosController {
         'nombres',
         'apellidos',
         'correo',
+        'correoPersonal',
         'password',
         'rolId',
         'razonSocialId',
@@ -248,19 +272,75 @@ export default class UsuariosController {
         'afpId',
         'afcId',
         'ccfId',
+        // ✅ NUEVOS CAMPOS
+        'tipoSangre',
+        'contactoEmergenciaNombre',
+        'contactoEmergenciaTelefono',
       ])
 
-      user.merge({
-        ...payload,
-        sedeId: payload.sedeId ?? null,
-        cargoId: payload.cargoId ?? null,
-        epsId: payload.epsId ?? null,
-        arlId: payload.arlId ?? null,
-        afpId: payload.afpId ?? null,
-        afcId: payload.afcId ?? null,
-        ccfId: payload.ccfId ?? null,
-      })
+      // ✅ Filtrar campos undefined
+      const cleanPayload: any = {}
+      for (const key of Object.keys(payload)) {
+        const value = (payload as any)[key]
+        if (value !== undefined) {
+          cleanPayload[key] = value
+        }
+      }
+
+      user.merge(cleanPayload)
       await user.save()
+
+      // ✅ Sincronizar con agente de captación
+      const agente = await AgenteCaptacion.query().where('usuario_id', user.id).first()
+
+      if (agente) {
+        // Actualizar datos del agente existente
+        let cambios = false
+
+        if (cleanPayload.nombres !== undefined || cleanPayload.apellidos !== undefined) {
+          agente.nombre = `${user.nombres} ${user.apellidos}`.trim()
+          cambios = true
+        }
+
+        if (cleanPayload.celularPersonal !== undefined) {
+          agente.telefono = user.celularPersonal
+            ? String(user.celularPersonal).replace(/\D/g, '')
+            : null
+          cambios = true
+        }
+
+        if (cleanPayload.estado !== undefined) {
+          agente.activo = user.estado === 'activo'
+          cambios = true
+        }
+
+        if (cambios) {
+          await agente.save()
+          console.log(`✅ Agente sincronizado: ${agente.nombre}`)
+        }
+      } else {
+        // Si no tiene agente pero es COMERCIAL, crearlo
+        const rol = await Rol.find(user.rolId)
+
+        if (rol && rol.nombre === 'COMERCIAL') {
+          const nombreCompleto = `${user.nombres} ${user.apellidos}`.trim()
+
+          const nuevoAgente = await AgenteCaptacion.create({
+            usuarioId: user.id,
+            tipo: 'ASESOR_COMERCIAL',
+            nombre: nombreCompleto,
+            telefono: user.celularPersonal ? String(user.celularPersonal).replace(/\D/g, '') : null,
+            docTipo: null,
+            docNumero: null,
+            activo: user.estado === 'activo',
+          })
+
+          user.agenteId = nuevoAgente.id
+          await user.save()
+
+          console.log(`✅ Agente creado en UPDATE: ${nuevoAgente.nombre}`)
+        }
+      }
 
       await user.load((loader) => preloadUsuarioCompleto(loader))
 
@@ -281,7 +361,6 @@ export default class UsuariosController {
     try {
       const user = await Usuario.findOrFail(params.id)
 
-      // Eliminar solo foto de perfil
       if (user.fotoPerfil) {
         const oldPhotoRelativePath = user.fotoPerfil.replace(/^\//, '')
         const oldPhotoFullPath = path.join(app.publicPath(), oldPhotoRelativePath)

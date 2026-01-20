@@ -9,9 +9,11 @@ import Usuario from '#models/usuario'
 import Servicio from '#models/servicio'
 import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
-import Conductor from '#models/conductor' // 👈 NUEVO
+import Conductor from '#models/conductor' //  NUEVO
 import CaptacionDateo from '#models/captacion_dateo'
 import FacturacionTicket from '#models/facturacion_ticket'
+import AgenteCaptacion from '#models/agente_captacion' // 👈 AGREGAR
+import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion' // 👈 AGREGAR
 
 // ===== Helpers =====
 const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss')
@@ -45,7 +47,7 @@ function parseHoraIngresoToHHmm(h: string): string | null {
 function bloqueoMesesPorServicio(codigo?: string): number {
   const c = (codigo || '').toUpperCase()
   if (c === 'RTM' || c === 'SOAT') return 12
-  if (c === 'PREV') return 2
+  if (c === 'PREV' || c === 'PERI') return 2 // 👈 AGREGAR PERI AQUÍ
   return 0
 }
 
@@ -171,25 +173,39 @@ export default class TurnosRtmController {
       }
 
       // Servicio
+      // Servicio (soporta múltiples)
       if (servicioId) {
-        const sid = Number(servicioId)
-        if (Number.isNaN(sid))
-          return response.badRequest({ message: 'servicioId debe ser numérico' })
-        query.where('servicio_id', sid)
+        const servicioIds = String(servicioId)
+          .split(',')
+          .map((id) => Number(id.trim()))
+          .filter((n) => !Number.isNaN(n))
+        if (servicioIds.length > 0) {
+          query.whereIn('servicio_id', servicioIds)
+        }
       } else if (servicioCodigo) {
-        const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
-        if (!s)
-          return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
-        query.where('servicio_id', s.id)
+        const codigos = String(servicioCodigo)
+          .split(',')
+          .map((c) => c.trim().toUpperCase())
+        const servicios = await Servicio.query().whereIn('codigo_servicio', codigos)
+        if (servicios.length > 0) {
+          query.whereIn(
+            'servicio_id',
+            servicios.map((s) => s.id)
+          )
+        }
       }
 
       // Filtros adicionales
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
-        const c = String(canalAtribucion).toUpperCase() as CanalAtrib
-        if (!allowed.includes(c))
-          return response.badRequest({ message: 'canalAtribucion inválido' })
-        query.where('canal_atribucion', c)
+        const canales = String(canalAtribucion)
+          .split(',')
+          .map((c) => c.trim().toUpperCase())
+          .filter((c) => allowed.includes(c as CanalAtrib))
+
+        if (canales.length > 0) {
+          query.whereIn('canal_atribucion', canales as CanalAtrib[])
+        }
       }
       if (agenteId) query.where('agente_captacion_id', Number(agenteId))
       if (agenteTipo) {
@@ -357,6 +373,7 @@ export default class TurnosRtmController {
         'conductorId',
         'conductorTelefono',
         'conductorNombre',
+        'asesorDetectadoId', // 👈 AGREGAR ESTA LÍNEA
       ])
 
       if (!raw.placa || !raw.tipoVehiculo || !raw.usuarioId || !raw.fecha || !raw.horaIngreso) {
@@ -371,14 +388,67 @@ export default class TurnosRtmController {
       const telefono = normalizePhone(raw.telefono) ?? normalizePhone(raw.clienteTelefono)
       const conductorTelefono = normalizePhone(raw.conductorTelefono)
 
-      const usuarioCreador = await Usuario.find(Number(raw.usuarioId))
-      if (!usuarioCreador) {
+      // ✅ REEMPLAZAR POR ESTO:
+      // 🔥 VALIDACIÓN ROBUSTA DE USUARIO
+      const idUsuario = Number(raw.usuarioId)
+
+      // 1. Validar que sea un número válido
+      if (Number.isNaN(idUsuario) || idUsuario <= 0) {
+        console.error('❌ [TURNO-CREATE] ID usuario inválido:', {
+          recibido: raw.usuarioId,
+          tipo: typeof raw.usuarioId,
+          parseado: idUsuario,
+          timestamp: new Date().toISOString(),
+        })
         await trx.rollback()
-        return response.badRequest({ message: `Usuario ${raw.usuarioId} no encontrado` })
+        return response.badRequest({
+          message: 'ID de usuario inválido. Por favor, cierra sesión y vuelve a ingresar.',
+          debug: {
+            recibido: raw.usuarioId,
+            parseado: idUsuario,
+          },
+        })
       }
-      if (!usuarioCreador.sedeId) {
+
+      // 2. Buscar usuario con preload de sede
+      const usuarioCreador = await Usuario.query().where('id', idUsuario).preload('sede').first()
+
+      // 3. Log de debugging
+      console.log('🔍 [TURNO-CREATE] Usuario encontrado:', {
+        id: usuarioCreador?.id,
+        correo: usuarioCreador?.correo,
+        sedeId: usuarioCreador?.sedeId,
+        sede: usuarioCreador?.sede?.nombre,
+        timestamp: new Date().toISOString(),
+      })
+
+      // 4. Validar existencia
+      if (!usuarioCreador) {
+        console.error('❌ [TURNO-CREATE] Usuario no existe:', { idBuscado: idUsuario })
         await trx.rollback()
-        return response.badRequest({ message: 'El usuario no tiene sede asignada' })
+        return response.badRequest({
+          message: `Usuario ${idUsuario} no encontrado en el sistema`,
+        })
+      }
+
+      // 5. Validar sede con doble check
+      if (!usuarioCreador.sedeId || !usuarioCreador.sede) {
+        console.error('❌ [TURNO-CREATE] Usuario sin sede:', {
+          usuarioId: idUsuario,
+          correo: usuarioCreador.correo,
+          sedeId: usuarioCreador.sedeId,
+          sede: usuarioCreador.sede,
+          timestamp: new Date().toISOString(),
+        })
+        await trx.rollback()
+        return response.badRequest({
+          message: 'Tu usuario no tiene sede asignada. Contacta al administrador.',
+          debug: {
+            usuarioId: idUsuario,
+            correo: usuarioCreador.correo,
+            sedeId: usuarioCreador.sedeId,
+          },
+        })
       }
 
       // Servicio
@@ -472,6 +542,16 @@ export default class TurnosRtmController {
       }
 
       // 3) Consecutivos
+      // 3) Consecutivos CON ADVISORY LOCK
+      // 🔒 Generar lock ID único para sede + fecha
+      const lockKey = `${usuarioCreador.sedeId!}${hoyISO.replace(/-/g, '')}`
+      // Ejemplo: sede 1, fecha 2025-12-29 → lockKey = "120251229"
+      const lockId = Number.parseInt(lockKey.substring(0, 10), 10) || 1
+
+      // 🔒 Obtener lock exclusivo (automáticamente se libera al commit/rollback)
+      await trx.raw('SELECT pg_advisory_xact_lock(?)', [lockId])
+
+      // Ahora SÍ podemos leer el MAX de forma segura (solo esta transacción puede ejecutar esto)
       const rowGlobal = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
@@ -508,11 +588,14 @@ export default class TurnosRtmController {
         clienteId = veh.clienteId ?? null
       }
 
-      if (!clienteId && telefono) {
+      // ✅ SOLO crear cliente si NO es un asesor detectado
+      const esAsesorDetectado = !!raw.asesorDetectadoId
+      if (!clienteId && telefono && !esAsesorDetectado) {
         const cExist = await Cliente.query({ client: trx }).where('telefono', telefono).first()
         if (cExist) {
           clienteId = cExist.id
-        } else if (raw.clienteNombre || raw.clienteEmail || telefono) {
+        } else if (raw.clienteNombre || raw.clienteEmail) {
+          // Solo crear cliente si hay nombre o email explícito
           const cNuevo = await Cliente.create(
             {
               nombre: String(raw.clienteNombre || 'Cliente'),
@@ -524,7 +607,6 @@ export default class TurnosRtmController {
           clienteId = cNuevo.id
         }
       }
-
       // 3.2 Conductor
       let conductorId: number | null = null
 
@@ -559,7 +641,8 @@ export default class TurnosRtmController {
       const nowBog = DateTime.local().setZone('America/Bogota')
       const turnoCodigo = `${servicio.codigoServicio}-${nowBog.toFormat('yyyyMMddHHmmss')}`
 
-      let canalAtribucion: CanalAtrib | null = normalizeCanal(raw.canal)
+      // ✅ Solo normalizar si el usuario envió un canal
+      let canalAtribucion: CanalAtrib | null = raw.canal ? normalizeCanal(raw.canal) : null
       let agenteCaptacionId: number | null = null
       if (canalAtribucion === 'ASESOR') {
         agenteCaptacionId = raw.agenteCaptacionId ? Number(raw.agenteCaptacionId) || null : null
@@ -585,10 +668,18 @@ export default class TurnosRtmController {
         if (r.vigente) {
           const cRaw = (dateo as any).canal as string | undefined
           const cNorm = normalizeCanal(cRaw)
-          if (cNorm) canalAtribucion = cNorm
+
+          // ✅ SOLO usar canal del dateo si el usuario NO seleccionó uno
+          if (cNorm && !canalAtribucion) {
+            canalAtribucion = cNorm
+          }
+
+          // ✅ SOLO usar agente del dateo si el usuario NO seleccionó uno
           // @ts-ignore
-          agenteCaptacionId =
-            (dateo as any).agenteId ?? (dateo as any).agente_id ?? agenteCaptacionId
+          if (!agenteCaptacionId) {
+            agenteCaptacionId = (dateo as any).agenteId ?? (dateo as any).agente_id ?? null
+          }
+
           captacionDateoId = dateo.id
         } else {
           dateo = null
@@ -641,7 +732,94 @@ export default class TurnosRtmController {
             updatedAt: toMySQL(nowBog) as any,
           } as any)
       }
+      // ========================================
+      // 🎯 AUTO-DATEO: Si es RTM + hay asesor detectado por teléfono
+      // ========================================
+      const esRTM = servicio.codigoServicio?.toUpperCase() === 'RTM'
+      const asesorDetectadoPorTelefono = raw.asesorDetectadoId
+        ? Number(raw.asesorDetectadoId)
+        : null
 
+      // 👇 AGREGAR ESTE LOG
+      console.log('🔍 Auto-dateo check:', {
+        esRTM,
+        asesorDetectadoPorTelefono,
+        placa,
+        condicion: esRTM && asesorDetectadoPorTelefono && placa,
+      })
+
+      if (esRTM && asesorDetectadoPorTelefono && placa) {
+        try {
+          // 1️⃣ Buscar dateo PENDIENTE del asesor con esa placa
+          const dateoExistente = await CaptacionDateo.query({ client: trx })
+            .where('agente_id', asesorDetectadoPorTelefono)
+            .where('placa', placa)
+            .where('resultado', 'PENDIENTE')
+            .first()
+
+          if (dateoExistente) {
+            // ✅ CONSUMIR dateo existente
+            dateoExistente.resultado = 'EN_PROCESO'
+            dateoExistente.consumidoTurnoId = turno.id
+            dateoExistente.consumidoAt = nowBog // 👈 SIN toMySQL()
+            await dateoExistente.useTransaction(trx).save()
+
+            // Actualizar turno con el dateo consumido
+            turno.captacionDateoId = dateoExistente.id
+            await turno.useTransaction(trx).save()
+
+            console.log(
+              `✅ Dateo existente #${dateoExistente.id} consumido para turno #${turno.id}`
+            )
+          } else {
+            // ✅ CREAR dateo nuevo
+            const asesor = await AgenteCaptacion.find(asesorDetectadoPorTelefono)
+            if (asesor) {
+              const canal =
+                (asesor as any).tipo === 'ASESOR_CONVENIO' ? 'ASESOR_CONVENIO' : 'ASESOR_COMERCIAL'
+
+              // Buscar convenio si es asesor convenio
+              let convenioId: number | null = null
+              if ((asesor as any).tipo === 'ASESOR_CONVENIO') {
+                const asignacion = await AsesorConvenioAsignacion.query({ client: trx })
+                  .where('asesor_id', asesor.id)
+                  .where('activo', true)
+                  .whereNull('fecha_fin')
+                  .first()
+                if (asignacion) convenioId = asignacion.convenioId
+              }
+
+              const nuevoDateo = await CaptacionDateo.create(
+                {
+                  canal: canal as any,
+                  agenteId: asesor.id,
+                  convenioId,
+                  placa,
+                  telefono: telefono || null,
+                  origen: 'UI',
+                  resultado: 'EN_PROCESO',
+                  consumidoTurnoId: turno.id,
+                  consumidoAt: nowBog, // 👈 SIN toMySQL()
+                  observacion: 'Auto-dateo por teléfono detectado',
+                } as any,
+                { client: trx }
+              )
+
+              // Actualizar turno con el nuevo dateo
+              turno.captacionDateoId = nuevoDateo.id
+              await turno.useTransaction(trx).save()
+
+              console.log(`✅ Nuevo dateo #${nuevoDateo.id} creado para turno #${turno.id}`)
+            }
+          }
+        } catch (err) {
+          console.error('❌ Error en auto-dateo:', err)
+          // No hacer rollback, solo logear el error
+        }
+      }
+      // ========================================
+      // FIN AUTO-DATEO
+      // ========================================
       await trx.commit()
 
       await turno.load('usuario')
@@ -690,12 +868,26 @@ export default class TurnosRtmController {
         'conductorId',
         'conductorTelefono',
         'conductorNombre',
+        'asesorDetectadoId', // 👈 AGREGAR ESTA LÍNEA
       ])
 
       const idNumericoUsuario = Number(raw.usuarioId)
-      if (Number.isNaN(idNumericoUsuario))
+
+      if (Number.isNaN(idNumericoUsuario) || idNumericoUsuario <= 0) {
+        console.error('❌ [TURNO-UPDATE] ID inválido:', idNumericoUsuario)
         return response.badRequest({ message: 'usuarioId inválido' })
-      const usuarioActualizador = await Usuario.find(idNumericoUsuario)
+      }
+
+      const usuarioActualizador = await Usuario.query()
+        .where('id', idNumericoUsuario)
+        .preload('sede')
+        .first()
+
+      console.log('🔍 [TURNO-UPDATE] Usuario:', {
+        id: usuarioActualizador?.id,
+        correo: usuarioActualizador?.correo,
+        sedeId: usuarioActualizador?.sedeId,
+      })
       if (!usuarioActualizador)
         return response.unauthorized({ message: `Usuario ${idNumericoUsuario} no encontrado` })
 
@@ -1073,24 +1265,39 @@ export default class TurnosRtmController {
         .preload('agenteCaptacion')
         .whereBetween('fecha', [toMySQLDate(fi), toMySQLDate(ff)])
 
+      // ✅ Servicios (soporta múltiples)
       if (servicioId) {
-        const sid = Number(servicioId)
-        if (Number.isNaN(sid))
-          return response.badRequest({ message: 'servicioId debe ser numérico' })
-        q.where('servicio_id', sid)
+        const servicioIds = String(servicioId)
+          .split(',')
+          .map((id) => Number(id.trim()))
+          .filter((n) => !Number.isNaN(n))
+        if (servicioIds.length > 0) {
+          q.whereIn('servicio_id', servicioIds)
+        }
       } else if (servicioCodigo) {
-        const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
-        if (!s)
-          return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
-        q.where('servicio_id', s.id)
+        const codigos = String(servicioCodigo)
+          .split(',')
+          .map((c) => c.trim().toUpperCase())
+        const servicios = await Servicio.query().whereIn('codigo_servicio', codigos)
+        if (servicios.length > 0) {
+          q.whereIn(
+            'servicio_id',
+            servicios.map((s) => s.id)
+          )
+        }
       }
 
+      // ✅ Canales (soporta múltiples)
       if (canalAtribucion) {
         const allowed: CanalAtrib[] = ['FACHADA', 'ASESOR', 'TELE', 'REDES']
-        const c = String(canalAtribucion).toUpperCase() as CanalAtrib
-        if (!allowed.includes(c))
-          return response.badRequest({ message: 'canalAtribucion inválido' })
-        q.where('canal_atribucion', c)
+        const canales = String(canalAtribucion)
+          .split(',')
+          .map((c) => c.trim().toUpperCase())
+          .filter((c) => allowed.includes(c as CanalAtrib))
+
+        if (canales.length > 0) {
+          q.whereIn('canal_atribucion', canales as CanalAtrib[])
+        }
       }
       if (agenteId) q.where('agente_captacion_id', Number(agenteId))
       if (agenteTipo) {

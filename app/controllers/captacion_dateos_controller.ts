@@ -54,7 +54,7 @@ function toSnake(row: any) {
     ...row,
     created_at: row.createdAt,
     created_at_fmt: fmtBogotaAmPm(row.createdAt),
-    liberado: row.liberado ?? false, // 👈 AGREGA ESTA LÍNEA
+    liberado: row.liberado ?? false,
     imagen_url: row.imagenUrl ?? null,
     imagen_mime: row.imagenMime ?? null,
     imagen_tamano_bytes: row.imagenTamanoBytes ?? null,
@@ -105,8 +105,7 @@ export default class CaptacionDateosController {
    * - Si NO tiene prospecto_id → marca como RE_DATEAR + libera
    */
   public async verificarVencidos({ response }: HttpContext) {
-    const minutosVencimiento = 2 // 👈 72 horas (para producción)
-    // const minutosVencimiento = 5 // 👈 Para pruebas
+    const minutosVencimiento = 72 * 60
 
     console.log(`🔍 Buscando dateos vencidos (>= ${minutosVencimiento} minutos)`)
 
@@ -124,12 +123,10 @@ export default class CaptacionDateosController {
       const trx = await db.transaction()
       try {
         if (dateo.prospecto) {
-          // ✅ CASO 1: CON prospecto → revertir a prospecto y ELIMINAR dateo
           dateo.prospecto.archivado = false
           await dateo.prospecto.useTransaction(trx).save()
           console.log(`✅ Prospecto ${dateo.prospecto.id} desarchivado`)
 
-          // Desarchivar TODOS los prospectos duplicados con la misma placa
           const placaNormalizada = dateo.placa?.replace(/[\s-]/g, '').toUpperCase()
           if (placaNormalizada) {
             const resultadoPlaca = await Prospecto.query({ client: trx })
@@ -142,11 +139,9 @@ export default class CaptacionDateosController {
             )
           }
 
-          // 🗑️ ELIMINAR el dateo (volvió a prospecto)
           await dateo.useTransaction(trx).delete()
           console.log(`🗑️ Dateo ${dateo.id} eliminado (prospecto revertido)`)
         } else {
-          // 🔄 CASO 2: SIN prospecto → marcar como RE_DATEAR y liberar
           dateo.liberado = true
           dateo.resultado = 'RE_DATEAR'
           const notaVencimiento = '[AUTO] Vencido por inactividad - Disponible para re-dateo'
@@ -240,7 +235,6 @@ export default class CaptacionDateosController {
     const result = await q.paginate(page, perPage)
     const serialized = result.serialize().data as any[]
 
-    // Resolver turnoInfo en batch para evitar N+1
     const turnoIds = serialized
       .map((r) => r.consumidoTurnoId)
       .filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v))
@@ -288,7 +282,6 @@ export default class CaptacionDateosController {
       ? 'ASESOR'
       : out.canal
 
-    // turnoInfo puntual
     let turnoInfo = null
     if (item.consumidoTurnoId) {
       const t = await TurnoRtm.query()
@@ -307,7 +300,6 @@ export default class CaptacionDateosController {
    * POST /captacion-dateos
    */
   public async store({ request, response, auth }: HttpContext) {
-    // Agente (por body o por usuario logueado)
     let agenteId = readOptionalNumber(
       (request.input('agente_id') ?? request.input('agenteId')) as unknown
     )
@@ -321,7 +313,6 @@ export default class CaptacionDateosController {
       }
     }
 
-    // Canal (resolviendo alias ASESOR según tipo agente)
     let canalRaw = String(request.input('canal') || '').toUpperCase()
     if (!canalRaw) canalRaw = 'ASESOR'
 
@@ -344,7 +335,6 @@ export default class CaptacionDateosController {
       return response.badRequest({ message: 'canal inválido' })
     }
 
-    // Convenio (body)
     let convenioId = readOptionalNumber(
       (request.input('convenio_id') ?? request.input('convenioId')) as unknown
     )
@@ -355,13 +345,11 @@ export default class CaptacionDateosController {
       if (!convenio) return response.badRequest({ message: 'convenio_id no existe' })
     }
 
-    // Campos básicos
     const placa = normalizePlaca(request.input('placa') as string | undefined)
     const telefono = normalizePhone(request.input('telefono') as string | undefined)
     const origen = request.input('origen') as OrigenVal
     const observacion = (request.input('observacion') as string | undefined) ?? null
 
-    // Imagen
     const imagenUrl = (request.input('imagen_url') as string | undefined) ?? null
     const imagenMime = (request.input('imagen_mime') as string | undefined) ?? null
     const imagenTamanoBytesRaw = request.input('imagen_tamano_bytes') as number | string | undefined
@@ -381,7 +369,6 @@ export default class CaptacionDateosController {
       return response.badRequest({ message: 'La placa es obligatoria' })
     }
 
-    // Necesidad de agente según canal
     if (
       (canal === 'ASESOR_COMERCIAL' || canal === 'ASESOR_CONVENIO' || canal === 'TELE') &&
       agenteId === null
@@ -394,24 +381,22 @@ export default class CaptacionDateosController {
       if (!agente) return response.badRequest({ message: 'agente_id no existe' })
     }
 
-    // =========== Reglas negocio ASESOR_COMERCIAL / ASESOR_CONVENIO + convenio ===========
     let asesorConvenioId: number | null = null
 
     if (agente && agente.tipo === 'ASESOR_CONVENIO') {
-      // 🔒 Un asesor convenio solo puede datear para SU convenio
       canal = 'ASESOR_CONVENIO'
 
       const convenioDelAsesor = await Convenio.query()
-        .where('asesor_convenio_id', agente.id)
+        .whereRaw('UPPER(TRIM(nombre)) = ?', [agente.nombre.toUpperCase().trim()])
+        .where('activo', true)
         .first()
 
       if (!convenioDelAsesor) {
         return response.unprocessableEntity({
-          message: 'El asesor convenio no tiene un convenio asociado para datear.',
+          message: `El asesor convenio "${agente.nombre}" no tiene un convenio asociado con el mismo nombre.`,
         })
       }
 
-      // Si viene un convenioId distinto, no se permite
       if (convenioId !== null && convenioId !== convenioDelAsesor.id) {
         return response.forbidden({
           message:
@@ -421,9 +406,8 @@ export default class CaptacionDateosController {
 
       convenioId = convenioDelAsesor.id
       convenio = convenioDelAsesor
-      asesorConvenioId = agente.id // ✅ Solo se llena cuando ES el asesor convenio quien datea
+      asesorConvenioId = agente.id
     } else if (agente && canal === 'ASESOR_COMERCIAL') {
-      // 💼 Comercial: puede datear sin convenio, pero si viene convenioId debe estar asignado
       if (convenioId !== null) {
         const asignacion = await AsesorConvenioAsignacion.query()
           .where('asesor_id', agente.id)
@@ -438,20 +422,15 @@ export default class CaptacionDateosController {
               'Este asesor comercial no tiene asignado el convenio seleccionado. No puede datear para él.',
           })
         }
-
-        // ✅ NO llenamos asesor_convenio_id cuando un comercial datea con convenio
-        // El campo asesor_convenio_id solo se usa cuando ES el asesor convenio quien datea
       }
     }
-    // ✅ Para otros canales (TELE, FACHADA, REDES) tampoco llenamos asesor_convenio_id
 
-    // Exclusividad por placa/teléfono
     const ultimo = await CaptacionDateo.query()
       .andWhere((q) => {
         q.orWhere('placa', placa!)
         if (telefono) q.orWhere('telefono', telefono)
       })
-      .where('liberado', false) // 👈 Solo bloquear si NO está liberado
+      .where('liberado', false)
       .preload('agente', (q) => q.select(['id', 'nombre', 'tipo']))
       .orderBy('created_at', 'desc')
       .first()
@@ -469,7 +448,65 @@ export default class CaptacionDateosController {
       }
     }
 
-    // Crear Dateo
+    // ========================================
+    // 🚫 VALIDACIONES DE TURNO
+    // ========================================
+
+    // VALIDACIÓN 1: Bloquear si hay turno ACTIVO hoy (el vehículo ya está en la sede)
+    const hoyISO = DateTime.local().setZone('America/Bogota').toISODate()!
+
+    const turnoActivoHoy = await TurnoRtm.query()
+      .where('placa', placa!)
+      .where('fecha', hoyISO)
+      .where('estado', 'activo')
+      .preload('servicio')
+      .first()
+
+    if (turnoActivoHoy) {
+      const servicioNombre = turnoActivoHoy.servicio?.codigoServicio || 'servicio'
+      return response.conflict({
+        code: 'TURNO_ACTIVO',
+        message: `Esta placa ya tiene un turno activo de ${servicioNombre} hoy. El vehículo ya está en la sede, no se puede datear.`,
+        turnoId: turnoActivoHoy.id,
+        turnoNumero: turnoActivoHoy.turnoNumero,
+        servicio: servicioNombre,
+        estado: 'activo',
+      })
+    }
+
+    // VALIDACIÓN 2: Bloquear si tiene RTM finalizado vigente (< 12 meses)
+    const lastRtmFinalizado = await TurnoRtm.query()
+      .where('placa', placa!)
+      .andWhere('estado', 'finalizado')
+      .whereHas('servicio', (q) => {
+        q.where('codigo_servicio', 'RTM')
+      })
+      .preload('servicio')
+      .orderBy('fecha', 'desc')
+      .first()
+
+    if (lastRtmFinalizado) {
+      const fechaUltimoRtm = lastRtmFinalizado.fecha as DateTime
+      const caducaEl = fechaUltimoRtm.plus({ months: 12 }).startOf('day')
+      const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
+
+      if (hoy < caducaEl) {
+        return response.conflict({
+          code: 'RTM_VIGENTE',
+          message: `Esta placa ya tiene RTM vigente hasta ${caducaEl.toFormat('dd/LL/yyyy')}. No se puede datear.`,
+          turnoId: lastRtmFinalizado.id,
+          turnoNumero: lastRtmFinalizado.turnoNumero,
+          fechaRtm: fechaUltimoRtm.toISODate(),
+          validoHasta: caducaEl.toISODate(),
+          diasRestantes: Math.ceil(caducaEl.diff(hoy, 'days').days),
+        })
+      }
+    }
+
+    // ========================================
+    // FIN VALIDACIONES DE TURNO
+    // ========================================
+
     const created = await CaptacionDateo.create({
       canal: canal as Canal,
       agenteId,
@@ -488,24 +525,19 @@ export default class CaptacionDateosController {
       imagenSubidaPor,
     })
 
-    // REEMPLAZA DESDE AQUÍ
-    // 🔗 VINCULAR prospecto al dateo + archivar todos los duplicados por placa
     if (placa) {
       try {
-        // 1️⃣ Buscar el primer prospecto NO archivado con esta placa
         const prospectoEncontrado = await Prospecto.query()
           .where('archivado', false)
           .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
           .first()
 
         if (prospectoEncontrado) {
-          // 2️⃣ Vincular el prospecto al dateo
           created.prospectoId = prospectoEncontrado.id
           await created.save()
           console.log(`🔗 Dateo ${created.id} vinculado con prospecto ${prospectoEncontrado.id}`)
         }
 
-        // 3️⃣ Archivar TODOS los prospectos con esta placa (incluido el vinculado)
         const resultadoArch = await Prospecto.query()
           .where('archivado', false)
           .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
@@ -516,7 +548,6 @@ export default class CaptacionDateosController {
         console.error('❌ Error procesando prospectos con placa', placa, err)
       }
     }
-    // HASTA AQUÍ
 
     const out = created.serialize() as any
     out.canal = (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const).includes(out.canal)
@@ -526,14 +557,12 @@ export default class CaptacionDateosController {
   }
 
   /**
-  /**
- * PUT /captacion-dateos/:id
- */
+   * PUT /captacion-dateos/:id
+   */
   public async update({ params, request, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
 
-    // ✅ CAMPOS EDITABLES AGREGADOS
     const placa = request.input('placa') as string | undefined
     const telefono = request.input('telefono') as string | undefined
     const canalRaw = request.input('canal') as string | undefined
@@ -550,27 +579,21 @@ export default class CaptacionDateosController {
 
     const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
 
-    // ✅ ACTUALIZAR PLACA
     if (placa !== undefined) {
       item.placa = normalizePlaca(placa)
     }
 
-    // ✅ ACTUALIZAR TELÉFONO
     if (telefono !== undefined) {
       item.telefono = normalizePhone(telefono)
     }
 
-    // ✅ ACTUALIZAR CANAL
     if (canalRaw !== undefined) {
       const canalUpper = String(canalRaw).toUpperCase()
 
       if (canalUpper === 'ASESOR') {
-        // Mantener el tipo específico (COMERCIAL o CONVENIO) que ya tiene
-        // o usar COMERCIAL por defecto
         if (item.canal !== 'ASESOR_COMERCIAL' && item.canal !== 'ASESOR_CONVENIO') {
           item.canal = 'ASESOR_COMERCIAL'
         }
-        // Si ya es uno de los dos, no lo cambiamos
       } else if ((CANALES_DB as readonly string[]).includes(canalUpper)) {
         item.canal = canalUpper as CanalDb
       }

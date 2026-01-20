@@ -21,7 +21,7 @@ export default class extends BaseSchema {
       table.integer('sede_id').unsigned().references('id').inTable('sedes').onDelete('RESTRICT')
       table.integer('cargo_id').unsigned().references('id').inTable('cargos').onDelete('RESTRICT')
 
-      // 🔥 Relación con agente de captación (SIN FK para evitar dependencia circular)
+      // Relación con agente de captación (SIN FK para evitar dependencia circular)
       table
         .integer('agente_id')
         .unsigned()
@@ -68,6 +68,10 @@ export default class extends BaseSchema {
       table.string('foto_perfil').nullable()
 
       table.string('direccion', 150).nullable()
+
+      // ✅ NUEVO: Correo Personal
+      table.string('correo_personal', 150).nullable()
+
       table.string('celular_personal', 50).nullable()
       table.string('celular_corporativo', 50).nullable()
 

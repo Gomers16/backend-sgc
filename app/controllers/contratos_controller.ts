@@ -43,11 +43,13 @@ export default class ContratosController {
     return null
   }
 
+  // ✅ DESPUÉS (mantiene fecha local)
   private toDateTime(value: any): DateTime | null {
     if (!value) return null
     if (typeof value?.toISO === 'function') return value as any
     if (typeof value === 'string') {
-      const dt = DateTime.fromISO(value)
+      // Formato YYYY-MM-DD → crear DateTime local sin conversión UTC
+      const dt = DateTime.fromFormat(value, 'yyyy-MM-dd').startOf('day')
       return dt.isValid ? dt : null
     }
     if (value instanceof Date) return DateTime.fromJSDate(value)
@@ -228,10 +230,10 @@ export default class ContratosController {
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
-      usuarioId: contrato.usuarioId,
+      usuarioId: by, // ✅ CORRECTO - quien hizo el cambio
       campo: 'recomendacion_medica_archivo',
       oldValue: this.json(null),
-      newValue: this.json({ nombre, url, by }),
+      newValue: this.json({ nombre, url }),
     })
   }
 
@@ -243,28 +245,27 @@ export default class ContratosController {
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
-      usuarioId: contrato.usuarioId,
+      usuarioId: by, // ✅ CORRECTO
       campo: 'recomendacion_medica_archivo',
       oldValue: this.json(viejo),
-      newValue: this.json({ ...nuevo, by }),
+      newValue: this.json(nuevo),
     })
   }
 
   private async logArchivoEliminado(
     contrato: Contrato,
     viejo: { nombre: string; url: string } | null,
-    _by: number | null
+    by: number | null
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
-      usuarioId: contrato.usuarioId,
+      usuarioId: by, // ✅ CORRECTO
       campo: 'recomendacion_medica_archivo',
       oldValue: this.json(viejo),
       newValue: this.json(null),
     })
   }
 
-  /** Log para archivo físico del contrato */
   private async logContratoFisicoCambio(
     contrato: Contrato,
     oldMeta: { nombre: string; url: string } | null,
@@ -273,10 +274,10 @@ export default class ContratosController {
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
-      usuarioId: contrato.usuarioId,
+      usuarioId: by, // ✅ CORRECTO
       campo: 'contrato_fisico_archivo',
       oldValue: this.json(oldMeta),
-      newValue: this.json(newMeta ? { ...newMeta, by } : null),
+      newValue: this.json(newMeta),
     })
   }
 
@@ -288,14 +289,13 @@ export default class ContratosController {
     if (!nota?.trim()) return
     await ContratoCambio.create({
       contratoId: contrato.id,
-      usuarioId: contrato.usuarioId,
+      usuarioId: by, // ✅ CORRECTO
       campo: 'contrato_fisico_archivo_observacion',
       oldValue: this.json(null),
-      newValue: this.json({ nota: nota.trim(), by }),
+      newValue: this.json({ nota: nota.trim() }),
     })
   }
 
-  /** Log genérico para archivos de afiliación */
   private async logCambioArchivo(
     contrato: Contrato,
     campo: string,
@@ -305,10 +305,10 @@ export default class ContratosController {
   ) {
     await ContratoCambio.create({
       contratoId: contrato.id,
-      usuarioId: contrato.usuarioId,
+      usuarioId: by, // ✅ CORRECTO
       campo,
       oldValue: this.json(viejo),
-      newValue: this.json(nuevo ? { ...nuevo, by } : null),
+      newValue: this.json(nuevo),
     })
   }
 
@@ -398,184 +398,129 @@ export default class ContratosController {
    * Se llama DESPUÉS de crear el contrato (store / anexarFisico).
    */
   private async ensureAgenteYConvenioParaContrato(contrato: Contrato) {
-    // Si el contrato no tiene usuario, no hay nada que hacer
-    if (!contrato.usuarioId) return
+    try {
+      if (!contrato.usuarioId) return
 
-    // Cargamos usuario y cargo DESDE el contrato
-    await contrato.load('usuario')
-    await contrato.load('cargo')
-    const usuario = contrato.usuario
-    const cargo = contrato.cargo
-    if (!usuario || !cargo) return
+      await contrato.load('usuario')
+      await contrato.load('cargo')
+      const usuario = contrato.usuario
+      const cargo = contrato.cargo
+      if (!usuario || !cargo) return
 
-    const nombreCargo = (cargo.nombre || '').toUpperCase().trim()
+      const nombreCargo = (cargo.nombre || '').toUpperCase().trim()
 
-    type TipoAsesor = 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'ASESOR_TELEMERCADEO'
-    let tipo: TipoAsesor | null = null
+      type TipoAsesor = 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'ASESOR_TELEMERCADEO'
+      let tipo: TipoAsesor | null = null
 
-    if (nombreCargo.includes('ASESOR COMERCIAL') || nombreCargo === 'COMERCIAL') {
-      tipo = 'ASESOR_COMERCIAL'
-    } else if (nombreCargo.includes('ASESOR CONVENIO')) {
-      tipo = 'ASESOR_CONVENIO'
-    } else if (nombreCargo.includes('TELEMERCADEO') || nombreCargo.includes('TELEMARKETING')) {
-      tipo = 'ASESOR_TELEMERCADEO'
-    }
+      if (nombreCargo.includes('ASESOR COMERCIAL') || nombreCargo === 'COMERCIAL') {
+        tipo = 'ASESOR_COMERCIAL'
+      } else if (nombreCargo.includes('ASESOR CONVENIO')) {
+        tipo = 'ASESOR_CONVENIO'
+      } else if (nombreCargo.includes('TELEMERCADEO') || nombreCargo.includes('TELEMARKETING')) {
+        tipo = 'ASESOR_TELEMERCADEO'
+      }
 
-    // Si el cargo NO es de asesor, salimos
-    if (!tipo) return
+      if (!tipo) return
 
-    // ============================
-    // 1) Crear / actualizar AgenteCaptacion (para CUALQUIER asesor)
-    // ============================
+      const telefonoUsuario =
+        (usuario as any).celularPersonal ||
+        (usuario as any).celularCorporativo ||
+        (usuario as any).telefono ||
+        (usuario as any).celular ||
+        (usuario as any).telefono1 ||
+        null
 
-    const telefonoUsuario =
-      (usuario as any).celularPersonal ||
-      (usuario as any).celularCorporativo ||
-      (usuario as any).telefono ||
-      (usuario as any).celular ||
-      (usuario as any).telefono1 ||
-      null
-
-    const nombreAgente =
-      (usuario as any).nombreCompleto ||
-      (usuario as any).nombre ||
-      `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
-      `Usuario #${usuario.id}`
-
-    const agente = await AgenteCaptacion.firstOrCreate({ usuarioId: usuario.id, tipo }, {
-      usuarioId: usuario.id,
-      tipo,
-      nombre: nombreAgente,
-      telefono: telefonoUsuario,
-      activo: true,
-    } as any)
-
-    agente.merge({
-      nombre: nombreAgente,
-      telefono: telefonoUsuario,
-      activo: true,
-    })
-
-    await agente.save()
-
-    // ============================
-    // 2) SOLO para ASESOR_CONVENIO: garantizar Convenio ligado al usuario
-    // ============================
-    if (tipo !== 'ASESOR_CONVENIO') {
-      // Para ASESOR_COMERCIAL y TELEMERCADEO no hacemos nada más aquí
-      return
-    }
-
-    // ---------- CÉDULA / DOCUMENTO ----------
-    // Preferimos el documento del USUARIO (cédula) y, si no existe, usamos el del contrato
-    const docNumeroUsuario =
-      (usuario as any).numeroDocumento || // si tu modelo se llama así
-      (usuario as any).numeroCedula ||
-      (usuario as any).cedula ||
-      (usuario as any).documento ||
-      (usuario as any).identificacion ||
-      null
-
-    const docNumeroContrato = (contrato as any).identificacion
-      ? String((contrato as any).identificacion)
-      : null
-
-    const docNumero = docNumeroUsuario || docNumeroContrato || null
-
-    // Tipo de documento: por defecto 'CC' (puedes cambiarlo si manejas otros)
-    const docTipoUsuario = (usuario as any).tipoDocumento || (usuario as any).docTipo || 'CC'
-
-    // Dirección tomada del usuario (perfil)
-    const direccionUsuario =
-      (usuario as any).direccion ||
-      (usuario as any).direccionResidencia ||
-      (usuario as any).direccionDomicilio ||
-      null
-
-    // Teléfono / whatsapp / email para el convenio
-    const telefonoConvenio =
-      (usuario as any).telefono ||
-      (usuario as any).celular ||
-      (usuario as any).celularPersonal ||
-      (usuario as any).celularCorporativo ||
-      null
-
-    const whatsappConvenio =
-      (usuario as any).whatsapp ||
-      (usuario as any).telefono ||
-      (usuario as any).celular ||
-      (usuario as any).celularPersonal ||
-      (usuario as any).celularCorporativo ||
-      null
-
-    const emailConvenio = (usuario as any).email || (usuario as any).correo || null
-
-    let convenio: Convenio | null = null
-
-    // Si tenemos documento, lo usamos como clave natural
-    if (docNumero) {
-      convenio = await Convenio.query().where('doc_numero', docNumero).first()
-    }
-
-    if (!convenio) {
-      const nombreConvenio =
-        (usuario as any).nombreComercial ||
+      const nombreAgente =
         (usuario as any).nombreCompleto ||
         (usuario as any).nombre ||
         `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
-        `Convenio usuario #${usuario.id}`
+        `Usuario #${usuario.id}`
 
-      convenio = await Convenio.create({
-        tipo: 'PERSONA',
-        nombre: nombreConvenio,
-        docTipo: docTipoUsuario,
-        docNumero: docNumero,
-        telefono: telefonoConvenio,
-        whatsapp: whatsappConvenio,
-        email: emailConvenio,
-        direccion: direccionUsuario,
-        activo: true,
-        asesorConvenioId: agente.id, // 👈 AGREGAR ESTA LÍNEA
-      } as any)
-    } else {
-      // Si ya existía, rellenamos los campos vacíos con la info del usuario
-      let dirty = false
+      try {
+        // ✅ SOLUCIÓN: updateOrCreate evita el error de duplicado
+        await AgenteCaptacion.updateOrCreate(
+          { usuarioId: usuario.id },
+          {
+            tipo,
+            nombre: nombreAgente,
+            telefono: telefonoUsuario,
+            activo: true,
+          }
+        )
 
-      if (!convenio.docTipo && docTipoUsuario) {
-        ;(convenio as any).docTipo = docTipoUsuario
-        dirty = true
-      }
-      if (!convenio.docNumero && docNumero) {
-        ;(convenio as any).docNumero = docNumero
-        dirty = true
-      }
-      if (!convenio.telefono && telefonoConvenio) {
-        ;(convenio as any).telefono = telefonoConvenio
-        dirty = true
-      }
-      if (!convenio.whatsapp && whatsappConvenio) {
-        ;(convenio as any).whatsapp = whatsappConvenio
-        dirty = true
-      }
-      if (!convenio.email && emailConvenio) {
-        ;(convenio as any).email = emailConvenio
-        dirty = true
-      }
-      if (!convenio.direccion && direccionUsuario) {
-        ;(convenio as any).direccion = direccionUsuario
-        dirty = true
-      }
+        if (tipo !== 'ASESOR_CONVENIO') return
 
-      if (dirty) {
-        await convenio.save()
+        const docNumeroUsuario =
+          (usuario as any).numeroDocumento ||
+          (usuario as any).numeroCedula ||
+          (usuario as any).cedula ||
+          (usuario as any).documento ||
+          (usuario as any).identificacion ||
+          null
+
+        const docNumeroContrato = (contrato as any).identificacion
+          ? String((contrato as any).identificacion)
+          : null
+
+        const docNumero = docNumeroUsuario || docNumeroContrato || null
+
+        if (!docNumero) {
+          console.warn(
+            `[WARN] No se pudo crear Convenio para usuario ${usuario.id}: falta documento`
+          )
+          return
+        }
+
+        const docTipoUsuario = (usuario as any).tipoDocumento || (usuario as any).docTipo || 'CC'
+        const direccionUsuario =
+          (usuario as any).direccion ||
+          (usuario as any).direccionResidencia ||
+          (usuario as any).direccionDomicilio ||
+          null
+
+        const telefonoConvenio =
+          (usuario as any).telefono ||
+          (usuario as any).celular ||
+          (usuario as any).celularPersonal ||
+          (usuario as any).celularCorporativo ||
+          null
+
+        const whatsappConvenio =
+          (usuario as any).whatsapp ||
+          (usuario as any).telefono ||
+          (usuario as any).celular ||
+          (usuario as any).celularPersonal ||
+          (usuario as any).celularCorporativo ||
+          null
+
+        const emailConvenio = (usuario as any).email || (usuario as any).correo || null
+
+        const nombreConvenio =
+          (usuario as any).nombreComercial ||
+          (usuario as any).nombreCompleto ||
+          (usuario as any).nombre ||
+          `${(usuario as any).nombres ?? ''} ${(usuario as any).apellidos ?? ''}`.trim() ||
+          `Convenio usuario #${usuario.id}`
+
+        await Convenio.updateOrCreate(
+          { docNumero },
+          {
+            tipo: 'PERSONA',
+            nombre: nombreConvenio,
+            docTipo: docTipoUsuario,
+            telefono: telefonoConvenio,
+            whatsapp: whatsappConvenio,
+            email: emailConvenio,
+            direccion: direccionUsuario,
+            activo: true,
+          }
+        )
+      } catch (innerError: any) {
+        console.error('[ERROR] No se pudo crear AgenteCaptacion/Convenio:', innerError.message)
       }
+    } catch (error: any) {
+      console.error('[ERROR] ensureAgenteYConvenioParaContrato falló:', error.message)
     }
-
-    // Si luego quieres amarrar el convenio al agente:
-    // if ((convenio as any).agenteId == null) {
-    //   ;(convenio as any).agenteId = agente.id
-    //   await convenio.save()
-    // }
   }
 
   /* ============================
@@ -690,8 +635,20 @@ export default class ContratosController {
         ccfId: nullIfEmpty(contratoData.ccfId),
       }
 
-      const fechaInicioLuxon = this.toDateTime(contratoDataNorm.fechaInicio)
-      if (!fechaInicioLuxon) {
+      // ✅ Nueva forma: sin conversión UTC
+      let fechaInicioLuxon: DateTime | null = null
+      if (contratoDataNorm.fechaInicio) {
+        if (typeof contratoDataNorm.fechaInicio === 'string') {
+          fechaInicioLuxon = DateTime.fromFormat(
+            contratoDataNorm.fechaInicio,
+            'yyyy-MM-dd'
+          ).startOf('day')
+        } else {
+          fechaInicioLuxon = this.toDateTime(contratoDataNorm.fechaInicio)
+        }
+      }
+
+      if (!fechaInicioLuxon || !fechaInicioLuxon.isValid) {
         await trx.rollback()
         return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
       }
@@ -729,7 +686,15 @@ export default class ContratosController {
         })
       }
 
-      const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
+      // ✅ Nueva forma: sin conversión UTC
+      let fechaTerminacionLuxon: DateTime | null = null
+      if (aliasFechaTerm) {
+        if (typeof aliasFechaTerm === 'string') {
+          fechaTerminacionLuxon = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day')
+        } else {
+          fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
+        }
+      }
 
       const contrato = await Contrato.create({
         ...contratoDataNorm,
@@ -789,10 +754,10 @@ export default class ContratosController {
 
       await ContratoCambio.create({
         contratoId: contrato.id,
-        usuarioId: contrato.usuarioId,
+        usuarioId: actorId, // ← CORRECTO
         campo: 'creacion',
         oldValue: this.json(null),
-        newValue: this.json({ estado: 'activo', by: actorId ?? null }),
+        newValue: this.json({ estado: 'activo' }),
       })
 
       await trx.commit()
@@ -840,7 +805,7 @@ export default class ContratosController {
           request.file('archivo') ||
           request.file('archivoContrato') ||
           request.file('archivoContratoFisico')
-        ensurePdfOrThrow(archivoContrato, 10 * 1024 * 1024)
+        ensurePdfOrThrow(archivoContrato, 25 * 1024 * 1024)
 
         const razonSocialId = request.input('razonSocialId')
         if (razonSocialId) contrato.razonSocialId = Number(razonSocialId)
@@ -979,8 +944,20 @@ export default class ContratosController {
       }
 
       const aliasFechaTerm = fechaTermInput ?? fechaFin ?? fechaFinalizacion ?? null
-      const fechaInicioLuxon = this.toDateTime(contratoData.fechaInicio)
-      if (!fechaInicioLuxon) {
+
+      // ✅ Nueva forma: sin conversión UTC
+      let fechaInicioLuxon: DateTime | null = null
+      if (contratoData.fechaInicio) {
+        if (typeof contratoData.fechaInicio === 'string') {
+          fechaInicioLuxon = DateTime.fromFormat(contratoData.fechaInicio, 'yyyy-MM-dd').startOf(
+            'day'
+          )
+        } else {
+          fechaInicioLuxon = this.toDateTime(contratoData.fechaInicio)
+        }
+      }
+
+      if (!fechaInicioLuxon || !fechaInicioLuxon.isValid) {
         await trx.rollback()
         return response.badRequest({ message: "La 'fechaInicio' es inválida o no fue enviada." })
       }
@@ -1021,7 +998,7 @@ export default class ContratosController {
         request.file('archivoContrato') ||
         request.file('archivoContratoFisico')
 
-      ensurePdfOrThrow(archivoContratoLegacy, 10 * 1024 * 1024)
+      ensurePdfOrThrow(archivoContratoLegacy, 25 * 1024 * 1024) // 👈 25 MB
 
       // Guardar archivo contrato
       const uploadDir = 'uploads/contratos'
@@ -1031,7 +1008,15 @@ export default class ContratosController {
       await (archivoContratoLegacy as any).move(destinationDir, { name: fileName })
       const publicUrl = `/${uploadDir}/${fileName}`
 
-      const fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
+      // ✅ Nueva forma: sin conversión UTC
+      let fechaTerminacionLuxon: DateTime | null = null
+      if (aliasFechaTerm) {
+        if (typeof aliasFechaTerm === 'string') {
+          fechaTerminacionLuxon = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day')
+        } else {
+          fechaTerminacionLuxon = this.toDateTime(aliasFechaTerm)
+        }
+      }
 
       const contrato = await Contrato.create(
         {
@@ -1203,7 +1188,17 @@ export default class ContratosController {
           tipoEff === 'temporal' ||
           (tipoEff === 'laboral' && (terminoEff ?? '').toLowerCase() !== 'indefinido')
 
-        const fechaTermLuxon = this.toDateTime(aliasFechaTerm) ?? contrato.fechaTerminacion ?? null
+        // ✅ Nueva forma: sin conversión UTC
+        let fechaTermLuxon: DateTime | null = null
+        if (aliasFechaTerm) {
+          if (typeof aliasFechaTerm === 'string') {
+            fechaTermLuxon = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day')
+          } else {
+            fechaTermLuxon = this.toDateTime(aliasFechaTerm)
+          }
+        } else {
+          fechaTermLuxon = contrato.fechaTerminacion ?? null
+        }
         if (requiereFin && !fechaTermLuxon) {
           await trx.rollback()
           return response.badRequest({
@@ -1450,22 +1445,25 @@ export default class ContratosController {
         })
       }
 
-      // fechas
+      // ✅ fechas - sin conversión UTC
       if (payload.fechaInicio !== undefined && typeof payload.fechaInicio === 'string') {
-        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd')
-          .startOf('day')
-          .toUTC()
+        contrato.fechaInicio = DateTime.fromFormat(payload.fechaInicio, 'yyyy-MM-dd').startOf('day')
       }
       if (aliasFechaTerm !== undefined && typeof aliasFechaTerm === 'string') {
-        contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd')
-          .startOf('day')
-          .toUTC()
+        contrato.fechaTerminacion = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day')
       }
 
-      const fechaTermDef =
-        aliasFechaTerm !== undefined
-          ? this.toDateTime(aliasFechaTerm)
-          : (contrato.fechaTerminacion ?? null)
+      // ✅ Nueva forma: sin conversión UTC
+      let fechaTermDef: DateTime | null = null
+      if (aliasFechaTerm !== undefined) {
+        if (typeof aliasFechaTerm === 'string') {
+          fechaTermDef = DateTime.fromFormat(aliasFechaTerm, 'yyyy-MM-dd').startOf('day')
+        } else {
+          fechaTermDef = this.toDateTime(aliasFechaTerm)
+        }
+      } else {
+        fechaTermDef = contrato.fechaTerminacion ?? null
+      }
 
       const requiresEnd =
         tipoEff === 'prestacion' ||
@@ -1705,7 +1703,7 @@ export default class ContratosController {
 
         cambios.push({
           contratoId: contrato.id,
-          usuarioId: contrato.usuarioId,
+          usuarioId: actorId, // ← CORRECTO
           campo: String(campo),
           oldValue: this.json(oldWrapped),
           newValue: this.json(newWrapped),

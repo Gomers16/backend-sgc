@@ -373,13 +373,66 @@ export default class BusquedasController {
       })
     }
 
-    // 4) Sin dateo ni convenio → fallback por teléfono a un agente
+    // 4) Detectar asesor por teléfono (PRIORIDAD ALTA)
+    let asesorDetectado: {
+      id: number
+      nombre: string
+      tipo: string
+      telefono: string
+      convenio?: { id: number; nombre: string; codigo: string | null } | null
+    } | null = null
+
+    if (telefono && /^\d{10}$/.test(telefono)) {
+      try {
+        const agente = await AgenteCaptacion.query()
+          .where('activo', true)
+          .where('telefono', telefono)
+          .first()
+
+        if (agente) {
+          asesorDetectado = {
+            id: agente.id,
+            nombre: (agente as any).nombre,
+            tipo: (agente as any).tipo, // 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'ASESOR_TELEMERCADEO'
+            telefono: (agente as any).telefono,
+          }
+
+          // 🔍 Si es ASESOR_CONVENIO → Buscar convenio asociado
+          if ((agente as any).tipo === 'ASESOR_CONVENIO') {
+            const asignacionActiva = await AsesorConvenioAsignacion.query()
+              .where('asesor_id', agente.id)
+              .where('activo', true)
+              .whereNull('fecha_fin')
+              .orderBy('fecha_asignacion', 'desc')
+              .first()
+
+            if (asignacionActiva) {
+              const convenioAsociado = await Convenio.find(asignacionActiva.convenioId)
+              if (convenioAsociado) {
+                asesorDetectado.convenio = {
+                  id: convenioAsociado.id,
+                  nombre: (convenioAsociado as any).nombre,
+                  codigo:
+                    (convenioAsociado as any).codigo ??
+                    (convenioAsociado as any).codigo_convenio ??
+                    null,
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error detectando asesor por teléfono:', e)
+      }
+    }
+
+    // 5) Sugerencia por teléfono (fallback si no hay asesor detectado arriba)
     let sugerenciaPorTelefono: {
       canal: CanalSimple
       agente: { id: number; nombre: string; tipo: string } | null
     } | null = null
 
-    if (telefono && /^\d{10}$/.test(telefono)) {
+    if (!asesorDetectado && telefono && /^\d{10}$/.test(telefono)) {
       try {
         const agente = await AgenteCaptacion.query()
           .where('activo', true)
@@ -398,7 +451,6 @@ export default class BusquedasController {
         console.error('Lookup de agente por teléfono falló:', e)
       }
     }
-
     // 5) FACHADA
     return response.ok({
       fuente: 'FACHADA',
@@ -413,6 +465,7 @@ export default class BusquedasController {
       origenBusqueda: placa ? 'placa' : 'telefono',
       detectadoPorConvenio: false,
       ultimaVisita,
+      asesorDetectado, // 👈 NUEVA LÍNEA
     })
   }
 }

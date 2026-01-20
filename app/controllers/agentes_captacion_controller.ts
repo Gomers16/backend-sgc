@@ -1,3 +1,4 @@
+// app/controllers/agentes_captacion_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -33,11 +34,66 @@ const ACTIVO_CALC_SQL = `
   END
 `
 
+// ✅ ACTUALIZADO: Serializa con datos del usuario, contrato Y agente
 function rowToPlainWithActivo(model: AgenteCaptacion) {
   const base = model.serialize() as any
-  const extra = (model as any).$extras?.activo_calc
-  const activo = Number(extra) === 1
-  return { ...base, activo }
+  const extras = (model as any).$extras || {}
+
+  const activo = Number(extras.activo_calc) === 1
+
+  const result: any = { ...base, activo }
+
+  // ✅ CORREO: del usuario (desde LEFT JOIN)
+  if (extras.usuario_correo !== undefined) {
+    result.email = extras.usuario_correo
+    result.correo = extras.usuario_correo
+  }
+
+  if (extras.usuario_correo_personal !== undefined) {
+    result.correoPersonal = extras.usuario_correo_personal
+    result.emailPersonal = extras.usuario_correo_personal
+  }
+
+  // ✅ TELÉFONO: prioritario del usuario, fallback al agente
+  if (extras.usuario_telefono) {
+    result.telefono = extras.usuario_telefono
+  } else if (base.telefono) {
+    result.telefono = base.telefono
+  }
+
+  // ✅ DOCUMENTO: prioridad contrato > agente
+  if (extras.contrato_documento) {
+    result.doc_numero = extras.contrato_documento
+    result.docNumero = extras.contrato_documento
+    // Asumimos CC si viene del contrato
+    if (!result.doc_tipo) {
+      result.doc_tipo = 'CC'
+      result.docTipo = 'CC'
+    }
+  } else if (base.doc_numero || base.docNumero) {
+    result.doc_numero = base.doc_numero || base.docNumero
+    result.docNumero = base.doc_numero || base.docNumero
+  }
+
+  // ✅ doc_tipo del agente (si existe)
+  if (base.doc_tipo || base.docTipo) {
+    result.doc_tipo = base.doc_tipo || base.docTipo
+    result.docTipo = base.doc_tipo || base.docTipo
+  }
+
+  // 🔍 DEBUG: Log para verificar qué datos se están devolviendo
+  console.log('🔍 rowToPlainWithActivo:', {
+    id: result.id,
+    nombre: result.nombre,
+    email: result.email,
+    correo: result.correo,
+    doc_tipo: result.doc_tipo,
+    doc_numero: result.doc_numero,
+    telefono: result.telefono,
+    activo: result.activo,
+  })
+
+  return result
 }
 
 export default class AgentesCaptacionController {
@@ -49,7 +105,19 @@ export default class AgentesCaptacionController {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.usuario_id', userId)
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
+      .leftJoin('contratos', function() {
+        this.on('contratos.usuario_id', '=', 'usuarios.id')
+          .andOnVal('contratos.estado', '=', 'activo')
+      })
+      .select(
+        'agentes_captacions.*',
+        db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`),
+        'usuarios.correo AS usuario_correo',
+        'usuarios.correo_personal AS usuario_correo_personal',
+        'usuarios.celular_personal AS usuario_telefono',
+        'contratos.identificacion AS contrato_documento'
+      )
+      .orderBy('contratos.fecha_inicio', 'desc')
       .first()
 
     if (!row) {
@@ -88,7 +156,18 @@ export default class AgentesCaptacionController {
 
     const qbuilder = AgenteCaptacion.query()
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
+      .leftJoin('contratos', function() {
+        this.on('contratos.usuario_id', '=', 'usuarios.id')
+          .andOnVal('contratos.estado', '=', 'activo')
+      })
+      .select(
+        'agentes_captacions.*',
+        db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`),
+        'usuarios.correo AS usuario_correo',
+        'usuarios.correo_personal AS usuario_correo_personal',
+        'usuarios.celular_personal AS usuario_telefono',
+        'contratos.identificacion AS contrato_documento'
+      )
       .orderBy(`agentes_captacions.${sortBy}`, order)
 
     if (q) {
@@ -125,7 +204,19 @@ export default class AgentesCaptacionController {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.id', params.id)
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
+      .leftJoin('contratos', function() {
+        this.on('contratos.usuario_id', '=', 'usuarios.id')
+          .andOnVal('contratos.estado', '=', 'activo')
+      })
+      .select(
+        'agentes_captacions.*',
+        db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`),
+        'usuarios.correo AS usuario_correo',
+        'usuarios.correo_personal AS usuario_correo_personal',
+        'usuarios.celular_personal AS usuario_telefono',
+        'contratos.identificacion AS contrato_documento'
+      )
+      .orderBy('contratos.fecha_inicio', 'desc')
       .first()
 
     if (!row) return response.notFound({ message: 'Agente no encontrado' })
@@ -139,7 +230,7 @@ export default class AgentesCaptacionController {
 
       const userAgenteRow = await db
         .from('agentes_captacions')
-        .where('usuario_id', auth.user.id) // ✅ Ahora es seguro
+        .where('usuario_id', auth.user.id)
         .select('id')
         .first()
 
@@ -163,15 +254,29 @@ export default class AgentesCaptacionController {
 
     return rowToPlainWithActivo(row)
   }
+
   /** GET /agentes-captacion/me */
   public async me({ auth, response }: HttpContext) {
     if (!auth?.user?.id) {
       return response.unauthorized({ message: 'No autenticado' })
     }
+
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.usuario_id', auth.user.id)
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .select('agentes_captacions.*', db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`))
+      .leftJoin('contratos', function() {
+        this.on('contratos.usuario_id', '=', 'usuarios.id')
+          .andOnVal('contratos.estado', '=', 'activo')
+      })
+      .select(
+        'agentes_captacions.*',
+        db.raw(`${ACTIVO_CALC_SQL} AS activo_calc`),
+        'usuarios.correo AS usuario_correo',
+        'usuarios.correo_personal AS usuario_correo_personal',
+        'usuarios.celular_personal AS usuario_telefono',
+        'contratos.identificacion AS contrato_documento'
+      )
+      .orderBy('contratos.fecha_inicio', 'desc')
       .first()
 
     if (!row) {
@@ -190,10 +295,10 @@ export default class AgentesCaptacionController {
       tipo,
       nombre,
       telefono,
-      doc_tipo: docTipo, // ✅ Extraer y renombrar
-      doc_numero: docNumero, // ✅ Extraer y renombrar
+      doc_tipo: docTipo,
+      doc_numero: docNumero,
       activo,
-      usuario_id: usuarioId, // ✅ Extraer y renombrar
+      usuario_id: usuarioId,
     } = request.only([
       'tipo',
       'nombre',
@@ -213,12 +318,10 @@ export default class AgentesCaptacionController {
 
     telefono = normalizePhone(telefono)
 
-    // ✅ Validar docTipo (NO el Set completo)
     if (docTipo && !DOC_TIPOS.has(docTipo)) {
       return response.badRequest({ message: 'doc_tipo inválido (CC | NIT)' })
     }
 
-    // ✅ Validar duplicado de documento
     if (docTipo && docNumero) {
       const exists = await AgenteCaptacion.query()
         .where('doc_tipo', docTipo)
@@ -234,7 +337,6 @@ export default class AgentesCaptacionController {
       docTipo: docTipo || null,
       docNumero: docNumero ? String(docNumero).trim() : null,
       usuarioId: usuarioId ?? null,
-      // para convenios; para comerciales/telemercadeo no se usa (se calcula)
       activo: typeof activo === 'boolean' ? activo : true,
     })
 
@@ -298,7 +400,6 @@ export default class AgentesCaptacionController {
       }
     }
 
-    // activo editable solo para ASESOR_CONVENIO
     if (payload.activo !== undefined && item.tipo === 'ASESOR_CONVENIO') {
       const v = String(payload.activo).toLowerCase()
       item.activo = ['true', '1'].includes(v)
@@ -492,7 +593,6 @@ export default class AgentesCaptacionController {
       if (h.isValid) hastaSql = h.toSQL()
     }
 
-    // Dateos relacionados al asesor (por distintas columnas posibles)
     const q = CaptacionDateo.query().where((qb) => {
       qb.where('asesor_id', asesorId)
         .orWhere('agente_id', asesorId)
@@ -507,7 +607,6 @@ export default class AgentesCaptacionController {
 
     const result = await Promise.all(
       dateos.map(async (d) => {
-        // Suma de comisiones del propio asesor para ese dateo
         const sumRow = await Comision.query()
           .where('captacion_dateo_id', d.id)
           .where('asesor_id', asesorId)
@@ -516,7 +615,6 @@ export default class AgentesCaptacionController {
 
         const montoComision = Number(sumRow?.$extras.total || 0)
 
-        // Turno que está usando este dateo (si existe)
         const turno = await TurnoRtm.query()
           .where('captacion_dateo_id', d.id)
           .select(['id', 'turno_numero', 'turno_codigo', 'placa', 'estado'])
@@ -545,12 +643,10 @@ export default class AgentesCaptacionController {
           telefono: (d as any).telefono ?? null,
           resultado: (d as any).resultado ?? null,
           exitoso: exitosoFlag,
-          // info de turno
           turno_id: turnoId,
           turno_numero: turnoNumero,
           turno_codigo: turnoCodigo,
           turno_estado: turnoEstado,
-          // monto desde comisiones
           monto: montoComision,
           created_at: createdAtIso,
         }

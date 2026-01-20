@@ -1,3 +1,4 @@
+// database/migrations/XXXX_create_sedes_table.ts
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
@@ -7,15 +8,7 @@ export default class extends BaseSchema {
     this.schema.createTable(this.tableName, (table) => {
       table.increments('id') // PK
 
-      // Relación obligatoria con razón social
-      table
-        .integer('razon_social_id')
-        .unsigned()
-        .notNullable()
-        .references('id')
-        .inTable('razon_social')
-        .onDelete('RESTRICT')
-        .onUpdate('CASCADE')
+      // ❌ ELIMINADO: razon_social_id (las sedes son independientes)
 
       // Relación obligatoria con ciudad (catálogo 'ciudades')
       table
@@ -27,24 +20,20 @@ export default class extends BaseSchema {
         .onDelete('RESTRICT')
         .onUpdate('CASCADE')
 
-      // Nombre visible de la sede (único por razón social)
-      table.string('nombre', 100).notNullable()
+      // Nombre visible de la sede (único)
+      table.string('nombre', 100).notNullable().unique()
 
       // Dirección opcional (para reportes/documentos)
       table.string('direccion', 200).nullable()
 
-      // Zona horaria (default America/Bogota para dejarlo future-proof)
+      // Zona horaria (default America/Bogota)
       table.string('timezone', 64).notNullable().defaultTo('America/Bogota')
 
       // Estado
       table.boolean('activo').notNullable().defaultTo(true)
 
-      // Unicidad: no se pueden repetir nombres dentro de la misma razón social
-      table.unique(['razon_social_id', 'nombre'])
-
-      // Índices útiles
+      // Índice útil
       table.index(['ciudad_id'])
-      table.index(['razon_social_id'])
 
       // Timestamps con zona horaria
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
