@@ -13,7 +13,7 @@ import AgenteCaptacion from '#models/agente_captacion'
 import CaptacionDateo from '#models/captacion_dateo'
 import FacturacionTicket from '#models/facturacion_ticket'
 import Certificacion from '#models/certificacion'
-import Conductor from '#models/conductor' // 🟢 nuevo
+import Conductor from '#models/conductor'
 
 export type TipoVehiculoUI =
   | 'Liviano Particular'
@@ -24,6 +24,7 @@ export type TipoVehiculoUI =
 export type MedioEntero = 'Fachada' | 'Redes Sociales' | 'Call Center' | 'Asesor Comercial'
 export type EstadoTurno = 'activo' | 'inactivo' | 'cancelado' | 'finalizado'
 export type CanalAtribucion = 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
+export type CanalDateo = 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES'
 
 export default class TurnoRtm extends BaseModel {
   public static table = 'turnos_rtms'
@@ -41,6 +42,18 @@ export default class TurnoRtm extends BaseModel {
   declare funcionarioId: number
   @belongsTo(() => Usuario, { foreignKey: 'funcionarioId' })
   declare usuario: BelongsTo<typeof Usuario>
+
+  // 👇 ========== NUEVOS CAMPOS PARA ETAPAS ==========
+  @column({ columnName: 'facturacion_funcionario_id' })
+  declare facturacionFuncionarioId: number | null
+  @belongsTo(() => Usuario, { foreignKey: 'facturacionFuncionarioId' })
+  declare facturacionFuncionario: BelongsTo<typeof Usuario>
+
+  @column({ columnName: 'certificacion_funcionario_id' })
+  declare certificacionFuncionarioId: number | null
+  @belongsTo(() => Usuario, { foreignKey: 'certificacionFuncionarioId' })
+  declare certificacionFuncionario: BelongsTo<typeof Usuario>
+  // 👆 ================================================
 
   @column({ columnName: 'servicio_id' })
   declare servicioId: number
@@ -63,7 +76,6 @@ export default class TurnoRtm extends BaseModel {
   @belongsTo(() => ClaseVehiculo, { foreignKey: 'claseVehiculoId' })
   declare claseVehiculo: BelongsTo<typeof ClaseVehiculo>
 
-  // 🟢 NUEVO: Conductor del turno (puede ser distinto al dueño)
   @column({ columnName: 'conductor_id' })
   declare conductorId: number | null
   @belongsTo(() => Conductor, { foreignKey: 'conductorId' })
@@ -115,7 +127,7 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: TipoVehiculoUI
 
-  // ── Captación “plana”
+  // ── Captación "plana"
   @column({
     columnName: 'medio_entero',
     serialize: (value?: MedioEntero | null) => value ?? null,
@@ -125,6 +137,19 @@ export default class TurnoRtm extends BaseModel {
   // ── Observaciones del turno
   @column()
   declare observaciones: string | null
+
+  // Campos del dateo
+  @column({ columnName: 'dateo_observacion' })
+  declare dateoObservacion: string | null
+
+  @column({ columnName: 'dateo_imagen_url' })
+  declare dateoImagenUrl: string | null
+
+  @column({
+    columnName: 'dateo_canal',
+    serialize: (value?: CanalDateo | null) => value ?? null,
+  })
+  declare dateoCanal: CanalDateo | null
 
   // ── Atribución final simple
   @column({

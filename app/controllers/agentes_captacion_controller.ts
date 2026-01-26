@@ -105,9 +105,12 @@ export default class AgentesCaptacionController {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.usuario_id', userId)
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .leftJoin('contratos', function() {
-        this.on('contratos.usuario_id', '=', 'usuarios.id')
-          .andOnVal('contratos.estado', '=', 'activo')
+      .leftJoin('contratos', function () {
+        this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
+          'contratos.estado',
+          '=',
+          'activo'
+        )
       })
       .select(
         'agentes_captacions.*',
@@ -156,9 +159,12 @@ export default class AgentesCaptacionController {
 
     const qbuilder = AgenteCaptacion.query()
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .leftJoin('contratos', function() {
-        this.on('contratos.usuario_id', '=', 'usuarios.id')
-          .andOnVal('contratos.estado', '=', 'activo')
+      .leftJoin('contratos', function () {
+        this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
+          'contratos.estado',
+          '=',
+          'activo'
+        )
       })
       .select(
         'agentes_captacions.*',
@@ -204,9 +210,12 @@ export default class AgentesCaptacionController {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.id', params.id)
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .leftJoin('contratos', function() {
-        this.on('contratos.usuario_id', '=', 'usuarios.id')
-          .andOnVal('contratos.estado', '=', 'activo')
+      .leftJoin('contratos', function () {
+        this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
+          'contratos.estado',
+          '=',
+          'activo'
+        )
       })
       .select(
         'agentes_captacions.*',
@@ -264,9 +273,12 @@ export default class AgentesCaptacionController {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.usuario_id', auth.user.id)
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
-      .leftJoin('contratos', function() {
-        this.on('contratos.usuario_id', '=', 'usuarios.id')
-          .andOnVal('contratos.estado', '=', 'activo')
+      .leftJoin('contratos', function () {
+        this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
+          'contratos.estado',
+          '=',
+          'activo'
+        )
       })
       .select(
         'agentes_captacions.*',

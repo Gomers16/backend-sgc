@@ -34,7 +34,6 @@ export default class AuthController {
       // 🔥 Preparar datos del usuario
       const userData = user.serialize()
       userData.profilePictureUrl = user.fotoPerfil
-
       userData.agenteId = user.agenteCaptacion?.id ?? null
 
       // 🔥 RESPUESTA CORRECTA

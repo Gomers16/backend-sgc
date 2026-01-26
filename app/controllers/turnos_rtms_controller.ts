@@ -131,11 +131,13 @@ export default class TurnosRtmController {
     try {
       const query = TurnoRtm.query()
         .preload('usuario')
+        .preload('facturacionFuncionario') //  AGREGAR ESTA LÍNEA
+        .preload('certificacionFuncionario') //  AGREGAR ESTA LÍNEA
         .preload('sede')
         .preload('servicio')
         .preload('vehiculo')
         .preload('cliente')
-        .preload('conductor') // 👈 NUEVO
+        .preload('conductor') //  NUEVO
         .preload('agenteCaptacion')
         .preload('captacionDateo', (q) => q.preload('agente').preload('convenio'))
         .preload('certificaciones')
@@ -326,6 +328,8 @@ export default class TurnosRtmController {
       const turno = await TurnoRtm.query()
         .where('id', id)
         .preload('usuario')
+        .preload('facturacionFuncionario') //  AGREGAR ESTA LÍNEA
+        .preload('certificacionFuncionario') //  AGREGAR ESTA LÍNEA
         .preload('sede')
         .preload('servicio')
         .preload('vehiculo', (q) => q.preload('clase'))
@@ -648,6 +652,7 @@ export default class TurnosRtmController {
         agenteCaptacionId = raw.agenteCaptacionId ? Number(raw.agenteCaptacionId) || null : null
       }
 
+      // 👇 PRIMERO buscar el dateo
       let dateo: CaptacionDateo | null = null
       if (raw.dateoId) {
         dateo = await CaptacionDateo.query({ client: trx }).where('id', Number(raw.dateoId)).first()
@@ -661,6 +666,26 @@ export default class TurnosRtmController {
           .orderBy('created_at', 'desc')
           .first()
       }
+
+      // 👇 ========== AHORA SÍ copiar datos del dateo ==========
+      let dateoObservacion: string | null = null
+      let dateoImagenUrl: string | null = null
+      let dateoCanal: 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES' | null =
+        null
+
+      if (dateo) {
+        dateoObservacion = dateo.observacion || null
+        dateoImagenUrl = dateo.imagenUrl || null
+        dateoCanal = dateo.canal || null
+
+        console.log('📋 Copiando datos del dateo:', {
+          dateoId: dateo.id,
+          tieneObservacion: !!dateoObservacion,
+          tieneImagen: !!dateoImagenUrl,
+          canal: dateoCanal,
+        })
+      }
+      // 👆 ========== FIN copiar datos ==========
 
       let captacionDateoId: number | null = null
       if (dateo) {
@@ -683,6 +708,10 @@ export default class TurnosRtmController {
           captacionDateoId = dateo.id
         } else {
           dateo = null
+          // 👇 Si el dateo no es vigente, limpiar los datos copiados
+          dateoObservacion = null
+          dateoImagenUrl = null
+          dateoCanal = null
         }
       }
 
@@ -711,6 +740,9 @@ export default class TurnosRtmController {
         canalAtribucion,
         agenteCaptacionId,
         captacionDateoId: captacionDateoId ?? null,
+        dateoObservacion,
+        dateoImagenUrl,
+        dateoCanal,
       }
 
       if (canalAtribucion) {

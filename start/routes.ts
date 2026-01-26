@@ -1215,8 +1215,87 @@ router
         return new ComisionesController().anular(ctx)
       })
       .where('id', /^[0-9]+$/)
-      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] })])
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
+    /* =============================== DESCUENTOS ======================== */
+
+    router
+      .get('/descuentos', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
+
+    router
+      .get('/descuentos/activos', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().activos(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
+
+    router
+      .get('/descuentos/:id', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
+
+    router
+      .post('/descuentos', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'],
+        }),
+      ])
+
+    router
+      .put('/descuentos/:id', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'],
+        }),
+      ])
+
+    router
+      .delete('/descuentos/:id', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().destroy(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA'],
+        }),
+      ])
     /* ============================ FACTURACIÓN ========================== */
 
     router

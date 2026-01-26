@@ -798,11 +798,52 @@ export default class FacturacionTicketsController {
     await ticket.save()
 
     if (ticket.turnoId) {
-      const turnoToUpdate = await TurnoRtm.find(ticket.turnoId)
+      const turnoToUpdate = await TurnoRtm.query()
+        .where('id', ticket.turnoId)
+        .preload('servicio')
+        .first()
+
       if (turnoToUpdate) {
         const nowBog = DateTime.local().setZone('America/Bogota')
         turnoToUpdate.tieneFacturacion = true
         turnoToUpdate.horaFacturacion = nowBog.toFormat('HH:mm:ss')
+        turnoToUpdate.facturacionFuncionarioId = auth.user?.id ?? null //  AGREGAR ESTA LÍNEA
+
+        // 👇 NUEVO: Si es SOAT/PREV/PERI y está activo, finalizarlo automáticamente
+        const esServicioSimplificado = isSOAT(
+          turnoToUpdate.servicio?.codigoServicio,
+          turnoToUpdate.servicio?.nombreServicio
+        )
+
+        if (esServicioSimplificado && turnoToUpdate.estado === 'activo') {
+          // Calcular tiempo de servicio
+          let entrada = DateTime.fromFormat(turnoToUpdate.horaIngreso, 'HH:mm:ss', {
+            zone: 'America/Bogota',
+          })
+          if (!entrada.isValid) {
+            entrada = DateTime.fromFormat(turnoToUpdate.horaIngreso, 'HH:mm', {
+              zone: 'America/Bogota',
+            })
+          }
+
+          let diff = nowBog.diff(entrada, ['hours', 'minutes']).toObject()
+          if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
+            diff = { hours: 0, minutes: 0 }
+          }
+
+          let tiempoServicioStr = ''
+          if (diff.hours && diff.hours >= 1) tiempoServicioStr += `${Math.floor(diff.hours)} h `
+          tiempoServicioStr += `${Math.round((diff.minutes ?? 0) % 60)} min`
+
+          turnoToUpdate.horaSalida = nowBog.toFormat('HH:mm:ss')
+          turnoToUpdate.tiempoServicio = tiempoServicioStr
+          turnoToUpdate.estado = 'finalizado'
+
+          console.log(
+            `✅ Turno SOAT/PREV/PERI #${turnoToUpdate.id} finalizado automáticamente al facturar`
+          )
+        }
+
         await turnoToUpdate.save()
       }
     }

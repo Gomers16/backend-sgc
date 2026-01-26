@@ -16,6 +16,24 @@ export default class TurnosRtms extends BaseSchema {
         .inTable('usuarios')
         .onDelete('CASCADE')
 
+      // 👇 ========== NUEVOS CAMPOS PARA ETAPAS ==========
+      table
+        .integer('facturacion_funcionario_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('usuarios')
+        .onDelete('SET NULL')
+
+      table
+        .integer('certificacion_funcionario_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('usuarios')
+        .onDelete('SET NULL')
+      // 👆 ================================================
+
       table
         .integer('sede_id')
         .unsigned()
@@ -57,7 +75,6 @@ export default class TurnosRtms extends BaseSchema {
         .onDelete('SET NULL')
         .onUpdate('CASCADE')
 
-      // 🟢 NUEVO: Conductor opcional del turno
       table
         .integer('conductor_id')
         .unsigned()
@@ -66,7 +83,6 @@ export default class TurnosRtms extends BaseSchema {
         .inTable('conductores')
         .onDelete('SET NULL')
 
-      // Agente opcional
       table
         .integer('agente_captacion_id')
         .unsigned()
@@ -75,7 +91,6 @@ export default class TurnosRtms extends BaseSchema {
         .inTable('agentes_captacions')
         .onDelete('SET NULL')
 
-      // SIN FK (solo integer) para evitar ciclo con captacion_dateos
       table.integer('captacion_dateo_id').unsigned().nullable()
 
       table.date('fecha').notNullable()
@@ -83,13 +98,11 @@ export default class TurnosRtms extends BaseSchema {
       table.string('hora_salida').nullable()
       table.string('tiempo_servicio').nullable()
 
-      // ✅ facturación del turno
       table.boolean('tiene_facturacion').notNullable().defaultTo(false)
       table.string('hora_facturacion').nullable()
 
-      // Consecutivos
-      table.integer('turno_numero').notNullable() // consecutivo global por sede+día
-      table.integer('turno_numero_servicio').notNullable() // consecutivo por servicio (sede+día)
+      table.integer('turno_numero').notNullable()
+      table.integer('turno_numero_servicio').notNullable()
 
       table.string('turno_codigo').notNullable().unique()
 
@@ -103,7 +116,6 @@ export default class TurnosRtms extends BaseSchema {
         )
         .notNullable()
 
-      // Medio de captación “plano” (derivado del canal; ahora puede ser NULL)
       table
         .enu('medio_entero', [
           'Redes Sociales',
@@ -115,10 +127,15 @@ export default class TurnosRtms extends BaseSchema {
         ])
         .nullable()
 
-      // Observaciones del turno
       table.text('observaciones').nullable()
 
-      // Canal final: FACHADA | ASESOR | TELE | REDES (puede ser NULL si no hay canal)
+      // Campos del dateo
+      table.text('dateo_observacion').nullable()
+      table.string('dateo_imagen_url', 512).nullable()
+      table
+        .enu('dateo_canal', ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'])
+        .nullable()
+
       table.enu('canal_atribucion', ['FACHADA', 'ASESOR', 'TELE', 'REDES']).nullable()
 
       table
@@ -139,9 +156,11 @@ export default class TurnosRtms extends BaseSchema {
       table.index(['fecha', 'sede_id'], 'idx_turno_fecha_sede')
       table.index(['vehiculo_id'], 'idx_turno_vehiculo')
       table.index(['cliente_id'], 'idx_turno_cliente')
-      table.index(['conductor_id'], 'idx_turno_conductor') // 🟢 nuevo índice
+      table.index(['conductor_id'], 'idx_turno_conductor')
       table.index(['canal_atribucion'], 'idx_turno_canal')
       table.index(['captacion_dateo_id'], 'idx_turno_dateo')
+      table.index(['facturacion_funcionario_id'], 'idx_turno_facturacion_funcionario')
+      table.index(['certificacion_funcionario_id'], 'idx_turno_certificacion_funcionario')
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

@@ -72,11 +72,52 @@ export default class CertificacionesController {
       observaciones: observaciones?.trim() || null,
     })
 
-    // ===== 7) Finalizar el turno y poner hora de salida como hora de certificación =====
+    // ===== 7) 🔥 Finalizar el turno, calcular tiempo de servicio y registrar certificación =====
     const now = DateTime.now().setZone('America/Bogota')
+
+    // 👇 CALCULAR TIEMPO DE SERVICIO
+    let tiempoServicioStr = ''
+    if (turno.horaIngreso) {
+      // Intentar parsear como HH:mm:ss primero, luego como HH:mm
+      let entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', {
+        zone: 'America/Bogota',
+      })
+      if (!entrada.isValid) {
+        entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm', { zone: 'America/Bogota' })
+      }
+
+      if (entrada.isValid) {
+        // Calcular diferencia entre salida (now) y entrada
+        let diff = now.diff(entrada, ['hours', 'minutes']).toObject()
+
+        // Evitar tiempos negativos
+        if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
+          diff = { hours: 0, minutes: 0 }
+        }
+
+        // Formatear tiempo legible
+        if (diff.hours && diff.hours >= 1) {
+          tiempoServicioStr += `${Math.floor(diff.hours)} h `
+        }
+        tiempoServicioStr += `${Math.round((diff.minutes ?? 0) % 60)} min`
+
+        console.log('✅ [CERTIFICACION] Tiempo calculado:', {
+          turnoId: turno.id,
+          horaIngreso: turno.horaIngreso,
+          horaSalida: now.toFormat('HH:mm:ss'),
+          tiempoServicio: tiempoServicioStr,
+        })
+      } else {
+        console.warn('⚠️ [CERTIFICACION] No se pudo parsear hora de ingreso:', turno.horaIngreso)
+      }
+    }
+
+    // 👇 GUARDAR TODO: estado, hora salida, tiempo servicio y certificador
     turno.merge({
       estado: 'finalizado',
       horaSalida: now.toFormat('HH:mm:ss'),
+      tiempoServicio: tiempoServicioStr || null, // 🔥 AGREGAR TIEMPO CALCULADO
+      certificacionFuncionarioId: usuario?.id ?? null,
     })
     await turno.save()
 
