@@ -5,11 +5,11 @@ export default class CreateConveniosTable extends BaseSchema {
   protected tableName = 'convenios'
 
   public async up() {
-    // Eliminar si existe para evitar conflictos
     await this.schema.dropTableIfExists(this.tableName)
 
     await this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
+
       table
         .enu('tipo', ['PERSONA', 'TALLER', 'PARQUEADERO', 'LAVADERO'], {
           useNative: true,
@@ -19,6 +19,8 @@ export default class CreateConveniosTable extends BaseSchema {
 
       table.string('codigo', 64).nullable()
       table.string('nombre', 150).notNullable()
+      table.string('establecimiento', 200).nullable()
+
       table.string('doc_tipo', 10).nullable()
       table.string('doc_numero', 32).nullable()
       table.string('telefono', 20).nullable()
@@ -37,18 +39,25 @@ export default class CreateConveniosTable extends BaseSchema {
       table.text('notas').nullable()
       table.boolean('activo').notNullable().defaultTo(true)
 
-      // 👇 relación 1:1 con agente de captación (asesor convenio)
+      // ✅ NUEVO: Fecha de apertura del convenio
+      table.date('fecha_apertura').nullable()
+
+      // ✅ MÉTODO DE PAGO FLEXIBLE (SOLUCIÓN FINAL)
+      table.string('metodo_pago', 20).nullable()
+      table.string('numero_metodo_pago', 50).nullable()
+
       table
         .integer('asesor_convenio_id')
         .unsigned()
         .nullable()
         .references('id')
-        .inTable('agentes_captacions') // 🔥 AQUI EL CAMBIO: nombre correcto de la tabla
+        .inTable('agentes_captacions')
         .onDelete('SET NULL')
 
       table.unique(['doc_tipo', 'doc_numero'])
       table.index(['activo', 'tipo'])
       table.index(['codigo'], 'idx_convenios_codigo')
+      table.index(['establecimiento'], 'idx_convenios_establecimiento')
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

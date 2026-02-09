@@ -9,23 +9,24 @@ export default class CargoSeeder extends BaseSeeder {
       { nombre: 'DIRECCION ADMINISTRATIVA Y COMERCIAL' },
 
       // 👥 Áreas administrativas y gerenciales
-      { nombre: 'GERENCIA' }, // ✅ NUEVO
+      { nombre: 'GERENCIA' },
       { nombre: 'TALENTO HUMANO' },
       { nombre: 'CONTADOR' },
+      { nombre: 'COORDINADOR DE DESARROLLO DE SOFTWARE' }, // ✅ NUEVO
 
       // 🎯 Líderes
-      { nombre: 'LIDER DE SEDE' }, // ✅ NUEVO
-      { nombre: 'LIDER DE INFORMES' }, // ✅ NUEVO
+      { nombre: 'LIDER DE SEDE' },
+      { nombre: 'LIDER DE INFORMES' },
 
       // 🤝 Comercial
       { nombre: 'ASESOR COMERCIAL' },
       { nombre: 'ASESOR CONVENIO' },
 
       // 👨‍💼 Servicio al cliente
-      { nombre: 'ASESOR SERVICIO AL CLIENTE' }, // ✅ NUEVO (reemplaza a registro, caja, puerta, telemercadeo)
+      { nombre: 'ASESOR SERVICIO AL CLIENTE' },
 
       // 🔧 Técnico
-      { nombre: 'INGENIERO' }, // ✅ NUEVO
+      { nombre: 'INGENIERO' },
       { nombre: 'INSPECTOR' },
     ]
 

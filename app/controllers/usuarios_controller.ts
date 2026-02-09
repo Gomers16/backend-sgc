@@ -13,6 +13,7 @@ import Sede from '#models/sede'
 import Cargo from '#models/cargo'
 import EntidadSalud from '#models/entidad_salud'
 import AgenteCaptacion from '#models/agente_captacion'
+import Convenio from '#models/convenio'
 
 /** Campos a seleccionar cuando se precarga el usuario actor */
 const USER_SELECT = ['id', 'nombres', 'apellidos', 'correo'] as const
@@ -57,6 +58,135 @@ function preloadUsuarioCompleto(loader: any) {
 }
 
 export default class UsuariosController {
+  /**
+   * ✅ Sincroniza agente con usuario (evita duplicados y protege tipos existentes)
+   */
+  private async syncAgenteConUsuario(user: Usuario) {
+    try {
+      // Determinar si el usuario debe tener agente
+      const rol = await Rol.find(user.rolId)
+      if (!rol) return
+
+      const nombreRol = (rol.nombre || '').toUpperCase().trim()
+
+      type TipoAsesor = 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'ASESOR_TELEMERCADEO'
+      let tipo: TipoAsesor | null = null
+
+      if (nombreRol === 'COMERCIAL' || nombreRol.includes('ASESOR COMERCIAL')) {
+        tipo = 'ASESOR_COMERCIAL'
+      } else if (nombreRol.includes('ASESOR CONVENIO')) {
+        tipo = 'ASESOR_CONVENIO'
+      } else if (nombreRol.includes('TELEMERCADEO') || nombreRol.includes('TELEMARKETING')) {
+        tipo = 'ASESOR_TELEMERCADEO'
+      }
+
+      // Si el rol no requiere agente, no hacer nada
+      if (!tipo) {
+        console.log(`✅ Usuario ${user.id} no requiere agente (rol: ${nombreRol})`)
+        return
+      }
+
+      // 🛡️ PROTECCIÓN MEJORADA: Buscar agente existente por usuarioId O por agenteId
+      let agenteExistente: AgenteCaptacion | null = null
+
+      // Opción 1: Buscar por usuarioId (debería estar siempre)
+      agenteExistente = await AgenteCaptacion.query().where('usuario_id', user.id).first()
+
+      // Opción 2: Si tiene agenteId pero no encontramos por usuarioId (datos inconsistentes)
+      if (!agenteExistente && user.agenteId) {
+        agenteExistente = await AgenteCaptacion.find(user.agenteId)
+      }
+
+      // Si existe y es de tipo diferente, NO sobrescribir
+      if (agenteExistente && agenteExistente.tipo !== tipo) {
+        console.warn(
+          `⚠️ Usuario ${user.id} tiene agente tipo ${agenteExistente.tipo} pero rol indica ${tipo}. NO se sobrescribe.`
+        )
+
+        // Solo actualizar datos básicos
+        agenteExistente.nombre = `${user.nombres} ${user.apellidos}`.trim()
+        agenteExistente.telefono = user.celularPersonal
+          ? String(user.celularPersonal).replace(/\D/g, '')
+          : null
+        agenteExistente.activo = user.estado === 'activo'
+
+        // 🔧 ARREGLAR relación si no existe
+        if (!agenteExistente.usuarioId) {
+          agenteExistente.usuarioId = user.id
+        }
+
+        await agenteExistente.save()
+
+        // 🔥 Si es ASESOR_CONVENIO, actualizar el convenio asociado
+        if (agenteExistente.tipo === 'ASESOR_CONVENIO') {
+          await this.actualizarConvenioDeAsesor(agenteExistente)
+        }
+
+        // Sincronizar relación bidireccional
+        if (user.agenteId !== agenteExistente.id) {
+          user.agenteId = agenteExistente.id
+          await user.save()
+        }
+
+        console.log(
+          `✅ Agente actualizado (sin cambio de tipo): ${agenteExistente.nombre} (ID: ${agenteExistente.id}, Tipo: ${agenteExistente.tipo})`
+        )
+        return
+      }
+
+      // ✅ Crear o actualizar con tipo correcto
+      const nombreCompleto = `${user.nombres} ${user.apellidos}`.trim()
+      const telefono = user.celularPersonal ? String(user.celularPersonal).replace(/\D/g, '') : null
+
+      const agente = await AgenteCaptacion.updateOrCreate(
+        { usuarioId: user.id },
+        {
+          tipo,
+          nombre: nombreCompleto,
+          telefono,
+          activo: user.estado === 'activo',
+        }
+      )
+
+      // 🔥 Si es ASESOR_CONVENIO, actualizar el convenio asociado
+      if (agente.tipo === 'ASESOR_CONVENIO') {
+        await this.actualizarConvenioDeAsesor(agente)
+      }
+
+      // Sincronizar relación bidireccional
+      if (user.agenteId !== agente.id) {
+        user.agenteId = agente.id
+        await user.save()
+      }
+
+      console.log(`✅ Agente sincronizado: ${agente.nombre} (ID: ${agente.id}, Tipo: ${tipo})`)
+    } catch (error: any) {
+      console.error('[ERROR] No se pudo sincronizar agente con usuario:', error.message)
+    }
+  }
+
+  /**
+   * 🔥 Actualiza el convenio asociado al asesor convenio
+   */
+  private async actualizarConvenioDeAsesor(agente: AgenteCaptacion) {
+    try {
+      // Buscar convenio donde asesor_convenio_id = agente.id
+      const convenio = await Convenio.query().where('asesor_convenio_id', agente.id).first()
+
+      if (convenio) {
+        // Actualizar nombre del convenio para que coincida con el agente
+        convenio.nombre = agente.nombre
+        await convenio.save()
+
+        console.log(`✅ Convenio ${convenio.id} actualizado con nombre: ${agente.nombre}`)
+      } else {
+        console.warn(`⚠️ No se encontró convenio para asesor convenio ${agente.id}`)
+      }
+    } catch (error: any) {
+      console.error('[ERROR] No se pudo actualizar convenio:', error.message)
+    }
+  }
+
   /** Lista de usuarios (opcionalmente filtrados por razón social) */
   public async index({ request, response }: HttpContext) {
     try {
@@ -188,7 +318,6 @@ export default class UsuariosController {
       'afpId',
       'afcId',
       'ccfId',
-      // ✅ NUEVOS CAMPOS
       'tipoSangre',
       'contactoEmergenciaNombre',
       'contactoEmergenciaTelefono',
@@ -206,30 +335,8 @@ export default class UsuariosController {
         ccfId: payload.ccfId ?? null,
       })
 
-      // ✅ Si el rol es COMERCIAL, crear agente de captación automáticamente
-      if (payload.rolId) {
-        const rol = await Rol.find(payload.rolId)
-
-        if (rol && rol.nombre === 'COMERCIAL') {
-          const nombreCompleto = `${user.nombres} ${user.apellidos}`.trim()
-
-          const agente = await AgenteCaptacion.create({
-            usuarioId: user.id,
-            tipo: 'ASESOR_COMERCIAL',
-            nombre: nombreCompleto,
-            telefono: user.celularPersonal ? String(user.celularPersonal).replace(/\D/g, '') : null,
-            docTipo: null,
-            docNumero: null,
-            activo: user.estado === 'activo',
-          })
-
-          // Relación bidireccional
-          user.agenteId = agente.id
-          await user.save()
-
-          console.log(`✅ Agente creado automáticamente: ${agente.nombre} (ID: ${agente.id})`)
-        }
-      }
+      // ✅ Usar el método de sincronización
+      await this.syncAgenteConUsuario(user)
 
       await user.load((loader) => preloadUsuarioCompleto(loader))
 
@@ -244,7 +351,6 @@ export default class UsuariosController {
       })
     }
   }
-
   /** Actualizar usuario */
   public async update({ params, request, response }: HttpContext) {
     try {
@@ -272,7 +378,6 @@ export default class UsuariosController {
         'afpId',
         'afcId',
         'ccfId',
-        // ✅ NUEVOS CAMPOS
         'tipoSangre',
         'contactoEmergenciaNombre',
         'contactoEmergenciaTelefono',
@@ -290,57 +395,8 @@ export default class UsuariosController {
       user.merge(cleanPayload)
       await user.save()
 
-      // ✅ Sincronizar con agente de captación
-      const agente = await AgenteCaptacion.query().where('usuario_id', user.id).first()
-
-      if (agente) {
-        // Actualizar datos del agente existente
-        let cambios = false
-
-        if (cleanPayload.nombres !== undefined || cleanPayload.apellidos !== undefined) {
-          agente.nombre = `${user.nombres} ${user.apellidos}`.trim()
-          cambios = true
-        }
-
-        if (cleanPayload.celularPersonal !== undefined) {
-          agente.telefono = user.celularPersonal
-            ? String(user.celularPersonal).replace(/\D/g, '')
-            : null
-          cambios = true
-        }
-
-        if (cleanPayload.estado !== undefined) {
-          agente.activo = user.estado === 'activo'
-          cambios = true
-        }
-
-        if (cambios) {
-          await agente.save()
-          console.log(`✅ Agente sincronizado: ${agente.nombre}`)
-        }
-      } else {
-        // Si no tiene agente pero es COMERCIAL, crearlo
-        const rol = await Rol.find(user.rolId)
-
-        if (rol && rol.nombre === 'COMERCIAL') {
-          const nombreCompleto = `${user.nombres} ${user.apellidos}`.trim()
-
-          const nuevoAgente = await AgenteCaptacion.create({
-            usuarioId: user.id,
-            tipo: 'ASESOR_COMERCIAL',
-            nombre: nombreCompleto,
-            telefono: user.celularPersonal ? String(user.celularPersonal).replace(/\D/g, '') : null,
-            docTipo: null,
-            docNumero: null,
-            activo: user.estado === 'activo',
-          })
-
-          user.agenteId = nuevoAgente.id
-          await user.save()
-
-          console.log(`✅ Agente creado en UPDATE: ${nuevoAgente.nombre}`)
-        }
-      }
+      // ✅ Usar el método de sincronización con protección
+      await this.syncAgenteConUsuario(user)
 
       await user.load((loader) => preloadUsuarioCompleto(loader))
 

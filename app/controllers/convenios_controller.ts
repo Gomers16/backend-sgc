@@ -16,7 +16,7 @@ export default class ConveniosController {
    *  - q=texto
    *  - activo=true|false|1|0
    *  - tipo=TALLER|PERSONA
-   *  - sortBy=id|nombre|docNumero|activo|createdAt
+   *  - sortBy=id|nombre|docNumero|activo|createdAt|fechaApertura
    *  - order=asc|desc
    */
   public async index({ request }: HttpContext) {
@@ -31,7 +31,15 @@ export default class ConveniosController {
     const orderRaw = String(request.input('order', 'desc')).toLowerCase()
 
     // whitelist para evitar inyección en order by
-    const ALLOWED_SORT = new Set(['id', 'nombre', 'docNumero', 'activo', 'createdAt'])
+    const ALLOWED_SORT = new Set([
+      'id',
+      'nombre',
+      'docNumero',
+      'activo',
+      'createdAt',
+      'establecimiento',
+      'fechaApertura',
+    ])
     const sortBy = ALLOWED_SORT.has(sortByRaw) ? sortByRaw : 'id'
     const order: 'asc' | 'desc' = orderRaw === 'asc' ? 'asc' : 'desc'
 
@@ -43,6 +51,7 @@ export default class ConveniosController {
         qb.whereRaw('UPPER(nombre) LIKE ?', [`%${qUpper}%`])
           .orWhereRaw('UPPER(doc_numero) LIKE ?', [`%${qUpper}%`])
           .orWhereRaw('UPPER(email) LIKE ?', [`%${qUpper}%`])
+          .orWhereRaw('UPPER(establecimiento) LIKE ?', [`%${qUpper}%`])
       })
     }
 
@@ -56,7 +65,7 @@ export default class ConveniosController {
       query.where('activo', bool)
     }
 
-    // 👇 Paginación real
+    // Paginación real
     return await query.paginate(page, perPage)
   }
 
@@ -66,29 +75,56 @@ export default class ConveniosController {
     if (!conv) return response.notFound({ message: 'Convenio no encontrado' })
     return conv
   }
-  // AGREGAR ESTE MÉTODO después del método show() en convenios_controller.ts
-  // (aproximadamente después de la línea 70)
 
   /**
-   * 🆕 GET /convenios/buscar-por-nombre?nombre=Parqueadero Mi Casa
-   * Busca UN convenio por nombre EXACTO (case-insensitive)
+   * GET /api/convenios/buscar-por-nombre
+   * Busca un convenio por nombre (exacto o que EMPIECE con el nombre)
    */
   public async buscarPorNombre({ request, response }: HttpContext) {
-    const nombre = String(request.input('nombre') || '').trim()
+    const nombre = request.input('nombre') as string | undefined
 
-    if (!nombre) {
+    if (!nombre || !nombre.trim()) {
       return response.badRequest({ message: 'Parámetro "nombre" requerido' })
     }
 
-    const convenio = await Convenio.query()
-      .whereRaw('UPPER(TRIM(nombre)) = ?', [nombre.toUpperCase()])
+    const nombreNormalizado = nombre.trim().replace(/\s+/g, ' ').toUpperCase()
+
+    console.log('🔍 Buscando convenio:', nombreNormalizado)
+
+    // 1️⃣ Intenta búsqueda exacta primero
+    let convenio = await Convenio.query()
+      .whereRaw(
+        "UPPER(TRIM(REPLACE(REPLACE(REPLACE(nombre, '  ', ' '), '   ', ' '), '    ', ' '))) = ?",
+        [nombreNormalizado]
+      )
+      .where('activo', true)
       .first()
 
+    // 2️⃣ Si no encuentra, busca convenios que EMPIECEN con ese nombre
     if (!convenio) {
+      console.log('   No encontrado con búsqueda exacta, intentando con LIKE...')
+
+      convenio = await Convenio.query()
+        .whereRaw(
+          "UPPER(TRIM(REPLACE(REPLACE(REPLACE(nombre, '  ', ' '), '   ', ' '), '    ', ' '))) LIKE ?",
+          [`${nombreNormalizado}%`]
+        )
+        .where('activo', true)
+        .first()
+    }
+
+    if (!convenio) {
+      console.log('   ❌ Convenio no encontrado para:', nombreNormalizado)
       return response.notFound({ message: 'Convenio no encontrado' })
     }
 
-    return response.ok(convenio)
+    console.log('   ✅ Convenio encontrado:', convenio.id, '-', convenio.nombre)
+
+    return response.ok({
+      id: convenio.id,
+      codigo: convenio.codigo,
+      nombre: convenio.nombre,
+    })
   }
   /** POST /convenios */
   public async store({ request, response }: HttpContext) {
@@ -96,6 +132,7 @@ export default class ConveniosController {
       nombre,
       tipo = 'PERSONA',
       activo = true,
+      establecimiento,
       doc_tipo: docTipo,
       doc_numero: docNumero,
       telefono,
@@ -104,10 +141,14 @@ export default class ConveniosController {
       ciudad_id: ciudadId,
       direccion,
       notas,
+      metodo_pago: metodoPago,
+      numero_metodo_pago: numeroMetodoPago,
+      fecha_apertura: fechaApertura,
     } = request.only([
       'nombre',
       'tipo',
       'activo',
+      'establecimiento',
       'doc_tipo',
       'doc_numero',
       'telefono',
@@ -116,6 +157,9 @@ export default class ConveniosController {
       'ciudad_id',
       'direccion',
       'notas',
+      'metodo_pago',
+      'numero_metodo_pago',
+      'fecha_apertura',
     ])
 
     if (!nombre) return response.badRequest({ message: 'nombre es requerido' })
@@ -129,10 +173,18 @@ export default class ConveniosController {
       if (exists) return response.conflict({ message: 'Documento ya existe en otro convenio' })
     }
 
+    // Validación: si método de pago no es EFECTIVO, debe tener número
+    if (metodoPago && metodoPago !== 'EFECTIVO' && !numeroMetodoPago) {
+      return response.badRequest({
+        message: 'Se requiere número de método de pago para métodos distintos a EFECTIVO',
+      })
+    }
+
     const conv = await Convenio.create({
       nombre,
       tipo,
       activo: !!activo,
+      establecimiento: establecimiento ?? null,
       docTipo: docTipo ?? null,
       docNumero: docNumero ?? null,
       telefono: telefono ?? null,
@@ -141,6 +193,9 @@ export default class ConveniosController {
       ciudadId: ciudadId ?? null,
       direccion: direccion ?? null,
       notas: notas ?? null,
+      metodoPago: metodoPago ?? null,
+      numeroMetodoPago: numeroMetodoPago ?? null,
+      fechaApertura: fechaApertura ? DateTime.fromISO(fechaApertura) : null,
     } as any)
 
     return response.created(conv)
@@ -155,6 +210,7 @@ export default class ConveniosController {
       'nombre',
       'tipo',
       'activo',
+      'establecimiento',
       'doc_tipo',
       'doc_numero',
       'telefono',
@@ -163,6 +219,9 @@ export default class ConveniosController {
       'ciudad_id',
       'direccion',
       'notas',
+      'metodo_pago',
+      'numero_metodo_pago',
+      'fecha_apertura',
     ])
 
     if (payload.doc_tipo !== undefined || payload.doc_numero !== undefined) {
@@ -183,15 +242,33 @@ export default class ConveniosController {
       }
     }
 
+    // Validación de método de pago
+    const newMetodo = payload.metodo_pago ?? c.metodoPago
+    const newNumero = payload.numero_metodo_pago ?? c.numeroMetodoPago
+    if (newMetodo && newMetodo !== 'EFECTIVO' && !newNumero) {
+      return response.badRequest({
+        message: 'Se requiere número de método de pago para métodos distintos a EFECTIVO',
+      })
+    }
+
     if (payload.nombre !== undefined) c.nombre = payload.nombre
     if (payload.tipo !== undefined) c.tipo = payload.tipo
     if (payload.activo !== undefined) c.activo = !!payload.activo
+    if (payload.establecimiento !== undefined) c.establecimiento = payload.establecimiento ?? null
     if (payload.telefono !== undefined) c.telefono = payload.telefono ?? null
     if (payload.whatsapp !== undefined) c.whatsapp = payload.whatsapp ?? null
     if (payload.email !== undefined) c.email = payload.email ?? null
     if (payload.ciudad_id !== undefined) c.ciudadId = payload.ciudad_id ?? null
     if (payload.direccion !== undefined) c.direccion = payload.direccion ?? null
     if (payload.notas !== undefined) c.notas = payload.notas ?? null
+    if (payload.metodo_pago !== undefined) c.metodoPago = payload.metodo_pago ?? null
+    if (payload.numero_metodo_pago !== undefined)
+      c.numeroMetodoPago = payload.numero_metodo_pago ?? null
+
+    // ✅ NUEVO: Manejo de fecha_apertura
+    if (payload.fecha_apertura !== undefined) {
+      c.fechaApertura = payload.fecha_apertura ? DateTime.fromISO(payload.fecha_apertura) : null
+    }
 
     await c.save()
     return c
@@ -314,7 +391,7 @@ export default class ConveniosController {
   }
 
   /**
-   * 🔹 GET /convenios/asignados?asesor_id=3
+   * GET /convenios/asignados?asesor_id=3
    * Devuelve SOLO los convenios activos asignados a un asesor comercial.
    */
   public async asignadosPorAsesor({ request, response }: HttpContext) {

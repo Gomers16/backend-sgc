@@ -656,9 +656,8 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }), // ✅ AGREGADO COMERCIAL
       ])
-
     // ❌ CONTABILIDAD NO puede ver /me (no tiene agente asignado)
     router
       .get('/agentes-captacion/me', async (ctx) => {
@@ -1000,7 +999,7 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }), // ✅ AGREGADO
       ])
 
     router
@@ -1010,7 +1009,7 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }), // ✅ AGREGADO
       ])
 
     router
@@ -1036,6 +1035,18 @@ router
 
     router
       .patch('/convenios/:id', async (ctx) => {
+        const { default: ConveniosController } = await import('#controllers/convenios_controller')
+        return new ConveniosController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
+
+    // 👇 AGREGAR ESTA RUTA PUT
+    router
+      .put('/convenios/:id', async (ctx) => {
         const { default: ConveniosController } = await import('#controllers/convenios_controller')
         return new ConveniosController().update(ctx)
       })

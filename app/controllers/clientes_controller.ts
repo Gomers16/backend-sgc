@@ -26,21 +26,55 @@ function toBogotaDateTime(v: unknown): DateTime | null {
 }
 
 export default class ClientesController {
-  /** GET /clientes?page=1&perPage=20&q=... */
-  public async index({ request }: HttpContext) {
+  /** 🔥 GET /clientes?page=1&perPage=20&q=... (CON BÚSQUEDA POR PLACA) */
+  public async index({ request, response }: HttpContext) {
     const page = Number(request.input('page', 1))
     const perPage = Math.min(Number(request.input('perPage', 20)), 100)
     const q = String(request.input('q', '')).trim()
 
-    const query = Cliente.query().orderBy('id', 'asc')
-    if (q) {
-      query
-        .where('nombre', 'like', `%${q}%`)
-        .orWhere('telefono', 'like', `%${q}%`)
-        .orWhere('doc_numero', 'like', `%${q}%`)
-        .orWhere('email', 'like', `%${q}%`)
+    try {
+      const query = Cliente.query().orderBy('id', 'desc')
+
+      // 🔍 BÚSQUEDA: nombre, teléfono, documento O PLACA
+      if (q) {
+        const searchTerm = q
+
+        // 1️⃣ Buscar vehículos con esa placa
+        const vehiculosConPlaca = await Vehiculo.query()
+          .whereRaw('UPPER(placa) LIKE ?', [`%${searchTerm.toUpperCase()}%`])
+          .select('cliente_id')
+          .whereNotNull('cliente_id')
+
+        const clienteIdsConPlaca = vehiculosConPlaca
+          .map((v) => v.clienteId)
+          .filter((id) => id !== null) as number[]
+
+        // 2️⃣ Búsqueda combinada
+        query.where((builder) => {
+          // Buscar por nombre, teléfono o documento
+          builder
+            .whereRaw('LOWER(nombre) LIKE ?', [`%${searchTerm.toLowerCase()}%`])
+            .orWhereRaw('telefono LIKE ?', [`%${searchTerm}%`])
+            .orWhereRaw('doc_numero LIKE ?', [`%${searchTerm}%`])
+            .orWhereRaw('email LIKE ?', [`%${searchTerm.toLowerCase()}%`])
+
+          // O buscar por placa (si encontró vehículos)
+          if (clienteIdsConPlaca.length > 0) {
+            builder.orWhereIn('id', clienteIdsConPlaca)
+          }
+        })
+      }
+
+      const paginatedResult = await query.paginate(page, perPage)
+
+      return response.ok({
+        data: paginatedResult.all(),
+        meta: paginatedResult.getMeta(),
+      })
+    } catch (error) {
+      console.error('Error en index clientes:', error)
+      return response.internalServerError({ message: 'Error al obtener clientes' })
     }
-    return await query.paginate(page, perPage)
   }
 
   /** GET /clientes/:id */
@@ -265,14 +299,14 @@ export default class ClientesController {
         marca: v.marca,
         linea: v.linea,
         modelo: v.modelo,
-        color: v.color, // ✅ nuevo
-        matricula: v.matricula, // ✅ nuevo
+        color: v.color,
+        matricula: v.matricula,
         clase: v.$preloaded?.clase
           ? { id: v.claseVehiculoId, nombre: (v.$preloaded as any).clase?.nombre }
           : undefined,
       })),
       metricas,
-      kpis: metricas, // alias
+      kpis: metricas,
       ultimas_por_vehiculo: ultimasPorVehiculo,
       visitas_recientes: recientes,
     })
@@ -288,9 +322,9 @@ export default class ClientesController {
     const servicioCodigo = request.input('servicioCodigo')
     const sedeId = request.input('sedeId')
     const placa = String(request.input('placa', '')).trim()
-    const desde = request.input('desde') // YYYY-MM-DD
-    const hasta = request.input('hasta') // YYYY-MM-DD
-    const estado = request.input('estado') // activo|inactivo|cancelado|finalizado
+    const desde = request.input('desde')
+    const hasta = request.input('hasta')
+    const estado = request.input('estado')
 
     let q = db
       .from('turnos_rtms as t')

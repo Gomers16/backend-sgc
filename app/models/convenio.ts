@@ -2,11 +2,13 @@
 import { DateTime } from 'luxon'
 import { BaseModel, column, hasMany, belongsTo } from '@adonisjs/lucid/orm'
 import type { HasMany, BelongsTo } from '@adonisjs/lucid/types/relations'
+
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import CaptacionDateo from '#models/captacion_dateo'
-import AgenteCaptacion from '#models/agente_captacion' // 👈 AGREGAR IMPORT
+import AgenteCaptacion from '#models/agente_captacion'
 
 export type ConvenioTipo = 'PERSONA' | 'TALLER' | 'PARQUEADERO' | 'LAVADERO'
+export type MetodoPago = 'EFECTIVO' | 'TRANSFERENCIA' | 'TARJETA' | 'CHEQUE'
 
 export default class Convenio extends BaseModel {
   public static table = 'convenios'
@@ -22,6 +24,9 @@ export default class Convenio extends BaseModel {
 
   @column()
   declare nombre: string
+
+  @column()
+  declare establecimiento: string | null
 
   @column({ columnName: 'doc_tipo' })
   declare docTipo: string | null
@@ -50,6 +55,17 @@ export default class Convenio extends BaseModel {
   @column()
   declare activo: boolean
 
+  // ✅ NUEVO: Fecha de apertura del convenio
+  @column.date({ columnName: 'fecha_apertura' })
+  declare fechaApertura: DateTime | null
+
+  // Campos de método de pago
+  @column({ columnName: 'metodo_pago' })
+  declare metodoPago: MetodoPago | null
+
+  @column({ columnName: 'numero_metodo_pago' })
+  declare numeroMetodoPago: string | null
+
   @column({ columnName: 'asesor_convenio_id' })
   declare asesorConvenioId: number | null
 
@@ -60,14 +76,12 @@ export default class Convenio extends BaseModel {
   declare updatedAt: DateTime
 
   // ========== RELACIONES ==========
-
   @hasMany(() => AsesorConvenioAsignacion, { foreignKey: 'convenioId' })
   declare asignaciones: HasMany<typeof AsesorConvenioAsignacion>
 
   @hasMany(() => CaptacionDateo, { foreignKey: 'convenioId' })
   declare dateos: HasMany<typeof CaptacionDateo>
 
-  // 👇 RELACIÓN CRÍTICA NUEVA: para preload del asesor del convenio
   @belongsTo(() => AgenteCaptacion, { foreignKey: 'asesorConvenioId' })
   declare asesorConvenio: BelongsTo<typeof AgenteCaptacion>
 }

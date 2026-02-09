@@ -1,9 +1,32 @@
 // database/seeders/clientes_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
-import Cliente from '#models/cliente'
+// import Cliente from '#models/cliente'
 
-type PersonaDoc = 'CC' | 'CE' | 'PAS'
-type EmpresaDoc = 'NIT'
+/*
+ * ====================================================================
+ * SEEDER DESHABILITADO
+ * ====================================================================
+ * Este seeder está comentado porque ya no necesitamos datos de prueba.
+ * Los clientes se crearán manualmente desde la interfaz de usuario.
+ *
+ * Para habilitarlo de nuevo, simplemente descomenta todo el código.
+ * ====================================================================
+ */
+
+// type PersonaDoc = 'CC' | 'CE' | 'PAS'
+// type EmpresaDoc = 'NIT'
+
+export default class ClientesSeeder extends BaseSeeder {
+  public async run() {
+    // Seeder deshabilitado - no hace nada
+    console.log('⏭️  Seeder de clientes omitido (comentado)')
+  }
+}
+
+/*
+// ====================================================================
+// CÓDIGO ORIGINAL (COMENTADO)
+// ====================================================================
 
 export default class ClientesSeeder extends BaseSeeder {
   public async run() {
@@ -195,3 +218,4 @@ export default class ClientesSeeder extends BaseSeeder {
     }
   }
 }
+*/

@@ -1,14 +1,39 @@
 // database/seeders/22_prospectos_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
-import db from '@adonisjs/lucid/services/db'
-import { DateTime } from 'luxon'
+// import db from '@adonisjs/lucid/services/db'
+// import { DateTime } from 'luxon'
 
-import Prospecto, { type ProspectoOrigen } from '#models/prospecto'
-import AgenteCaptacion from '#models/agente_captacion'
+// import Prospecto, { type ProspectoOrigen } from '#models/prospecto'
+// import AgenteCaptacion from '#models/agente_captacion'
+
+/*
+ * ====================================================================
+ * SEEDER DESHABILITADO
+ * ====================================================================
+ * Este seeder está comentado porque ya no necesitamos datos de prueba.
+ * Los prospectos se crearán manualmente desde la interfaz de usuario.
+ *
+ * Para habilitarlo de nuevo, simplemente descomenta todo el código.
+ * ====================================================================
+ */
+
+// const ORIGENES: ProspectoOrigen[] = ['IMPORT', 'CAMPO', 'EVENTO', 'OTRO']
+
+export default class ProspectosSeeder extends BaseSeeder {
+  public async run() {
+    // Seeder deshabilitado - no hace nada
+    console.log('⏭️  Seeder de prospectos omitido (comentado)')
+  }
+}
+
+/*
+// ====================================================================
+// CÓDIGO ORIGINAL (COMENTADO)
+// ====================================================================
 
 const ORIGENES: ProspectoOrigen[] = ['IMPORT', 'CAMPO', 'EVENTO', 'OTRO']
 
-/* ---------- helpers ---------- */
+// ---------- helpers ----------
 function pick<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
@@ -38,7 +63,7 @@ function cedula(): string {
   return String(randInt(10000000, 99999999))
 }
 
-/** Genera una placa colombiana AAA123 (sin O/Q), única frente a BD + set local */
+// Genera una placa colombiana AAA123 (sin O/Q), única frente a BD + set local
 function makePlateFactory(existing: Set<string>) {
   const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ' // sin O / Q
   const L = () => letters[randInt(0, letters.length - 1)]
@@ -55,7 +80,7 @@ function makePlateFactory(existing: Set<string>) {
   }
 }
 
-/** 60% vigentes, 40% vencidos, con ventanas razonables */
+// 60% vigentes, 40% vencidos, con ventanas razonables
 function genVigencia(hoy: DateTime): { vigente: boolean; vencimiento: DateTime | null } {
   const vigente = Math.random() < 0.6
   if (vigente) return { vigente, vencimiento: hoy.plus({ days: randInt(10, 320) }) }
@@ -131,3 +156,4 @@ export default class ProspectosSeeder extends BaseSeeder {
     }
   }
 }
+*/

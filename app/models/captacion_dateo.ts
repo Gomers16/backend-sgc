@@ -106,7 +106,6 @@ export default class CaptacionDateo extends BaseModel {
   @column()
   declare resultado: ResultadoDateo
 
-  // 👇 NUEVO: Campo liberado
   @column()
   declare liberado: boolean
 
@@ -115,6 +114,16 @@ export default class CaptacionDateo extends BaseModel {
 
   @column({ columnName: 'detectado_por_convenio' })
   declare detectadoPorConvenio: boolean
+
+  // 🆕 CAMPOS DE RECURRENCIA
+  @column({ columnName: 'es_cliente_recurrente' })
+  declare esClienteRecurrente: boolean
+
+  @column({ columnName: 'meses_desde_ultima_visita' })
+  declare mesesDesdeUltimaVisita: number | null
+
+  @column({ columnName: 'turno_recurrente_id' })
+  declare turnoRecurrenteId: number | null
 
   // ===== Relaciones =====
   @belongsTo(() => AgenteCaptacion, { foreignKey: 'agenteId' })

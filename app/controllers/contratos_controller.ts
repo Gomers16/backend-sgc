@@ -136,18 +136,43 @@ export default class ContratosController {
       .preload('usuario')
       .preload('sede')
       .preload('cargo')
+      .preload('razonSocial')
       .preload('eps')
       .preload('arl')
       .preload('afp')
       .preload('afc')
       .preload('ccf')
-      .preload('pasos')
-      .preload('eventos')
-      .preload('historialEstados', (q: any) => q.preload('usuario').orderBy('fecha_cambio', 'desc'))
-      .preload('salarios', (q: any) => q.orderBy('fecha_efectiva', 'desc').limit(1))
-      .preload('cambios', (q: any) => q.preload('usuario').orderBy('created_at', 'desc'))
+      .preload('pasos', (q: any) => {
+        q.preload('usuario', (uq: any) => {
+          uq.select(['id', 'nombres', 'apellidos', 'correo'])
+        })
+          .orderByRaw(
+            `
+          CASE fase
+            WHEN 'inicio' THEN 1
+            WHEN 'desarrollo' THEN 2
+            WHEN 'fin' THEN 3
+            ELSE 4
+          END
+        `
+          )
+          .orderBy('orden', 'asc')
+      })
+      .preload('eventos', (q: any) => {
+        q.preload('usuario', (uq: any) => {
+          uq.select(['id', 'nombres', 'apellidos', 'correo'])
+        }).orderBy('created_at', 'desc')
+      })
+      .preload('historialEstados', (q: any) => {
+        q.preload('usuario').orderBy('fecha_cambio', 'desc')
+      })
+      .preload('salarios', (q: any) => {
+        q.orderBy('fecha_efectiva', 'desc').limit(1)
+      })
+      .preload('cambios', (q: any) => {
+        q.preload('usuario').orderBy('created_at', 'desc')
+      })
   }
-
   /* ============================
    Helpers de archivos (MIME, ext, tamaño, nombres, paths)
   ============================ */
@@ -166,24 +191,6 @@ export default class ContratosController {
     const fromName =
       (file?.extname as string) || (file?.clientName ? path.extname(file.clientName).slice(1) : '')
     return (fromName || fromCt || fallback).toLowerCase()
-  }
-
-  // @ts-expect-error - Método reservado para uso futuro
-  private ensureHasTmp(file: any, msg = 'Archivo inválido o no adjunto.'): void {
-    if (!file || !file.tmpPath) {
-      throw new Error(msg)
-    }
-  }
-
-  // @ts-expect-error - Método reservado para uso futuro
-  private ensureMaxSize(file: any, maxBytes: number, msg?: string): void {
-    const size = Number(file?.size || 0)
-    if (size > maxBytes) {
-      throw new Error(
-        msg ||
-          `El archivo supera el tamaño máximo permitido (${Math.round(maxBytes / (1024 * 1024))}MB).`
-      )
-    }
   }
 
   /** Permitidos para RECOMENDACIÓN MÉDICA */

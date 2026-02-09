@@ -528,9 +528,11 @@ export default class AgentesCaptacionController {
     return query.exec()
   }
 
-  /** GET /agentes-captacion/light?activos=1&select=id,nombre,tipo */
+  /** GET /agentes-captacion/light?activos=1&select=id,nombre,tipo&tipo=ASESOR_COMERCIAL */
   public async light({ request, response }: HttpContext) {
     const activos = String(request.input('activos', '1')) === '1'
+    const tipo = String(request.input('tipo', '')).trim() //  NUEVO: Filtro por tipo
+
     const selectRaw = String(request.input('select', 'id,nombre,tipo'))
       .split(',')
       .map((s) => s.trim())
@@ -548,6 +550,11 @@ export default class AgentesCaptacionController {
 
     if (activos) {
       query = query.whereRaw(`${ACTIVO_CALC_SQL} = 1`)
+    }
+
+    // 🔥 NUEVO: Filtrar por tipo si se proporciona
+    if (tipo && TIPOS.has(tipo)) {
+      query = query.where('agentes_captacions.tipo', tipo)
     }
 
     const rows = await query

@@ -386,14 +386,34 @@ export default class CaptacionDateosController {
     if (agente && agente.tipo === 'ASESOR_CONVENIO') {
       canal = 'ASESOR_CONVENIO'
 
-      const convenioDelAsesor = await Convenio.query()
-        .whereRaw('UPPER(TRIM(nombre)) = ?', [agente.nombre.toUpperCase().trim()])
-        .where('activo', true)
-        .first()
+      // 🔥 Normalizar nombre: quitar múltiples espacios, trim, uppercase
+      const nombreNormalizado = agente.nombre.trim().replace(/\s+/g, ' ').toUpperCase()
+
+      console.log(`🔍 Buscando convenio para asesor: "${nombreNormalizado}"`)
+
+      // 🔥 Buscar TODOS los convenios activos y comparar en JavaScript
+      const conveniosActivos = await Convenio.query().where('activo', true).select(['id', 'nombre'])
+
+      console.log(`📊 Se encontraron ${conveniosActivos.length} convenios activos`)
+
+      const convenioDelAsesor = conveniosActivos.find((c) => {
+        const nombreConvenioNormalizado = c.nombre.trim().replace(/\s+/g, ' ').toUpperCase()
+
+        const coincide =
+          nombreConvenioNormalizado === nombreNormalizado ||
+          nombreConvenioNormalizado.startsWith(nombreNormalizado)
+
+        if (coincide) {
+          console.log(`✅ Convenio encontrado: "${c.nombre}" (ID: ${c.id})`)
+        }
+
+        return coincide
+      })
 
       if (!convenioDelAsesor) {
+        console.error(`❌ No se encontró convenio para: "${nombreNormalizado}"`)
         return response.unprocessableEntity({
-          message: `El asesor convenio "${agente.nombre}" no tiene un convenio asociado con el mismo nombre.`,
+          message: `El asesor convenio "${agente.nombre}" no tiene un convenio asociado activo. Verifica que exista un convenio que comience con "${agente.nombre}".`,
         })
       }
 
@@ -405,8 +425,10 @@ export default class CaptacionDateosController {
       }
 
       convenioId = convenioDelAsesor.id
-      convenio = convenioDelAsesor
+      convenio = await Convenio.find(convenioDelAsesor.id) // Cargar el convenio completo
       asesorConvenioId = agente.id
+
+      console.log(`✅ Convenio asignado: ID ${convenioId}, Asesor ID ${asesorConvenioId}`)
     } else if (agente && canal === 'ASESOR_COMERCIAL') {
       if (convenioId !== null) {
         const asignacion = await AsesorConvenioAsignacion.query()

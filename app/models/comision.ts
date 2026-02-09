@@ -121,6 +121,22 @@ export default class Comision extends BaseModel {
   @column({ columnName: 'calculado_por' })
   declare calculadoPor: number | null
 
+  // 🆕 CAMPOS DE RECURRENCIA
+  @column({ columnName: 'descuento_recurrencia_aplicado' })
+  declare descuentoRecurrenciaAplicado: boolean
+
+  @column({ columnName: 'tipo_descuento_recurrencia' })
+  declare tipoDescuentoRecurrencia: 'PORCENTAJE' | 'VALOR_FIJO' | null
+
+  @column({ columnName: 'valor_descuento_recurrencia' })
+  declare valorDescuentoRecurrencia: number | null
+
+  @column({ columnName: 'monto_original_dateo' })
+  declare montoOriginalDateo: number | null
+
+  @column({ columnName: 'monto_original_placa' })
+  declare montoOriginalPlaca: number | null
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
@@ -144,10 +160,10 @@ export default class Comision extends BaseModel {
   })
   declare convenio: BelongsTo<typeof Convenio>
 
-  // 👇 NUEVA RELACIÓN: Asesor secundario (dueño del convenio)
   @belongsTo(() => AgenteCaptacion, {
     foreignKey: 'asesorSecundarioId',
   })
   declare asesorSecundario: BelongsTo<typeof AgenteCaptacion>
+
   valorTotal: any
 }
