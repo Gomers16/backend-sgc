@@ -922,4 +922,191 @@ export default class ComisionesController {
 
     return response.ok({ success: true })
   }
+
+  /* ============================================================
+   *   CONFIGURACIÓN DE RECURRENCIAS (NUEVO)
+   * ============================================================*/
+
+  /**
+   * GET /api/comisiones/recurrencia/config/global
+   * Obtiene la configuración global de recurrencias
+   */
+  public async recurrenciaConfigGlobalGet({ response }: HttpContext) {
+    const { default: ConfiguracionRecurrenciaGlobal } = await import(
+      '#models/configuracion_recurrencia_global'
+    )
+
+    let config = await ConfiguracionRecurrenciaGlobal.query().first()
+
+    if (!config) {
+      config = await ConfiguracionRecurrenciaGlobal.create({
+        mesesMinimos: 24,
+        valorDateoRecurrencia: 4300,
+      })
+    }
+
+    return response.ok({
+      meses_minimos: config.mesesMinimos,
+      valor_dateo_recurrencia: config.valorDateoRecurrencia,
+    })
+  }
+
+  /**
+   * POST /api/comisiones/recurrencia/config/global
+   */
+  public async recurrenciaConfigGlobalUpsert({ request, response }: HttpContext) {
+    const { default: ConfiguracionRecurrenciaGlobal } = await import(
+      '#models/configuracion_recurrencia_global'
+    )
+
+    const payload = request.only(['meses_minimos', 'valor_dateo_recurrencia'])
+
+    const mesesMinimos = Math.max(1, toNumber(payload.meses_minimos))
+    const valorDateoRecurrencia = Math.max(0, toNumber(payload.valor_dateo_recurrencia))
+
+    let config = await ConfiguracionRecurrenciaGlobal.query().first()
+
+    if (!config) {
+      config = await ConfiguracionRecurrenciaGlobal.create({
+        mesesMinimos,
+        valorDateoRecurrencia,
+      })
+    } else {
+      config.mesesMinimos = mesesMinimos
+      config.valorDateoRecurrencia = valorDateoRecurrencia
+      await config.save()
+    }
+
+    return response.ok({
+      meses_minimos: config.mesesMinimos,
+      valor_dateo_recurrencia: config.valorDateoRecurrencia,
+    })
+  }
+
+  /**
+   * GET /api/comisiones/recurrencia/config/asesores
+   */
+  public async recurrenciaConfigAsesoresIndex({ request, response }: HttpContext) {
+    const { default: ConfiguracionRecurrenciaAsesor } = await import(
+      '#models/configuracion_recurrencia_asesor'
+    )
+
+    const asesorId = request.input('asesorId') as number | undefined
+
+    const query = ConfiguracionRecurrenciaAsesor.query().preload('asesor')
+
+    if (asesorId) {
+      query.where('asesor_id', asesorId)
+    }
+
+    const configs = await query
+
+    const data = configs.map((c) => {
+      const asesor = (c as any).$preloaded?.asesor || null
+
+      return {
+        id: c.id,
+        asesor_id: c.asesorId,
+        asesor_nombre: asesor ? asesor.nombre : null,
+        recurrencia_habilitada: c.recurrenciaHabilitada,
+        meses_minimos: c.mesesMinimos,
+        valor_dateo_recurrencia: c.valorDateoRecurrencia,
+        tipo_vehiculo: c.tipoVehiculo,
+      }
+    })
+
+    return response.ok({ data })
+  }
+
+  /**
+   * POST /api/comisiones/recurrencia/config/asesores
+   */
+  public async recurrenciaConfigAsesoresUpsert({ request, response }: HttpContext) {
+    const { default: ConfiguracionRecurrenciaAsesor } = await import(
+      '#models/configuracion_recurrencia_asesor'
+    )
+
+    const payload = request.only([
+      'asesor_id',
+      'recurrencia_habilitada',
+      'meses_minimos',
+      'valor_dateo_recurrencia',
+      'tipo_vehiculo',
+    ])
+
+    const asesorId = Number(payload.asesor_id)
+    if (!asesorId) {
+      return response.badRequest({ message: 'asesor_id es requerido' })
+    }
+
+    const recurrenciaHabilitada = Boolean(payload.recurrencia_habilitada)
+    const mesesMinimos =
+      payload.meses_minimos !== undefined && payload.meses_minimos !== null
+        ? Math.max(1, toNumber(payload.meses_minimos))
+        : null
+
+    const valorDateoRecurrencia =
+      payload.valor_dateo_recurrencia !== undefined && payload.valor_dateo_recurrencia !== null
+        ? Math.max(0, toNumber(payload.valor_dateo_recurrencia))
+        : null
+
+    const tipoVehiculo = String(payload.tipo_vehiculo || 'AMBOS').toUpperCase()
+    if (!['MOTO', 'VEHICULO', 'AMBOS'].includes(tipoVehiculo)) {
+      return response.badRequest({
+        message: 'tipo_vehiculo debe ser MOTO, VEHICULO o AMBOS',
+      })
+    }
+
+    let config = await ConfiguracionRecurrenciaAsesor.query()
+      .where('asesor_id', asesorId)
+      .where('tipo_vehiculo', tipoVehiculo as any)
+      .first()
+
+    if (!config) {
+      config = await ConfiguracionRecurrenciaAsesor.create({
+        asesorId,
+        recurrenciaHabilitada,
+        mesesMinimos,
+        valorDateoRecurrencia,
+        tipoVehiculo: tipoVehiculo as any,
+      })
+    } else {
+      config.recurrenciaHabilitada = recurrenciaHabilitada
+      config.mesesMinimos = mesesMinimos
+      config.valorDateoRecurrencia = valorDateoRecurrencia
+      await config.save()
+    }
+
+    await config.load('asesor')
+    const asesor = (config as any).$preloaded?.asesor || null
+
+    return response.ok({
+      id: config.id,
+      asesor_id: config.asesorId,
+      asesor_nombre: asesor ? asesor.nombre : null,
+      recurrencia_habilitada: config.recurrenciaHabilitada,
+      meses_minimos: config.mesesMinimos,
+      valor_dateo_recurrencia: config.valorDateoRecurrencia,
+      tipo_vehiculo: config.tipoVehiculo,
+    })
+  }
+
+  /**
+   * DELETE /api/comisiones/recurrencia/config/asesores/:id
+   */
+  public async recurrenciaConfigAsesoresDelete({ params, response }: HttpContext) {
+    const { default: ConfiguracionRecurrenciaAsesor } = await import(
+      '#models/configuracion_recurrencia_asesor'
+    )
+
+    const config = await ConfiguracionRecurrenciaAsesor.find(params.id)
+
+    if (!config) {
+      return response.notFound({ message: 'Configuración no encontrada' })
+    }
+
+    await config.delete()
+
+    return response.ok({ message: 'Configuración eliminada correctamente' })
+  }
 }

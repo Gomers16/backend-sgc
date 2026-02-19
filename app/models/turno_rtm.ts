@@ -43,7 +43,7 @@ export default class TurnoRtm extends BaseModel {
   @belongsTo(() => Usuario, { foreignKey: 'funcionarioId' })
   declare usuario: BelongsTo<typeof Usuario>
 
-  // 👇 ========== NUEVOS CAMPOS PARA ETAPAS ==========
+  // ── Etapas de facturación y certificación
   @column({ columnName: 'facturacion_funcionario_id' })
   declare facturacionFuncionarioId: number | null
   @belongsTo(() => Usuario, { foreignKey: 'facturacionFuncionarioId' })
@@ -53,7 +53,6 @@ export default class TurnoRtm extends BaseModel {
   declare certificacionFuncionarioId: number | null
   @belongsTo(() => Usuario, { foreignKey: 'certificacionFuncionarioId' })
   declare certificacionFuncionario: BelongsTo<typeof Usuario>
-  // 👆 ================================================
 
   @column({ columnName: 'servicio_id' })
   declare servicioId: number
@@ -104,7 +103,6 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tiempo_servicio' })
   declare tiempoServicio: string | null
 
-  // Hora de facturación y bandera (para la etapa "Facturación")
   @column({ columnName: 'hora_facturacion' })
   declare horaFacturacion: string | null
 
@@ -114,7 +112,6 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'turno_numero' })
   declare turnoNumero: number
 
-  // consecutivo por servicio (sede+día)
   @column({ columnName: 'turno_numero_servicio' })
   declare turnoNumeroServicio: number
 
@@ -127,18 +124,16 @@ export default class TurnoRtm extends BaseModel {
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: TipoVehiculoUI
 
-  // ── Captación "plana"
   @column({
     columnName: 'medio_entero',
     serialize: (value?: MedioEntero | null) => value ?? null,
   })
   declare medioEntero: MedioEntero | null
 
-  // ── Observaciones del turno
   @column()
   declare observaciones: string | null
 
-  // Campos del dateo
+  // ── Campos del dateo
   @column({ columnName: 'dateo_observacion' })
   declare dateoObservacion: string | null
 
@@ -151,7 +146,6 @@ export default class TurnoRtm extends BaseModel {
   })
   declare dateoCanal: CanalDateo | null
 
-  // ── Atribución final simple
   @column({
     columnName: 'canal_atribucion',
     serialize: (value?: CanalAtribucion | null) => value ?? null,
@@ -161,6 +155,23 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare estado: EstadoTurno
 
+  // ── 🆕 Campos de recurrencia
+  // ¿Esta visita es de un cliente/conductor que ya vino antes con 24+ meses de diferencia?
+  @column({ columnName: 'es_recurrente' })
+  declare esRecurrente: boolean
+
+  // Cuántos meses pasaron desde la última visita de este cliente/conductor
+  @column({ columnName: 'meses_desde_ultima_visita' })
+  declare mesesDesdeUltimaVisita: number | null
+
+  // ID del turno anterior de referencia (para trazabilidad)
+  @column({ columnName: 'ultimo_turno_id' })
+  declare ultimoTurnoId: number | null
+
+  // Fecha de ese turno anterior (para mostrar en UI sin hacer JOIN)
+  @column.date({ columnName: 'fecha_ultima_visita' })
+  declare fechaUltimaVisita: DateTime | null
+
   // ── Timestamps
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })
   declare createdAt: DateTime
@@ -168,11 +179,10 @@ export default class TurnoRtm extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true, columnName: 'updated_at' })
   declare updatedAt: DateTime
 
-  // ── Relación con facturación (tickets de facturación asociados al turno)
+  // ── Relaciones de facturación y certificación
   @hasMany(() => FacturacionTicket, { foreignKey: 'turnoId' })
   declare facturacionTickets: HasMany<typeof FacturacionTicket>
 
-  // ── Relación con certificaciones (pantallazos de FLUR asociados al turno)
   @hasMany(() => Certificacion, { foreignKey: 'turnoId' })
   declare certificaciones: HasMany<typeof Certificacion>
 }

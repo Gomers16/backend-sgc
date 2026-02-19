@@ -1176,6 +1176,48 @@ router
       .where('id', /^[0-9]+$/)
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
+    /* ============== 🔄 CONFIGURACIÓN DE RECURRENCIAS (NUEVO) ============== */
+
+    // Configuración global
+    router
+      .get('/comisiones/recurrencia/config/global', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().recurrenciaConfigGlobalGet(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .post('/comisiones/recurrencia/config/global', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().recurrenciaConfigGlobalUpsert(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    // Configuración por asesor
+    router
+      .get('/comisiones/recurrencia/config/asesores', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().recurrenciaConfigAsesoresIndex(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .post('/comisiones/recurrencia/config/asesores', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().recurrenciaConfigAsesoresUpsert(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .delete('/comisiones/recurrencia/config/asesores/:id', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().recurrenciaConfigAsesoresDelete(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    /* ============== FIN CONFIGURACIÓN DE RECURRENCIAS ============== */
+
     router
       .get('/comisiones/:id', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')

@@ -143,6 +143,13 @@ export default class TurnosRtms extends BaseSchema {
         .notNullable()
         .defaultTo('activo')
 
+      // 🆕 ========== CAMPOS DE RECURRENCIA ==========
+      table.boolean('es_recurrente').notNullable().defaultTo(false)
+      table.integer('meses_desde_ultima_visita').unsigned().nullable()
+      table.integer('ultimo_turno_id').unsigned().nullable()
+      table.date('fecha_ultima_visita').nullable()
+      // 👆 ============================================
+
       // Únicos
       table.unique(['sede_id', 'fecha', 'turno_numero'], 'uq_turno_por_dia_y_sede')
       table.unique(
@@ -161,6 +168,11 @@ export default class TurnosRtms extends BaseSchema {
       table.index(['captacion_dateo_id'], 'idx_turno_dateo')
       table.index(['facturacion_funcionario_id'], 'idx_turno_facturacion_funcionario')
       table.index(['certificacion_funcionario_id'], 'idx_turno_certificacion_funcionario')
+
+      // 🆕 Índices para recurrencia (performance)
+      table.index(['cliente_id', 'fecha', 'estado'], 'idx_turnos_recurrencia_cliente')
+      table.index(['conductor_id', 'fecha', 'estado'], 'idx_turnos_recurrencia_conductor')
+      table.index(['es_recurrente'], 'idx_turnos_es_recurrente')
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

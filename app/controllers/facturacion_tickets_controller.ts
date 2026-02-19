@@ -997,8 +997,8 @@ export default class FacturacionTicketsController {
           c.tipoServicio = 'RTM'
           c.base = String(valorPlacaConvenio)
           c.porcentaje = '0'
-          c.monto = String(valorDateoConvenio)
-          c.montoAsesor = String(valorDateoConvenio)
+          c.monto = '0' // ✅ CORREGIDO
+          c.montoAsesor = '0' // ✅ CORREGIDO
           c.montoConvenio = String(valorPlacaConvenio)
           c.asesorSecundarioId = null
           c.estado = 'PENDIENTE'
@@ -1008,7 +1008,7 @@ export default class FacturacionTicketsController {
           await c.useTransaction(trx).save()
 
           console.log(
-            `✅ Comisión creada (Caso 2): Asesor convenio datea propio convenio - Dateo: ${valorDateoConvenio}, Placa: ${valorPlacaConvenio}, Total: ${valorPlacaConvenio + valorDateoConvenio}`
+            `✅ Comisión creada (Caso 3A): Asesor convenio datea cliente nuevo - Solo incentivo: ${valorPlacaConvenio}`
           )
         } else {
           if (!dateo.agenteId) {

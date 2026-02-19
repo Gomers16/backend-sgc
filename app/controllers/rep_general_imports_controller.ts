@@ -1,8 +1,10 @@
+// app/controllers/rep_general_import_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import logger from '@adonisjs/core/services/logger'
 import fs from 'node:fs'
 import { DateTime } from 'luxon'
 import ExcelJS from 'exceljs'
+import db from '@adonisjs/lucid/services/db'
 
 import Cliente from '#models/cliente'
 import Vehiculo from '#models/vehiculo'
@@ -11,15 +13,28 @@ import TurnoRtm from '#models/turno_rtm'
 
 type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 
+interface RecurrenciaResult {
+  esRecurrente: boolean
+  mesesDesdeUltimaVisita: number | null
+  ultimoTurnoId: number | null
+  fechaUltimaVisita: string | null
+}
+
 /**
  * Controlador para importar archivos:
- * - RepGeneral (CSV): Solo empalma turnos existentes
- * - TECNOBASE (Excel): Crea turnos históricos nuevos
+ * - RepGeneral (CSV): Empalma turnos existentes + detecta recurrencia
+ * - TECNOBASE (Excel): Crea turnos históricos + detecta recurrencia
  *
  * 🔥 DETECCIÓN AUTOMÁTICA:
  * - Si es .csv → RepGeneral (empalme)
  * - Si es .xlsx Y se llama "TECNOBASE" → TECNOBASE (crear turnos)
- * - Si es .xlsx Y tiene pocas filas → RepGeneral (empalme)
+ * - Si es .xlsx Y tiene más de 1000 filas → TECNOBASE
+ *
+ * 📌 LÓGICA DE RECURRENCIA:
+ * La recurrencia se basa en la PERSONA (cédula), NO en la placa.
+ * - Si el mismo cliente (por cédula) ya vino → recurrente aunque traiga otro carro
+ * - Si la misma placa llega con un dueño diferente → cliente NUEVO para ese dueño
+ * - Busca primero por cliente_id, luego por conductor_id como fallback
  */
 export default class RepGeneralImportController {
   // ==================== ÍNDICES DE COLUMNAS ====================
@@ -32,22 +47,25 @@ export default class RepGeneralImportController {
   private IDX_COLOR = 20 // Columna U
   private IDX_MATRICULA = 16 // Columna Q
 
-  // Propietario (dueño)
+  // Propietario (dueño del vehículo)
   private IDX_DUENO_DOC_TIPO = 32 // Columna AG
   private IDX_DUENO_DOC_NUM = 33 // Columna AH
   private IDX_DUENO_NOMBRE = 34 // Columna AI
-  private IDX_DUENO_TELEFONO = 38 // Columna AM
+  private IDX_DUENO_TELEFONO = 38 // Columna AM (celular)
   private IDX_DUENO_EMAIL = 39 // Columna AN
 
-  // Conductor
+  // Conductor (quien trajo el vehículo ese día, puede ser distinto al dueño)
   private IDX_COND_DOC_TIPO = 40 // Columna AO
   private IDX_COND_DOC_NUM = 41 // Columna AP
   private IDX_COND_NOMBRE = 42 // Columna AQ
-  private IDX_COND_TELEFONO = 46 // Columna AU
+  private IDX_COND_TELEFONO = 46 // Columna AU (celular)
 
-  // 🆕 TECNOBASE: Fecha y Servicio
+  // TECNOBASE: Fecha y Servicio
   private IDX_FECHA = 2 // Columna C
   private IDX_TIPO_SERVICIO = 9 // Columna J
+
+  // Meses mínimos default si no hay config en DB
+  private MESES_MINIMOS_DEFAULT = 24
 
   // ==================== MÉTODO PRINCIPAL ====================
 
@@ -81,17 +99,12 @@ export default class RepGeneralImportController {
       }
 
       logger.info(
-        {
-          fileName: file.clientName,
-          fileExt: file.extname,
-          fileSize: file.size,
-        },
+        { fileName: file.clientName, fileExt: file.extname, fileSize: file.size },
         '🚀 Iniciando importación'
       )
 
       let rows: string[][] = []
 
-      // 📊 Parsear archivo según extensión
       if (file.extname === 'xlsx') {
         logger.info('📊 Parseando archivo Excel...')
         rows = await this.parseExcelToArrays(file.tmpPath)
@@ -108,7 +121,6 @@ export default class RepGeneralImportController {
         })
       }
 
-      // 🔥 DETECCIÓN AUTOMÁTICA: ¿Es TECNOBASE o RepGeneral?
       const esTECNOBASE = this.detectarTipoArchivo(
         file.clientName ?? null,
         file.extname ?? '',
@@ -123,6 +135,45 @@ export default class RepGeneralImportController {
         '✅ Archivo parseado correctamente'
       )
 
+      // ✅ FIX 1: Obtener funcionario y sede reales de la DB (no hardcodear ID 1)
+      let funcionarioIdValido: number | null = null
+      let sedeIdValido: number | null = null
+
+      if (esTECNOBASE) {
+        const usuarioAdmin = await db.from('usuarios').orderBy('id', 'asc').first()
+        const sedeDefault = await db.from('sedes').orderBy('id', 'asc').first()
+
+        if (!usuarioAdmin) {
+          return response.status(500).send({
+            ok: false,
+            message:
+              'No existe ningún usuario en la base de datos. Crea al menos uno antes de importar.',
+          })
+        }
+        if (!sedeDefault) {
+          return response.status(500).send({
+            ok: false,
+            message:
+              'No existe ninguna sede en la base de datos. Crea al menos una antes de importar.',
+          })
+        }
+
+        funcionarioIdValido = usuarioAdmin.id
+        sedeIdValido = sedeDefault.id
+
+        logger.info(
+          { funcionarioId: funcionarioIdValido, sedeId: sedeIdValido },
+          '✅ Funcionario y sede por defecto encontrados'
+        )
+      }
+
+      // Leer meses mínimos de config global (con fallback al default)
+      const configGlobal = await db
+        .from('configuracion_recurrencia_global')
+        .orderBy('id', 'asc')
+        .first()
+      const mesesMinimos: number = configGlobal?.meses_minimos ?? this.MESES_MINIMOS_DEFAULT
+
       // 📈 Contadores
       let clientesCreados = 0
       let clientesActualizados = 0
@@ -132,35 +183,53 @@ export default class RepGeneralImportController {
       let conductoresActualizados = 0
       let turnosActualizados = 0
       let turnosCreados = 0
+      let turnosRecurrentes = 0
+      let turnosNuevos = 0
       let errores = 0
 
-      // 🔄 Procesar cada fila
+      // ✅ FIX 2: Capturar el primer error real para mostrarlo en la respuesta
+      let primerError: string | null = null
+
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i]
 
-        // Log de progreso cada 1000 registros
         if (i > 0 && i % 1000 === 0) {
-          logger.info({ progreso: `${i}/${rows.length}` }, '⏳ Procesando...')
+          logger.info(
+            {
+              progreso: `${i}/${rows.length}`,
+              turnosCreados,
+              turnosActualizados,
+              turnosRecurrentes,
+              errores,
+            },
+            '⏳ Procesando...'
+          )
         }
 
         try {
-          // 1️⃣ Cliente (dueño)
+          // 1️⃣ Cliente (propietario del vehículo)
           const { cliente, creado: cliCreado } = await this.upsertClienteDesdeFila(row)
           if (cliCreado) clientesCreados++
           else if (cliente) clientesActualizados++
 
           // 2️⃣ Vehículo
+          // En TECNOBASE pasamos la fecha para determinar quién es el dueño más reciente.
+          // En RepGeneral (fechaFila=null) siempre actualiza porque el CDA es la fuente de verdad.
+          const fechaFilaRaw = esTECNOBASE ? this.normText(row[this.IDX_FECHA]) : null
+          const fechaFila = fechaFilaRaw ? this.parsearFecha(fechaFilaRaw) : null
+
           const { vehiculo, creado: vehCreado } = await this.upsertVehiculoDesdeFila(
             row,
-            cliente ?? null
+            cliente ?? null,
+            fechaFila
           )
           if (vehCreado) vehiculosCreados++
           else if (vehiculo) vehiculosActualizados++
 
-          // 3️⃣ Conductor
+          // 3️⃣ Conductor (quien trajo el carro ese día, puede diferir del dueño)
           let { conductor, creado: condCreado } = await this.upsertConductorDesdeFila(row)
 
-          // FALLBACK: Si no hay conductor en el archivo, usar datos del cliente
+          // FALLBACK: si no hay datos de conductor, usar datos del cliente como conductor
           if (!conductor && cliente) {
             conductor = await Conductor.query()
               .where('doc_numero', cliente.docNumero ?? '')
@@ -172,7 +241,7 @@ export default class RepGeneralImportController {
                 nombre: cliente.nombre,
                 docTipo: cliente.docTipo,
                 docNumero: cliente.docNumero,
-                telefono: cliente.telefono || '0000000000', // 👈 Valor por defecto si es NULL
+                telefono: cliente.telefono || null,
               } as any)
               condCreado = true
             }
@@ -181,39 +250,51 @@ export default class RepGeneralImportController {
           if (condCreado) conductoresCreados++
           else if (conductor) conductoresActualizados++
 
-          // 4️⃣ LÓGICA AUTOMÁTICA: TECNOBASE vs RepGeneral
+          // 4️⃣ TECNOBASE vs RepGeneral
           if (esTECNOBASE) {
-            // 🆕 Modo TECNOBASE: Crear turnos históricos
-            const resultTurno = await this.crearTurnoHistorico(
+            const result = await this.crearTurnoHistorico(
               row,
               cliente ?? null,
               vehiculo ?? null,
-              conductor ?? null
+              conductor ?? null,
+              funcionarioIdValido!,
+              sedeIdValido!,
+              mesesMinimos
             )
-            turnosCreados += resultTurno.creados
-            turnosActualizados += resultTurno.actualizados
+            turnosCreados += result.creados
+            turnosActualizados += result.actualizados
+            turnosRecurrentes += result.recurrentes
+            turnosNuevos += result.nuevos
           } else {
-            // ✅ Modo RepGeneral: Solo empalmar turnos existentes
-            const turnosEmpalmados = await this.empalmarTurnosDesdeFila(
-              row,
+            const result = await this.empalmarTurnosDesdeFila(
               cliente ?? null,
               vehiculo ?? null,
-              conductor ?? null
+              conductor ?? null,
+              mesesMinimos
             )
-            turnosActualizados += turnosEmpalmados
+            turnosActualizados += result.actualizados
+            turnosRecurrentes += result.recurrentes
+            turnosNuevos += result.nuevos
           }
         } catch (filaError) {
           errores++
+          const msgError = filaError instanceof Error ? filaError.message : String(filaError)
+
+          if (!primerError) {
+            const placa = this.normalizePlaca(row[this.IDX_PLACA]) ?? 'SIN_PLACA'
+            primerError = `Fila ${i + 1} (placa: ${placa}): ${msgError}`
+          }
+
           logger.warn(
-            { filaError, fila: i + 1 },
-            'Error procesando una fila (se continúa con las demás)'
+            { error: msgError, fila: i + 1, placa: row[this.IDX_PLACA] ?? 'N/A' },
+            '⚠️ Error procesando fila (se continúa con las demás)'
           )
         }
       }
 
       const mensaje = esTECNOBASE
         ? 'Importación TECNOBASE (turnos históricos) finalizada.'
-        : 'Importación RepGeneral (empalme) finalizada.'
+        : 'Importación RepGeneral (empalme + recurrencia) finalizada.'
 
       logger.info(
         {
@@ -222,6 +303,8 @@ export default class RepGeneralImportController {
           conductoresCreados,
           turnosCreados,
           turnosActualizados,
+          turnosRecurrentes,
+          turnosNuevos,
           errores,
         },
         '🎉 Importación finalizada'
@@ -239,12 +322,14 @@ export default class RepGeneralImportController {
           conductoresActualizados,
           turnosCreados,
           turnosActualizados,
+          turnosRecurrentes,
+          turnosNuevos,
           errores,
+          primerError: primerError ?? null,
         },
       })
     } catch (error) {
       logger.error(error, 'Error importando archivo')
-
       return response.status(500).send({
         ok: false,
         message: 'Ocurrió un error al procesar el archivo.',
@@ -253,52 +338,140 @@ export default class RepGeneralImportController {
     }
   }
 
-  // ==================== MÉTODOS DE DETECCIÓN ====================
+  // ==================== DETECCIÓN DE TIPO DE ARCHIVO ====================
 
-  /**
-   * 🔥 Detectar automáticamente si es TECNOBASE o RepGeneral
-   */
   private detectarTipoArchivo(
     nombreArchivo: string | null,
     extension: string | null,
     totalFilas: number
   ): boolean {
-    // 1️⃣ Si el nombre contiene "TECNOBASE" → Es TECNOBASE
     if (nombreArchivo?.toUpperCase().includes('TECNOBASE')) {
       logger.info('✅ Detectado por nombre: TECNOBASE')
       return true
     }
-
-    // 2️⃣ Si es Excel Y tiene más de 1000 filas → Es TECNOBASE
     if (extension === 'xlsx' && totalFilas > 1000) {
       logger.info('✅ Detectado por extensión y tamaño: TECNOBASE')
       return true
     }
-
-    // 3️⃣ En cualquier otro caso → Es RepGeneral
     logger.info('✅ Detectado como RepGeneral (empalme)')
     return false
   }
 
+  // ==================== DETECCIÓN DE RECURRENCIA ====================
+
   /**
-   * 🔍 Detectar servicio_id desde la columna J (TECNOBASE)
+   * Determina si un cliente o conductor es recurrente.
+   *
+   * REGLA CLAVE: la recurrencia es por PERSONA (cédula), no por placa.
+   * - Misma cédula de propietario con carro diferente → sigue siendo recurrente
+   * - Misma placa con propietario diferente → cliente NUEVO para ese propietario
+   *
+   * PRIORIDAD DE BÚSQUEDA:
+   * 1. Por cliente_id (propietario del vehículo)
+   * 2. Por conductor_id como fallback (útil cuando propietario ≠ conductor)
+   *
+   * EXCLUSIÓN: se excluye el turnoActualId para no compararse con sí mismo
+   * (importante en modo RepGeneral donde el turno ya existe)
    */
+  private async detectarRecurrencia(
+    clienteId: number | null,
+    conductorId: number | null,
+    fechaActualISO: string,
+    mesesMinimos: number,
+    turnoActualId: number | null = null
+  ): Promise<RecurrenciaResult> {
+    const vacio: RecurrenciaResult = {
+      esRecurrente: false,
+      mesesDesdeUltimaVisita: null,
+      ultimoTurnoId: null,
+      fechaUltimaVisita: null,
+    }
+
+    let ultimoTurno: TurnoRtm | null = null
+
+    // Prioridad 1: buscar por cliente (propietario/dueño)
+    if (clienteId) {
+      const q = TurnoRtm.query()
+        .where('cliente_id', clienteId)
+        .where('estado', 'finalizado')
+        .where('fecha', '<', fechaActualISO)
+        .orderBy('fecha', 'desc')
+      if (turnoActualId) q.whereNot('id', turnoActualId)
+      ultimoTurno = await q.first()
+    }
+
+    // Prioridad 2: buscar por conductor si no hay resultado por cliente
+    if (!ultimoTurno && conductorId) {
+      const q = TurnoRtm.query()
+        .where('conductor_id', conductorId)
+        .where('estado', 'finalizado')
+        .where('fecha', '<', fechaActualISO)
+        .orderBy('fecha', 'desc')
+      if (turnoActualId) q.whereNot('id', turnoActualId)
+      ultimoTurno = await q.first()
+    }
+
+    // Sin visita previa → persona completamente nueva
+    if (!ultimoTurno) return vacio
+
+    // Convertir fecha del último turno (puede ser DateTime de Luxon o string desde DB)
+    let fechaUltimaVisitaISO: string
+    if (ultimoTurno.fecha instanceof DateTime) {
+      fechaUltimaVisitaISO = ultimoTurno.fecha.toISODate() ?? ''
+    } else {
+      fechaUltimaVisitaISO = String(ultimoTurno.fecha).substring(0, 10)
+    }
+
+    if (!fechaUltimaVisitaISO) return vacio
+
+    // Calcular diferencia en meses completos
+    const fechaActual = DateTime.fromISO(fechaActualISO, { zone: 'America/Bogota' })
+    const fechaAnterior = DateTime.fromISO(fechaUltimaVisitaISO, { zone: 'America/Bogota' })
+
+    if (!fechaActual.isValid || !fechaAnterior.isValid) {
+      logger.warn({ fechaActualISO, fechaUltimaVisitaISO }, '⚠️ Fechas inválidas en recurrencia')
+      return vacio
+    }
+
+    const mesesTranscurridos = Math.floor(fechaActual.diff(fechaAnterior, 'months').months)
+
+    const resultado: RecurrenciaResult = {
+      esRecurrente: mesesTranscurridos >= mesesMinimos,
+      mesesDesdeUltimaVisita: mesesTranscurridos,
+      ultimoTurnoId: ultimoTurno.id,
+      fechaUltimaVisita: fechaUltimaVisitaISO,
+    }
+
+    if (resultado.esRecurrente) {
+      logger.info(
+        {
+          clienteId,
+          conductorId,
+          mesesTranscurridos,
+          mesesMinimos,
+          ultimoTurnoId: ultimoTurno.id,
+          fechaUltimaVisita: fechaUltimaVisitaISO,
+        },
+        '🔄 RECURRENTE detectado'
+      )
+    }
+
+    return resultado
+  }
+
+  // ==================== DETECCIÓN DE SERVICIO Y TIPO VEHÍCULO ====================
+
   private detectarServicioId(row: string[]): {
     servicioId: number | null
     observacion: string | null
   } {
     const tipoServicio = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
-
-    // 🔍 Buscar si tiene texto entre paréntesis (ej: "ORDINARIO ( AUDITORIA )")
     const match = tipoServicio.match(/\(\s*([^)]+)\s*\)/)
     const textoParentesis = match ? match[1].trim() : null
 
-    // 🔥 PREVENTIVA → servicio_id: 2
     if (tipoServicio.includes('PREVENTIVA') || tipoServicio.includes('PREVENTIVO')) {
       return { servicioId: 2, observacion: textoParentesis ? `(${textoParentesis})` : null }
     }
-
-    // 🔥 ORDINARIO, AUDITORIA, TAXI, PÚBLICO, etc. → servicio_id: 1 (RTM)
     if (
       tipoServicio.includes('ORDINARIO') ||
       tipoServicio.includes('TAXI') ||
@@ -309,41 +482,20 @@ export default class RepGeneralImportController {
       return { servicioId: 1, observacion: textoParentesis ? `(${textoParentesis})` : null }
     }
 
-    // 🔥 Si no reconocemos el servicio → Guardar el texto completo en observaciones
-    logger.warn({ tipoServicio }, '⚠️ Tipo de servicio no reconocido')
-    return { servicioId: 1, observacion: `(${tipoServicio})` }
+    logger.warn({ tipoServicio }, '⚠️ Tipo de servicio no reconocido, asignando RTM por defecto')
+    return { servicioId: 1, observacion: tipoServicio ? `(${tipoServicio})` : null }
   }
 
-  /**
-   * 🔥 Detectar tipo de vehículo desde la columna J (TECNOBASE)
-   */
   private detectarTipoVehiculo(row: string[]): TipoVehiculoDB {
-    const tipoServicio = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
-
-    // MOTO → Motocicleta
-    if (tipoServicio.includes('MOTO')) {
-      return 'Motocicleta'
-    }
-
-    // TAXI → Liviano Taxi
-    if (tipoServicio.includes('TAXIMETRO') || tipoServicio.includes('TAXI')) {
-      return 'Liviano Taxi'
-    }
-
-    // PÚBLICO → Liviano Público
-    if (tipoServicio.includes('PUBLICO') || tipoServicio.includes('SERVICIO PUBLICO')) {
-      return 'Liviano Público'
-    }
-
-    // TODO LO DEMÁS → Liviano Particular (por defecto)
+    const t = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
+    if (t.includes('MOTO')) return 'Motocicleta'
+    if (t.includes('TAXIMETRO') || t.includes('TAXI')) return 'Liviano Taxi'
+    if (t.includes('PUBLICO') || t.includes('SERVICIO PUBLICO')) return 'Liviano Público'
     return 'Liviano Particular'
   }
 
-  // ==================== MÉTODOS DE PARSEO ====================
+  // ==================== PARSEO DE ARCHIVOS ====================
 
-  /**
-   * Parsear Excel a arrays de strings
-   */
   private async parseExcelToArrays(filePath: string): Promise<string[][]> {
     const workbook = new ExcelJS.Workbook()
     await workbook.xlsx.readFile(filePath)
@@ -352,16 +504,22 @@ export default class RepGeneralImportController {
     const rows: string[][] = []
 
     worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return // Saltar encabezados
+      if (rowNumber === 1) return
 
       const values: string[] = []
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        // Si es una fecha de Excel, convertirla a formato legible
+        const idx = colNumber - 1
+
         if (cell.type === ExcelJS.ValueType.Date && cell.value instanceof Date) {
           const dt = DateTime.fromJSDate(cell.value, { zone: 'America/Bogota' })
-          values[colNumber - 1] = dt.toFormat('dd/MM/yyyy HH:mm:ss')
+          values[idx] = dt.toFormat('dd/MM/yyyy HH:mm:ss')
+        } else if (cell.type === ExcelJS.ValueType.Number && typeof cell.value === 'number') {
+          // ✅ FIX 4: Sin notación científica para documentos y teléfonos
+          values[idx] = Number.isInteger(cell.value)
+            ? cell.value.toString()
+            : Math.round(cell.value).toString()
         } else {
-          values[colNumber - 1] = cell.value ? String(cell.value) : ''
+          values[idx] = cell.value ? String(cell.value).trim() : ''
         }
       })
       rows.push(values)
@@ -370,9 +528,6 @@ export default class RepGeneralImportController {
     return rows
   }
 
-  /**
-   * Parsear CSV a arrays de strings
-   */
   private parseCsvToArrays(raw: string): string[][] {
     const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== '')
     if (!lines.length) return []
@@ -383,7 +538,6 @@ export default class RepGeneralImportController {
     const sep = semiCount >= commaCount ? ';' : ','
 
     const rows: string[][] = []
-
     for (const line of lines) {
       if (!line.trim()) continue
       const parts = line.split(sep)
@@ -392,36 +546,21 @@ export default class RepGeneralImportController {
       }
       rows.push(parts)
     }
-
     return rows
   }
 
-  /**
-   * 🆕 Parsear fecha desde múltiples formatos
-   */
   private parsearFecha(valor: string): DateTime | null {
     if (!valor) return null
-
-    // Intentar diferentes formatos
-    let fecha = DateTime.fromFormat(valor, 'dd/MM/yyyy HH:mm:ss', { zone: 'America/Bogota' })
-    if (fecha.isValid) return fecha
-
-    fecha = DateTime.fromFormat(valor, 'dd/MM/yyyy', { zone: 'America/Bogota' })
-    if (fecha.isValid) return fecha
-
-    fecha = DateTime.fromFormat(valor, 'yyyy-MM-dd HH:mm:ss', { zone: 'America/Bogota' })
-    if (fecha.isValid) return fecha
-
-    fecha = DateTime.fromFormat(valor, 'yyyy-MM-dd', { zone: 'America/Bogota' })
-    if (fecha.isValid) return fecha
-
-    fecha = DateTime.fromISO(valor, { zone: 'America/Bogota' })
-    if (fecha.isValid) return fecha
-
-    return null
+    const formatos = ['dd/MM/yyyy HH:mm:ss', 'dd/MM/yyyy', 'yyyy-MM-dd HH:mm:ss', 'yyyy-MM-dd']
+    for (const fmt of formatos) {
+      const d = DateTime.fromFormat(valor, fmt, { zone: 'America/Bogota' })
+      if (d.isValid) return d
+    }
+    const iso = DateTime.fromISO(valor, { zone: 'America/Bogota' })
+    return iso.isValid ? iso : null
   }
 
-  // ==================== MÉTODOS DE NORMALIZACIÓN ====================
+  // ==================== NORMALIZACIÓN ====================
 
   private normalizePlaca(value: string | undefined | null): string | null {
     if (!value) return null
@@ -441,8 +580,7 @@ export default class RepGeneralImportController {
 
   private normText(value: string | undefined | null): string | null {
     if (!value) return null
-    const t = value.trim()
-    return t || null
+    return value.trim() || null
   }
 
   private truncateText(value: string | null, maxLength: number): string | null {
@@ -450,95 +588,72 @@ export default class RepGeneralImportController {
     return value.length > maxLength ? value.substring(0, maxLength) : value
   }
 
-  // ==================== MÉTODOS DE UPSERT ====================
+  // ==================== UPSERT ENTIDADES ====================
 
   private async upsertClienteDesdeFila(
     row: string[]
   ): Promise<{ cliente: Cliente | null; creado: boolean }> {
-    const docTipoRaw = row[this.IDX_DUENO_DOC_TIPO]
-    const docNumeroRaw = row[this.IDX_DUENO_DOC_NUM]
-    const nombreRaw = row[this.IDX_DUENO_NOMBRE]
-    const telRaw = row[this.IDX_DUENO_TELEFONO]
-    const emailRaw = row[this.IDX_DUENO_EMAIL]
-
-    const docTipo = this.normText(docTipoRaw)
-    const docNumero = this.normText(docNumeroRaw)
-    const nombre = this.normText(nombreRaw)
-    const telefono = this.normalizeTelefono(telRaw)
-    const email = this.normText(emailRaw)
+    const docTipo = this.normText(row[this.IDX_DUENO_DOC_TIPO])
+    const docNumero = this.normText(row[this.IDX_DUENO_DOC_NUM])
+    const nombre = this.normText(row[this.IDX_DUENO_NOMBRE])
+    const telefono = this.normalizeTelefono(row[this.IDX_DUENO_TELEFONO])
+    const email = this.normText(row[this.IDX_DUENO_EMAIL])
 
     if (!docNumero && !nombre && !telefono && !email) {
       return { cliente: null, creado: false }
     }
 
     let cliente: Cliente | null = null
-    let creado = false
 
-    if (docNumero) {
-      cliente = await Cliente.query().where('doc_numero', docNumero).first()
-    }
-
-    if (!cliente && telefono) {
-      cliente = await Cliente.query().where('telefono', telefono).first()
-    }
+    if (docNumero) cliente = await Cliente.query().where('doc_numero', docNumero).first()
+    if (!cliente && telefono) cliente = await Cliente.query().where('telefono', telefono).first()
 
     if (!cliente) {
       cliente = await Cliente.create({
         docTipo: docTipo || (docNumero ? 'CC' : null),
         docNumero,
         nombre,
-        telefono: telefono || '0000000000', // 👈 Valor por defecto si es NULL
+        telefono: telefono || null,
         email,
       } as any)
-      creado = true
-      return { cliente, creado }
+      return { cliente, creado: true }
     }
 
     let debeGuardar = false
-
     if (!cliente.docNumero && docNumero) {
       cliente.docNumero = docNumero
       cliente.docTipo = docTipo || 'CC'
       debeGuardar = true
     }
-
     if (!cliente.nombre && nombre) {
       cliente.nombre = nombre
       debeGuardar = true
     }
-
     if (!cliente.telefono && telefono) {
       cliente.telefono = telefono
       debeGuardar = true
     }
-
     if (!cliente.email && email) {
       cliente.email = email
       debeGuardar = true
     }
 
-    if (debeGuardar) {
-      await cliente.save()
-    }
-
+    if (debeGuardar) await cliente.save()
     return { cliente, creado: false }
   }
 
   private async upsertVehiculoDesdeFila(
     row: string[],
-    cliente: Cliente | null
+    cliente: Cliente | null,
+    fechaFila: DateTime | null = null
   ): Promise<{ vehiculo: Vehiculo | null; creado: boolean }> {
-    const placaRaw = row[this.IDX_PLACA]
-    const placa = this.normalizePlaca(placaRaw)
-
-    if (!placa) {
-      return { vehiculo: null, creado: false }
-    }
+    const placa = this.normalizePlaca(row[this.IDX_PLACA])
+    if (!placa) return { vehiculo: null, creado: false }
 
     const marca = this.normText(row[this.IDX_MARCA])
     const linea = this.normText(row[this.IDX_LINEA])
     const modeloRaw = this.normText(row[this.IDX_MODELO])
-    const color = this.truncateText(this.normText(row[this.IDX_COLOR]), 50) // 👈 Truncar a 50 chars
+    const color = this.truncateText(this.normText(row[this.IDX_COLOR]), 50)
     const matricula = this.normText(row[this.IDX_MATRICULA])
 
     let modelo: number | null = null
@@ -548,7 +663,6 @@ export default class RepGeneralImportController {
     }
 
     let vehiculo = await Vehiculo.query().whereRaw('UPPER(placa) = ?', [placa]).first()
-    let creado = false
 
     if (!vehiculo) {
       vehiculo = await Vehiculo.create({
@@ -561,310 +675,388 @@ export default class RepGeneralImportController {
         clienteId: cliente?.id ?? null,
         claseVehiculoId: 1,
       } as any)
-      creado = true
-      return { vehiculo, creado }
+      return { vehiculo, creado: true }
     }
 
     let debeGuardar = false
 
+    // Datos técnicos: solo llenar si están vacíos
     if (!vehiculo.marca && marca) {
       vehiculo.marca = marca
       debeGuardar = true
     }
-
     if (!vehiculo.linea && linea) {
       vehiculo.linea = linea
       debeGuardar = true
     }
-
     if (!vehiculo.modelo && modelo) {
       vehiculo.modelo = modelo
       debeGuardar = true
     }
-
     if (!vehiculo.color && color) {
       vehiculo.color = color
       debeGuardar = true
     }
-
     if (!vehiculo.matricula && matricula) {
       vehiculo.matricula = matricula
       debeGuardar = true
     }
 
-    if (!vehiculo.clienteId && cliente?.id) {
-      vehiculo.clienteId = cliente.id
-      debeGuardar = true
+    // ✅ LÓGICA DE DUEÑO MÁS RECIENTE
+    if (cliente?.id) {
+      if (!vehiculo.clienteId) {
+        // Sin dueño previo → asignar directamente
+        vehiculo.clienteId = cliente.id
+        debeGuardar = true
+      } else if (vehiculo.clienteId !== cliente.id) {
+        if (!fechaFila) {
+          // Modo RepGeneral: el CDA es la fuente de verdad del estado actual
+          // Si hoy el CDA dice que el dueño es X, entonces X es el dueño
+          logger.info(
+            { placa, clienteAnterior: vehiculo.clienteId, clienteNuevo: cliente.id },
+            '🔄 [RepGeneral] Actualizando dueño al estado actual del CDA'
+          )
+          vehiculo.clienteId = cliente.id
+          debeGuardar = true
+        } else {
+          // Modo TECNOBASE: comparar fechas para saber quién es el dueño más reciente
+          const ultimoTurnoConDuenoActual = await TurnoRtm.query()
+            .where('placa', placa)
+            .where('cliente_id', vehiculo.clienteId)
+            .orderBy('fecha', 'desc')
+            .select('fecha')
+            .first()
+
+          if (!ultimoTurnoConDuenoActual) {
+            // El dueño actual nunca tuvo turnos → reemplazar
+            vehiculo.clienteId = cliente.id
+            debeGuardar = true
+          } else {
+            const fechaUltimoTurno =
+              ultimoTurnoConDuenoActual.fecha instanceof DateTime
+                ? ultimoTurnoConDuenoActual.fecha
+                : DateTime.fromISO(String(ultimoTurnoConDuenoActual.fecha), {
+                    zone: 'America/Bogota',
+                  })
+
+            if (fechaFila > fechaUltimoTurno) {
+              // Esta fila del TECNOBASE es más reciente → nuevo dueño
+              logger.info(
+                {
+                  placa,
+                  clienteAnterior: vehiculo.clienteId,
+                  clienteNuevo: cliente.id,
+                  fechaAnterior: fechaUltimoTurno.toISODate(),
+                  fechaNueva: fechaFila.toISODate(),
+                },
+                '🔄 [TECNOBASE] Actualizando dueño (propietario más reciente)'
+              )
+              vehiculo.clienteId = cliente.id
+              debeGuardar = true
+            }
+            // Si la fecha es anterior o igual → el dueño actual se mantiene
+          }
+        }
+      }
     }
 
-    if (debeGuardar) {
-      await vehiculo.save()
-    }
-
+    if (debeGuardar) await vehiculo.save()
     return { vehiculo, creado: false }
   }
 
   private async upsertConductorDesdeFila(
     row: string[]
   ): Promise<{ conductor: Conductor | null; creado: boolean }> {
-    const docTipoRaw = row[this.IDX_COND_DOC_TIPO]
-    const docRaw = row[this.IDX_COND_DOC_NUM]
-    const nombreRaw = row[this.IDX_COND_NOMBRE]
-    const telRaw = row[this.IDX_COND_TELEFONO]
+    const docTipo = this.normText(row[this.IDX_COND_DOC_TIPO])
+    const docNumero = this.normText(row[this.IDX_COND_DOC_NUM])
+    const nombre = this.normText(row[this.IDX_COND_NOMBRE])
+    const telefono = this.normalizeTelefono(row[this.IDX_COND_TELEFONO])
 
-    const docTipo = this.normText(docTipoRaw)
-    const docNumero = this.normText(docRaw)
-    const nombre = this.normText(nombreRaw)
-    const telefono = this.normalizeTelefono(telRaw)
-
-    if (!docNumero && !nombre && !telefono) {
-      return { conductor: null, creado: false }
-    }
+    if (!docNumero && !nombre && !telefono) return { conductor: null, creado: false }
 
     let conductor: Conductor | null = null
-    let creado = false
 
-    if (docNumero) {
-      conductor = await Conductor.query().where('doc_numero', docNumero).first()
-    }
-
-    if (!conductor && telefono) {
+    if (docNumero) conductor = await Conductor.query().where('doc_numero', docNumero).first()
+    if (!conductor && telefono)
       conductor = await Conductor.query().where('telefono', telefono).first()
-    }
 
     if (!conductor) {
       conductor = await Conductor.create({
         nombre,
         docTipo: docTipo || (docNumero ? 'CC' : null),
         docNumero,
-        telefono: telefono || '0000000000', // 👈 Valor por defecto si es NULL
+        telefono: telefono || null,
       } as any)
-      creado = true
-      return { conductor, creado }
+      return { conductor, creado: true }
     }
 
     let debeGuardar = false
-
     if (!conductor.docNumero && docNumero) {
       conductor.docNumero = docNumero
       conductor.docTipo = docTipo || 'CC'
       debeGuardar = true
     }
-
     if (!conductor.nombre && nombre) {
       conductor.nombre = nombre
       debeGuardar = true
     }
-
     if (!conductor.telefono && telefono) {
       conductor.telefono = telefono
       debeGuardar = true
     }
 
-    if (debeGuardar) {
-      await conductor.save()
-    }
-
+    if (debeGuardar) await conductor.save()
     return { conductor, creado: false }
   }
 
-  // ==================== MÉTODOS DE TURNOS ====================
+  // ==================== CREAR TURNO HISTÓRICO (TECNOBASE) ====================
 
-  /**
-   * 🆕 CREAR TURNO HISTÓRICO (modo TECNOBASE)
-   */
   private async crearTurnoHistorico(
     row: string[],
     cliente: Cliente | null,
     vehiculo: Vehiculo | null,
-    conductor: Conductor | null
-  ): Promise<{ creados: number; actualizados: number }> {
-    if (!vehiculo) {
-      return { creados: 0, actualizados: 0 }
-    }
+    conductor: Conductor | null,
+    funcionarioId: number,
+    sedeId: number,
+    mesesMinimos: number
+  ): Promise<{ creados: number; actualizados: number; recurrentes: number; nuevos: number }> {
+    if (!vehiculo?.placa) return { creados: 0, actualizados: 0, recurrentes: 0, nuevos: 0 }
 
     const placa = vehiculo.placa
-    if (!placa) {
-      return { creados: 0, actualizados: 0 }
-    }
-
-    // 📅 Extraer fecha de columna C
     const fechaRaw = this.normText(row[this.IDX_FECHA])
     const fecha = fechaRaw ? this.parsearFecha(fechaRaw) : null
 
-    if (!fecha || !fecha.isValid) {
+    if (!fecha?.isValid) {
       logger.warn({ placa, fechaRaw }, '⚠️ Fecha inválida, omitiendo fila')
-      return { creados: 0, actualizados: 0 }
+      return { creados: 0, actualizados: 0, recurrentes: 0, nuevos: 0 }
     }
 
-    const fechaISO = fecha.toISODate()
-    if (!fechaISO) {
-      return { creados: 0, actualizados: 0 }
-    }
-
-    // 🔍 Detectar servicio desde columna J
+    const fechaISO = fecha.toISODate()!
     const { servicioId, observacion } = this.detectarServicioId(row)
-
-    // 🔍 Detectar tipo de vehículo desde columna J
     const tipoVehiculo = this.detectarTipoVehiculo(row)
 
-    // 🔎 Buscar si ya existe un turno con esa placa y fecha
+    const clienteIdFinal = cliente?.id ?? vehiculo.clienteId ?? null
+    const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? 1
+    const conductorIdFinal = conductor?.id ?? null
+
+    // ¿Ya existe un turno con esa placa y fecha?
     const turnoExistente = await TurnoRtm.query()
       .where('placa', placa)
       .where('fecha', fechaISO)
       .first()
 
-    const clienteIdParaEmpalme = cliente?.id ?? vehiculo.clienteId ?? null
-    const claseVehiculoIdParaEmpalme = (vehiculo as any).claseVehiculoId ?? 1
-    const conductorIdParaEmpalme = conductor?.id ?? null
-
     if (turnoExistente) {
-      // ✏️ Actualizar turno existente
       let changed = false
-
       if (!turnoExistente.vehiculoId && vehiculo.id) {
         turnoExistente.vehiculoId = vehiculo.id
         changed = true
       }
-
-      if (!turnoExistente.clienteId && clienteIdParaEmpalme) {
-        turnoExistente.clienteId = clienteIdParaEmpalme
+      if (!turnoExistente.clienteId && clienteIdFinal) {
+        turnoExistente.clienteId = clienteIdFinal
         changed = true
       }
-
-      if (!turnoExistente.conductorId && conductorIdParaEmpalme) {
-        turnoExistente.conductorId = conductorIdParaEmpalme
+      if (!turnoExistente.conductorId && conductorIdFinal) {
+        turnoExistente.conductorId = conductorIdFinal
         changed = true
       }
-
-      if (!turnoExistente.claseVehiculoId && claseVehiculoIdParaEmpalme) {
-        ;(turnoExistente as any).claseVehiculoId = claseVehiculoIdParaEmpalme
+      if (!(turnoExistente as any).claseVehiculoId && claseVehiculoIdFinal) {
+        ;(turnoExistente as any).claseVehiculoId = claseVehiculoIdFinal
         changed = true
       }
-
       if (!turnoExistente.servicioId && servicioId) {
         turnoExistente.servicioId = servicioId
         changed = true
       }
 
-      if (changed) {
-        await turnoExistente.save()
-        return { creados: 0, actualizados: 1 }
+      // Calcular recurrencia si aún no está registrada
+      if (!turnoExistente.esRecurrente && turnoExistente.mesesDesdeUltimaVisita === null) {
+        const recurrencia = await this.detectarRecurrencia(
+          turnoExistente.clienteId,
+          turnoExistente.conductorId,
+          fechaISO,
+          mesesMinimos,
+          turnoExistente.id
+        )
+        turnoExistente.esRecurrente = recurrencia.esRecurrente
+        turnoExistente.mesesDesdeUltimaVisita = recurrencia.mesesDesdeUltimaVisita
+        turnoExistente.ultimoTurnoId = recurrencia.ultimoTurnoId
+        ;(turnoExistente as any).fechaUltimaVisita = recurrencia.fechaUltimaVisita
+        changed = true
+
+        if (changed) await turnoExistente.save()
+        return {
+          creados: 0,
+          actualizados: 1,
+          recurrentes: recurrencia.esRecurrente ? 1 : 0,
+          nuevos: recurrencia.esRecurrente ? 0 : 1,
+        }
       }
 
-      return { creados: 0, actualizados: 0 }
+      if (changed) await turnoExistente.save()
+      return { creados: 0, actualizados: changed ? 1 : 0, recurrentes: 0, nuevos: 0 }
     }
 
-    // 🔢 Calcular turno_numero (consecutivo por sede y fecha)
+    // 🔍 Detectar recurrencia ANTES de crear el turno nuevo
+    const recurrencia = await this.detectarRecurrencia(
+      clienteIdFinal,
+      conductorIdFinal,
+      fechaISO,
+      mesesMinimos,
+      null
+    )
+
+    // Calcular consecutivos por sede y fecha
     const maxTurnoNumero = await TurnoRtm.query()
-      .where('sede_id', 1)
+      .where('sede_id', sedeId)
       .where('fecha', fechaISO)
       .max('turno_numero as max')
       .pojo<{ max: number }>()
       .first()
-
     const turnoNumero = (maxTurnoNumero?.max ?? 0) + 1
 
-    // 🔢 Calcular turno_numero_servicio (consecutivo por sede, fecha y servicio)
     const maxTurnoServicio = await TurnoRtm.query()
-      .where('sede_id', 1)
+      .where('sede_id', sedeId)
       .where('fecha', fechaISO)
       .where('servicio_id', servicioId ?? 1)
       .max('turno_numero_servicio as max')
       .pojo<{ max: number }>()
       .first()
-
     const turnoNumeroServicio = (maxTurnoServicio?.max ?? 0) + 1
 
-    // 🔤 Generar turno_codigo (formato: YYYYMMDD-SEDE-NUMERO)
+    // ✅ FIX 3: Prefijo HIST para no colisionar con turnos normales del sistema
     const fechaPart = fecha.toFormat('yyyyMMdd')
-    const turnoCodigo = `${fechaPart}-1-${turnoNumero}`
-
-    // ✨ Crear nuevo turno histórico
-    const observacionesFinal = ['Importado desde TECNOBASE', observacion].filter(Boolean).join(' ')
+    const turnoCodigo = `HIST-${fechaPart}-${sedeId}-${turnoNumero}`
 
     await TurnoRtm.create({
       fecha: fechaISO,
       horaIngreso: '08:00:00',
       horaSalida: '09:00:00',
-      turnoNumero: turnoNumero,
-      turnoNumeroServicio: turnoNumeroServicio,
-      turnoCodigo: turnoCodigo,
+      turnoNumero,
+      turnoNumeroServicio,
+      turnoCodigo,
       placa,
-      tipoVehiculo: tipoVehiculo,
+      tipoVehiculo,
       estado: 'finalizado',
       vehiculoId: vehiculo.id,
-      clienteId: clienteIdParaEmpalme,
-      conductorId: conductorIdParaEmpalme,
-      claseVehiculoId: claseVehiculoIdParaEmpalme,
-      funcionarioId: 1, // Usuario por defecto
-      sedeId: 1, // Sede por defecto
-      servicioId: servicioId,
-      observaciones: observacionesFinal,
+      clienteId: clienteIdFinal,
+      conductorId: conductorIdFinal,
+      claseVehiculoId: claseVehiculoIdFinal,
+      funcionarioId, // ✅ FIX 1: ID real de la DB
+      sedeId, // ✅ FIX 1: ID real de la DB
+      servicioId,
+      observaciones: ['Importado desde TECNOBASE', observacion].filter(Boolean).join(' '),
       canalAtribucion: 'FACHADA',
+      // 🆕 Campos de recurrencia
+      esRecurrente: recurrencia.esRecurrente,
+      mesesDesdeUltimaVisita: recurrencia.mesesDesdeUltimaVisita,
+      ultimoTurnoId: recurrencia.ultimoTurnoId,
+      fechaUltimaVisita: recurrencia.fechaUltimaVisita,
     } as any)
 
-    return { creados: 1, actualizados: 0 }
+    return {
+      creados: 1,
+      actualizados: 0,
+      recurrentes: recurrencia.esRecurrente ? 1 : 0,
+      nuevos: recurrencia.esRecurrente ? 0 : 1,
+    }
   }
 
+  // ==================== EMPALMAR TURNOS (REP GENERAL DIARIO) ====================
+
   /**
-   * ✅ EMPALMAR TURNOS (modo RepGeneral)
-   * Actualiza TODOS los turnos con esa placa, sin importar la fecha
+   * Modo RepGeneral diario:
+   *
+   * 1. Actualiza cliente, vehículo y conductor en los turnos existentes.
+   *    El dueño del vehículo se actualiza SIEMPRE porque el CDA es la fuente de
+   *    verdad del estado actual (si hoy cambió el dueño, el CDA lo sabe).
+   *
+   * 2. Detecta recurrencia usando la cédula del cliente/conductor recién vinculado:
+   *    - Si ese cliente ya tiene turnos finalizados anteriores con 24+ meses → recurrente
+   *    - Si el cliente es nuevo en la base de datos → cliente nuevo
+   *    - Solo calcula si el turno aún no tiene recurrencia calculada
    */
   private async empalmarTurnosDesdeFila(
-    _row: string[],
     cliente: Cliente | null,
     vehiculo: Vehiculo | null,
-    conductor: Conductor | null
-  ): Promise<number> {
-    if (!vehiculo) return 0
+    conductor: Conductor | null,
+    mesesMinimos: number
+  ): Promise<{ actualizados: number; recurrentes: number; nuevos: number }> {
+    if (!vehiculo?.placa) return { actualizados: 0, recurrentes: 0, nuevos: 0 }
 
     const placa = vehiculo.placa
-    if (!placa) return 0
-
     const turnos = await TurnoRtm.query()
       .where('placa', placa)
       .whereIn('estado', ['activo', 'finalizado'])
 
-    if (!turnos.length) {
-      return 0
-    }
+    if (!turnos.length) return { actualizados: 0, recurrentes: 0, nuevos: 0 }
 
-    const clienteIdParaEmpalme = cliente?.id ?? vehiculo.clienteId ?? null
-    const claseVehiculoIdParaEmpalme = (vehiculo as any).claseVehiculoId ?? null
-    const conductorIdParaEmpalme = conductor?.id ?? null
+    const clienteIdFinal = cliente?.id ?? vehiculo.clienteId ?? null
+    const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? null
+    const conductorIdFinal = conductor?.id ?? null
 
     let turnosActualizados = 0
+    let turnosRecurrentes = 0
+    let turnosNuevos = 0
 
-    for (const t of turnos) {
+    for (const turno of turnos) {
       let changed = false
 
-      if (!t.vehiculoId && vehiculo.id) {
-        t.vehiculoId = vehiculo.id
+      // Empalmar datos faltantes
+      if (!turno.vehiculoId && vehiculo.id) {
+        turno.vehiculoId = vehiculo.id
+        changed = true
+      }
+      if (!turno.clienteId && clienteIdFinal) {
+        turno.clienteId = clienteIdFinal
+        changed = true
+      }
+      if (!(turno as any).claseVehiculoId && claseVehiculoIdFinal) {
+        ;(turno as any).claseVehiculoId = claseVehiculoIdFinal
+        changed = true
+      }
+      if (!turno.conductorId && conductorIdFinal) {
+        turno.conductorId = conductorIdFinal
         changed = true
       }
 
-      if (!t.clienteId && clienteIdParaEmpalme) {
-        t.clienteId = clienteIdParaEmpalme
-        changed = true
+      // Fecha del turno como string ISO
+      let fechaTurnoISO: string
+      if (turno.fecha instanceof DateTime) {
+        fechaTurnoISO = turno.fecha.toISODate() ?? ''
+      } else {
+        fechaTurnoISO = String(turno.fecha).substring(0, 10)
       }
 
-      if (!t.claseVehiculoId && claseVehiculoIdParaEmpalme) {
-        ;(t as any).claseVehiculoId = claseVehiculoIdParaEmpalme
-        changed = true
-      }
+      // Detectar recurrencia solo si aún no está calculada para este turno
+      if (fechaTurnoISO && turno.mesesDesdeUltimaVisita === null) {
+        const recurrencia = await this.detectarRecurrencia(
+          turno.clienteId, // Usar el clienteId ya actualizado en este turno
+          turno.conductorId, // Usar el conductorId ya actualizado en este turno
+          fechaTurnoISO,
+          mesesMinimos,
+          turno.id // Excluir el turno actual de la búsqueda
+        )
 
-      if (!t.conductorId && conductorIdParaEmpalme) {
-        t.conductorId = conductorIdParaEmpalme
+        turno.esRecurrente = recurrencia.esRecurrente
+        turno.mesesDesdeUltimaVisita = recurrencia.mesesDesdeUltimaVisita
+        turno.ultimoTurnoId = recurrencia.ultimoTurnoId
+        ;(turno as any).fechaUltimaVisita = recurrencia.fechaUltimaVisita
         changed = true
+
+        if (recurrencia.esRecurrente) turnosRecurrentes++
+        else turnosNuevos++
       }
 
       if (changed) {
-        await t.save()
+        await turno.save()
         turnosActualizados++
       }
     }
 
-    return turnosActualizados
+    return {
+      actualizados: turnosActualizados,
+      recurrentes: turnosRecurrentes,
+      nuevos: turnosNuevos,
+    }
   }
 }

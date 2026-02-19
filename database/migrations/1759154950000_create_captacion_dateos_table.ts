@@ -1,3 +1,4 @@
+// database/migrations/[TIMESTAMP]_create_captacion_dateos_table.ts
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class CaptacionDateos extends BaseSchema {
@@ -9,7 +10,6 @@ export default class CaptacionDateos extends BaseSchema {
     await this.schema.createTable(this.tableName, (table) => {
       table.increments('id')
 
-      // Canal / Origen
       table
         .enu('canal', ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'], {
           useNative: true,
@@ -37,7 +37,7 @@ export default class CaptacionDateos extends BaseSchema {
 
       table.string('observacion', 255).nullable()
 
-      // Imagen (opcional)
+      // Imagen
       table.string('imagen_url', 512).nullable()
       table.string('imagen_mime', 100).nullable()
       table.integer('imagen_tamano_bytes').unsigned().nullable()
@@ -106,7 +106,6 @@ export default class CaptacionDateos extends BaseSchema {
         .inTable('clientes')
         .onDelete('SET NULL')
 
-      // Resultado del dateo - 🆕 INCLUYE RE_DATEAR
       table
         .enu('resultado', ['PENDIENTE', 'EN_PROCESO', 'EXITOSO', 'NO_EXITOSO', 'RE_DATEAR'], {
           useNative: true,
@@ -115,13 +114,14 @@ export default class CaptacionDateos extends BaseSchema {
         .notNullable()
         .defaultTo('PENDIENTE')
 
-      // Campo liberado
       table.boolean('liberado').notNullable().defaultTo(false)
-
       table.string('motivo_no_exitoso', 180).nullable()
-
-      // Detección automática por convenio
       table.boolean('detectado_por_convenio').notNullable().defaultTo(false)
+
+      // ========== 🔄 CAMPOS DE RECURRENCIA (NUEVO) ==========
+      table.boolean('es_cliente_recurrente').notNullable().defaultTo(false)
+      table.integer('meses_desde_ultima_visita').unsigned().nullable()
+      // ========== FIN RECURRENCIA ==========
 
       // Timestamps
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
@@ -137,12 +137,12 @@ export default class CaptacionDateos extends BaseSchema {
       table.index(['asesor_convenio_id'])
       table.index(['prospecto_id'])
       table.index(['liberado', 'resultado'])
+      table.index(['es_cliente_recurrente']) // 👈 NUEVO
     })
 
-    // 🔧 CORRECCIÓN DE DATOS: Asignar convenio_id a dateos existentes
+    // Corrección de datos
     console.log('🔧 Corrigiendo convenio_id en dateos existentes...')
 
-    // 1️⃣ Actualizar dateos donde asesor_convenio_id tiene valor pero convenio_id está NULL
     const result1 = await this.db.rawQuery(`
       UPDATE captacion_dateos cd
       INNER JOIN agentes_captacions ac ON cd.asesor_convenio_id = ac.id
@@ -155,7 +155,6 @@ export default class CaptacionDateos extends BaseSchema {
 
     console.log(`✅ ${result1[0]?.affectedRows || 0} dateos actualizados desde asesor_convenio_id`)
 
-    // 2️⃣ Actualizar dateos donde el agente_id es de tipo ASESOR_CONVENIO
     const result2 = await this.db.rawQuery(`
       UPDATE captacion_dateos cd
       INNER JOIN agentes_captacions ac ON cd.agente_id = ac.id
@@ -169,7 +168,6 @@ export default class CaptacionDateos extends BaseSchema {
 
     console.log(`✅ ${result2[0]?.affectedRows || 0} dateos actualizados desde agente_id`)
 
-    // 3️⃣ Verificación
     const [verificacion] = await this.db
       .from('captacion_dateos')
       .whereNotNull('convenio_id')
