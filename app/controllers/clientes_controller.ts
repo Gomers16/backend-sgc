@@ -205,13 +205,18 @@ export default class ClientesController {
     const vehiculos = await Vehiculo.query().where('cliente_id', id).preload('clase')
 
     // Base común para conteos
+    // Obtener placas del cliente para búsqueda por placa también
+    const placasCliente = vehiculos.map((v) => v.placa).filter(Boolean)
+
     const base = db
       .from('turnos_rtms as t')
       .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
       .where((qb) => {
         qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
+        if (placasCliente.length > 0) {
+          qb.orWhereIn('t.placa', placasCliente)
+        }
       })
-
     // Conteos + última visita global
     const [{ total_visitas: totalVisitas, ultima }] = await base
       .clone()
@@ -246,7 +251,9 @@ export default class ClientesController {
 
     for (const v of vehiculos) {
       const t = await TurnoRtm.query()
-        .where('vehiculo_id', v.id)
+        .where((qb) => {
+          qb.where('vehiculo_id', v.id).orWhere('placa', v.placa)
+        })
         .orderBy('fecha', 'desc')
         .orderBy('turno_numero', 'desc')
         .preload('servicio')

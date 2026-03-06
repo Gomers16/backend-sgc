@@ -1298,6 +1298,17 @@ router
           roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
         }),
       ])
+    router
+      .get('/descuentos/historial', async (ctx) => {
+        const { default: DescuentosController } = await import('#controllers/descuentos_controller')
+        return new DescuentosController().historial(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'],
+        }),
+      ])
 
     router
       .get('/descuentos/:id', async (ctx) => {

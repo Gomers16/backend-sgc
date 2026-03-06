@@ -118,10 +118,27 @@ export default class CaptacionDateos extends BaseSchema {
       table.string('motivo_no_exitoso', 180).nullable()
       table.boolean('detectado_por_convenio').notNullable().defaultTo(false)
 
-      // ========== 🔄 CAMPOS DE RECURRENCIA (NUEVO) ==========
+      // ========== 🔄 CAMPOS DE RECURRENCIA ==========
       table.boolean('es_cliente_recurrente').notNullable().defaultTo(false)
       table.integer('meses_desde_ultima_visita').unsigned().nullable()
+
+      table
+        .integer('turno_recurrente_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('turnos_rtms')
+        .onDelete('SET NULL')
       // ========== FIN RECURRENCIA ==========
+
+      // 🆕 Descuento informativo pre-marcado por el comercial
+      table
+        .integer('descuento_id')
+        .unsigned()
+        .nullable()
+        .references('id')
+        .inTable('descuentos')
+        .onDelete('SET NULL')
 
       // Timestamps
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
@@ -137,10 +154,11 @@ export default class CaptacionDateos extends BaseSchema {
       table.index(['asesor_convenio_id'])
       table.index(['prospecto_id'])
       table.index(['liberado', 'resultado'])
-      table.index(['es_cliente_recurrente']) // 👈 NUEVO
+      table.index(['es_cliente_recurrente'])
+      table.index(['descuento_id']) // 🆕
     })
 
-    // Corrección de datos
+    // Corrección de datos existentes
     console.log('🔧 Corrigiendo convenio_id en dateos existentes...')
 
     const result1 = await this.db.rawQuery(`

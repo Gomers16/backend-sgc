@@ -21,10 +21,10 @@ export default class extends BaseSchema {
       table.string('linea', 80).nullable()
       table.integer('modelo').nullable()
 
-      // 🟢 NUEVO: color del vehículo
-      table.string('color', 40).nullable()
+      // 🆕 Ampliado de 40 a 100: el TECNOBASE tiene colores largos
+      table.string('color', 100).nullable()
 
-      // 🟢 NUEVO: número de matrícula / tarjeta de propiedad
+      // número de matrícula / tarjeta de propiedad
       table.string('matricula', 50).nullable()
 
       table

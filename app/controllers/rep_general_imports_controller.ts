@@ -10,11 +10,21 @@ import Cliente from '#models/cliente'
 import Vehiculo from '#models/vehiculo'
 import Conductor from '#models/conductor'
 import TurnoRtm from '#models/turno_rtm'
+import Comision from '#models/comision'
 
 type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 
+/**
+ * Resultado de la detección de recurrencia/recuperación
+ *
+ * 3 estados posibles:
+ * - 🆕 NUEVO:        sin visita previa en la DB
+ * - 🔄 RECURRENTE:   vino hace MENOS de mesesMinimos (ej. < 24 meses) → comisión reducida
+ * - 💛 RECUPERACIÓN: vino hace MÁS de mesesMinimos (ej. >= 24 meses) → comisión intermedia
+ */
 interface RecurrenciaResult {
   esRecurrente: boolean
+  esRecuperacion: boolean
   mesesDesdeUltimaVisita: number | null
   ultimoTurnoId: number | null
   fechaUltimaVisita: string | null
@@ -22,49 +32,44 @@ interface RecurrenciaResult {
 
 /**
  * Controlador para importar archivos:
- * - RepGeneral (CSV): Empalma turnos existentes + detecta recurrencia
- * - TECNOBASE (Excel): Crea turnos históricos + detecta recurrencia
+ * - RepGeneral (CSV): Clasifica TODAS las filas + empalma turnos dateados
+ * - TECNOBASE (Excel): Solo carga histórico limpio, SIN detectar recurrencias
  *
  * 🔥 DETECCIÓN AUTOMÁTICA:
- * - Si es .csv → RepGeneral (empalme)
- * - Si es .xlsx Y se llama "TECNOBASE" → TECNOBASE (crear turnos)
+ * - Si es .csv → RepGeneral
+ * - Si es .xlsx Y se llama "TECNOBASE" → TECNOBASE
  * - Si es .xlsx Y tiene más de 1000 filas → TECNOBASE
  *
- * 📌 LÓGICA DE RECURRENCIA:
- * La recurrencia se basa en la PERSONA (cédula), NO en la placa.
- * - Si el mismo cliente (por cédula) ya vino → recurrente aunque traiga otro carro
- * - Si la misma placa llega con un dueño diferente → cliente NUEVO para ese dueño
- * - Busca primero por cliente_id, luego por conductor_id como fallback
+ * 📌 LÓGICA DE RECURRENCIA (solo RepGeneral):
+ * - Se clasifica CADA fila del CSV contra el histórico en DB (TECNOBASE)
+ * - Si tiene turno dateado → se actualiza el turno + afecta comisiones
+ * - Si NO tiene turno dateado → igual se cuenta en el resumen
+ * - La recurrencia se basa en la PERSONA (cédula), NO en la placa
  */
 export default class RepGeneralImportController {
   // ==================== ÍNDICES DE COLUMNAS ====================
 
-  // Vehículo
-  private IDX_PLACA = 10 // Columna K
-  private IDX_MARCA = 12 // Columna M
-  private IDX_LINEA = 13 // Columna N
-  private IDX_MODELO = 14 // Columna O
-  private IDX_COLOR = 20 // Columna U
-  private IDX_MATRICULA = 16 // Columna Q
+  private IDX_PLACA = 10
+  private IDX_MARCA = 12
+  private IDX_LINEA = 13
+  private IDX_MODELO = 14
+  private IDX_COLOR = 20
+  private IDX_MATRICULA = 16
 
-  // Propietario (dueño del vehículo)
-  private IDX_DUENO_DOC_TIPO = 32 // Columna AG
-  private IDX_DUENO_DOC_NUM = 33 // Columna AH
-  private IDX_DUENO_NOMBRE = 34 // Columna AI
-  private IDX_DUENO_TELEFONO = 38 // Columna AM (celular)
-  private IDX_DUENO_EMAIL = 39 // Columna AN
+  private IDX_DUENO_DOC_TIPO = 32
+  private IDX_DUENO_DOC_NUM = 33
+  private IDX_DUENO_NOMBRE = 34
+  private IDX_DUENO_TELEFONO = 38
+  private IDX_DUENO_EMAIL = 39
 
-  // Conductor (quien trajo el vehículo ese día, puede ser distinto al dueño)
-  private IDX_COND_DOC_TIPO = 40 // Columna AO
-  private IDX_COND_DOC_NUM = 41 // Columna AP
-  private IDX_COND_NOMBRE = 42 // Columna AQ
-  private IDX_COND_TELEFONO = 46 // Columna AU (celular)
+  private IDX_COND_DOC_TIPO = 40
+  private IDX_COND_DOC_NUM = 41
+  private IDX_COND_NOMBRE = 42
+  private IDX_COND_TELEFONO = 46
 
-  // TECNOBASE: Fecha y Servicio
-  private IDX_FECHA = 2 // Columna C
-  private IDX_TIPO_SERVICIO = 9 // Columna J
+  private IDX_FECHA = 2
+  private IDX_TIPO_SERVICIO = 9
 
-  // Meses mínimos default si no hay config en DB
   private MESES_MINIMOS_DEFAULT = 24
 
   // ==================== MÉTODO PRINCIPAL ====================
@@ -130,12 +135,13 @@ export default class RepGeneralImportController {
       logger.info(
         {
           totalFilas: rows.length,
-          tipoArchivo: esTECNOBASE ? 'TECNOBASE (crear turnos)' : 'RepGeneral (empalme)',
+          tipoArchivo: esTECNOBASE
+            ? 'TECNOBASE (solo histórico)'
+            : 'RepGeneral (clasificar + empalme)',
         },
         '✅ Archivo parseado correctamente'
       )
 
-      // ✅ FIX 1: Obtener funcionario y sede reales de la DB (no hardcodear ID 1)
       let funcionarioIdValido: number | null = null
       let sedeIdValido: number | null = null
 
@@ -146,28 +152,21 @@ export default class RepGeneralImportController {
         if (!usuarioAdmin) {
           return response.status(500).send({
             ok: false,
-            message:
-              'No existe ningún usuario en la base de datos. Crea al menos uno antes de importar.',
+            message: 'No existe ningún usuario en la base de datos.',
           })
         }
         if (!sedeDefault) {
           return response.status(500).send({
             ok: false,
-            message:
-              'No existe ninguna sede en la base de datos. Crea al menos una antes de importar.',
+            message: 'No existe ninguna sede en la base de datos.',
           })
         }
 
         funcionarioIdValido = usuarioAdmin.id
         sedeIdValido = sedeDefault.id
-
-        logger.info(
-          { funcionarioId: funcionarioIdValido, sedeId: sedeIdValido },
-          '✅ Funcionario y sede por defecto encontrados'
-        )
       }
 
-      // Leer meses mínimos de config global (con fallback al default)
+      // Leer config de recurrencia (solo la usa RepGeneral)
       const configGlobal = await db
         .from('configuracion_recurrencia_global')
         .orderBy('id', 'asc')
@@ -184,11 +183,10 @@ export default class RepGeneralImportController {
       let turnosActualizados = 0
       let turnosCreados = 0
       let turnosRecurrentes = 0
+      let turnosRecuperacion = 0
       let turnosNuevos = 0
       let errores = 0
-
-      // ✅ FIX 2: Capturar el primer error real para mostrarlo en la respuesta
-      let primerError: string | null = null
+      const erroresDetalle: string[] = []
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i]
@@ -200,6 +198,8 @@ export default class RepGeneralImportController {
               turnosCreados,
               turnosActualizados,
               turnosRecurrentes,
+              turnosRecuperacion,
+              turnosNuevos,
               errores,
             },
             '⏳ Procesando...'
@@ -207,14 +207,12 @@ export default class RepGeneralImportController {
         }
 
         try {
-          // 1️⃣ Cliente (propietario del vehículo)
+          // 1️⃣ Cliente
           const { cliente, creado: cliCreado } = await this.upsertClienteDesdeFila(row)
           if (cliCreado) clientesCreados++
           else if (cliente) clientesActualizados++
 
           // 2️⃣ Vehículo
-          // En TECNOBASE pasamos la fecha para determinar quién es el dueño más reciente.
-          // En RepGeneral (fechaFila=null) siempre actualiza porque el CDA es la fuente de verdad.
           const fechaFilaRaw = esTECNOBASE ? this.normText(row[this.IDX_FECHA]) : null
           const fechaFila = fechaFilaRaw ? this.parsearFecha(fechaFilaRaw) : null
 
@@ -226,10 +224,9 @@ export default class RepGeneralImportController {
           if (vehCreado) vehiculosCreados++
           else if (vehiculo) vehiculosActualizados++
 
-          // 3️⃣ Conductor (quien trajo el carro ese día, puede diferir del dueño)
+          // 3️⃣ Conductor
           let { conductor, creado: condCreado } = await this.upsertConductorDesdeFila(row)
 
-          // FALLBACK: si no hay datos de conductor, usar datos del cliente como conductor
           if (!conductor && cliente) {
             conductor = await Conductor.query()
               .where('doc_numero', cliente.docNumero ?? '')
@@ -252,21 +249,21 @@ export default class RepGeneralImportController {
 
           // 4️⃣ TECNOBASE vs RepGeneral
           if (esTECNOBASE) {
+            // 🆕 SOLO insertar histórico limpio, SIN detectar recurrencia
             const result = await this.crearTurnoHistorico(
               row,
               cliente ?? null,
               vehiculo ?? null,
               conductor ?? null,
               funcionarioIdValido!,
-              sedeIdValido!,
-              mesesMinimos
+              sedeIdValido!
             )
             turnosCreados += result.creados
             turnosActualizados += result.actualizados
-            turnosRecurrentes += result.recurrentes
-            turnosNuevos += result.nuevos
           } else {
+            // 🆕 RepGeneral: clasificar TODAS las filas + empalmar si hay turno dateado
             const result = await this.empalmarTurnosDesdeFila(
+              row,
               cliente ?? null,
               vehiculo ?? null,
               conductor ?? null,
@@ -274,27 +271,40 @@ export default class RepGeneralImportController {
             )
             turnosActualizados += result.actualizados
             turnosRecurrentes += result.recurrentes
+            turnosRecuperacion += result.recuperacion
             turnosNuevos += result.nuevos
           }
         } catch (filaError) {
           errores++
           const msgError = filaError instanceof Error ? filaError.message : String(filaError)
+          const placa = this.normalizePlaca(row[this.IDX_PLACA]) ?? 'SIN_PLACA'
+          const nombreCliente = this.normText(row[this.IDX_DUENO_NOMBRE]) ?? 'Sin nombre'
+          const docCliente = this.normText(row[this.IDX_DUENO_DOC_NUM]) ?? 'Sin cédula'
 
-          if (!primerError) {
-            const placa = this.normalizePlaca(row[this.IDX_PLACA]) ?? 'SIN_PLACA'
-            primerError = `Fila ${i + 1} (placa: ${placa}): ${msgError}`
+          // Mensaje legible según tipo de error
+          let mensajeAmigable: string
+          if (msgError.includes("telefono' cannot be null") || msgError.includes('telefono')) {
+            mensajeAmigable = `Cliente "${nombreCliente}" (CC: ${docCliente}, placa: ${placa}) no tiene número de teléfono`
+          } else if (
+            msgError.includes("doc_numero' cannot be null") ||
+            msgError.includes('doc_numero')
+          ) {
+            mensajeAmigable = `Cliente "${nombreCliente}" (placa: ${placa}) no tiene número de documento`
+          } else if (msgError.includes('placa')) {
+            mensajeAmigable = `Placa "${placa}": ${msgError}`
+          } else {
+            mensajeAmigable = `Fila ${i + 1} (placa: ${placa}): ${msgError}`
           }
 
-          logger.warn(
-            { error: msgError, fila: i + 1, placa: row[this.IDX_PLACA] ?? 'N/A' },
-            '⚠️ Error procesando fila (se continúa con las demás)'
-          )
+          erroresDetalle.push(mensajeAmigable)
+
+          logger.warn({ error: msgError, fila: i + 1, placa }, '⚠️ Error procesando fila')
         }
       }
 
       const mensaje = esTECNOBASE
-        ? 'Importación TECNOBASE (turnos históricos) finalizada.'
-        : 'Importación RepGeneral (empalme + recurrencia) finalizada.'
+        ? 'Importación TECNOBASE (histórico) finalizada.'
+        : 'Importación RepGeneral (clasificación + empalme) finalizada.'
 
       logger.info(
         {
@@ -304,6 +314,7 @@ export default class RepGeneralImportController {
           turnosCreados,
           turnosActualizados,
           turnosRecurrentes,
+          turnosRecuperacion,
           turnosNuevos,
           errores,
         },
@@ -314,6 +325,7 @@ export default class RepGeneralImportController {
         ok: true,
         message: mensaje,
         resumen: {
+          mesesMinimos: esTECNOBASE ? null : mesesMinimos,
           clientesCreados,
           clientesActualizados,
           vehiculosCreados,
@@ -323,9 +335,11 @@ export default class RepGeneralImportController {
           turnosCreados,
           turnosActualizados,
           turnosRecurrentes,
+          turnosRecuperacion,
           turnosNuevos,
           errores,
-          primerError: primerError ?? null,
+          erroresDetalle, // 🆕 array con mensajes legibles
+          primerError: erroresDetalle[0] ?? null, // compatibilidad
         },
       })
     } catch (error) {
@@ -337,7 +351,6 @@ export default class RepGeneralImportController {
       })
     }
   }
-
   // ==================== DETECCIÓN DE TIPO DE ARCHIVO ====================
 
   private detectarTipoArchivo(
@@ -353,26 +366,12 @@ export default class RepGeneralImportController {
       logger.info('✅ Detectado por extensión y tamaño: TECNOBASE')
       return true
     }
-    logger.info('✅ Detectado como RepGeneral (empalme)')
+    logger.info('✅ Detectado como RepGeneral')
     return false
   }
 
-  // ==================== DETECCIÓN DE RECURRENCIA ====================
+  // ==================== DETECCIÓN DE RECURRENCIA / RECUPERACIÓN ====================
 
-  /**
-   * Determina si un cliente o conductor es recurrente.
-   *
-   * REGLA CLAVE: la recurrencia es por PERSONA (cédula), no por placa.
-   * - Misma cédula de propietario con carro diferente → sigue siendo recurrente
-   * - Misma placa con propietario diferente → cliente NUEVO para ese propietario
-   *
-   * PRIORIDAD DE BÚSQUEDA:
-   * 1. Por cliente_id (propietario del vehículo)
-   * 2. Por conductor_id como fallback (útil cuando propietario ≠ conductor)
-   *
-   * EXCLUSIÓN: se excluye el turnoActualId para no compararse con sí mismo
-   * (importante en modo RepGeneral donde el turno ya existe)
-   */
   private async detectarRecurrencia(
     clienteId: number | null,
     conductorId: number | null,
@@ -382,6 +381,7 @@ export default class RepGeneralImportController {
   ): Promise<RecurrenciaResult> {
     const vacio: RecurrenciaResult = {
       esRecurrente: false,
+      esRecuperacion: false,
       mesesDesdeUltimaVisita: null,
       ultimoTurnoId: null,
       fechaUltimaVisita: null,
@@ -389,7 +389,6 @@ export default class RepGeneralImportController {
 
     let ultimoTurno: TurnoRtm | null = null
 
-    // Prioridad 1: buscar por cliente (propietario/dueño)
     if (clienteId) {
       const q = TurnoRtm.query()
         .where('cliente_id', clienteId)
@@ -400,7 +399,6 @@ export default class RepGeneralImportController {
       ultimoTurno = await q.first()
     }
 
-    // Prioridad 2: buscar por conductor si no hay resultado por cliente
     if (!ultimoTurno && conductorId) {
       const q = TurnoRtm.query()
         .where('conductor_id', conductorId)
@@ -411,10 +409,8 @@ export default class RepGeneralImportController {
       ultimoTurno = await q.first()
     }
 
-    // Sin visita previa → persona completamente nueva
     if (!ultimoTurno) return vacio
 
-    // Convertir fecha del último turno (puede ser DateTime de Luxon o string desde DB)
     let fechaUltimaVisitaISO: string
     if (ultimoTurno.fecha instanceof DateTime) {
       fechaUltimaVisitaISO = ultimoTurno.fecha.toISODate() ?? ''
@@ -424,7 +420,6 @@ export default class RepGeneralImportController {
 
     if (!fechaUltimaVisitaISO) return vacio
 
-    // Calcular diferencia en meses completos
     const fechaActual = DateTime.fromISO(fechaActualISO, { zone: 'America/Bogota' })
     const fechaAnterior = DateTime.fromISO(fechaUltimaVisitaISO, { zone: 'America/Bogota' })
 
@@ -435,28 +430,28 @@ export default class RepGeneralImportController {
 
     const mesesTranscurridos = Math.floor(fechaActual.diff(fechaAnterior, 'months').months)
 
-    const resultado: RecurrenciaResult = {
-      esRecurrente: mesesTranscurridos >= mesesMinimos,
+    const esRecurrente = mesesTranscurridos < mesesMinimos
+    const esRecuperacion = mesesTranscurridos >= mesesMinimos
+
+    if (esRecurrente) {
+      logger.info(
+        { clienteId, conductorId, mesesTranscurridos, mesesMinimos },
+        '🔄 RECURRENTE detectado'
+      )
+    } else {
+      logger.info(
+        { clienteId, conductorId, mesesTranscurridos, mesesMinimos },
+        '💛 RECUPERACIÓN detectada'
+      )
+    }
+
+    return {
+      esRecurrente,
+      esRecuperacion,
       mesesDesdeUltimaVisita: mesesTranscurridos,
       ultimoTurnoId: ultimoTurno.id,
       fechaUltimaVisita: fechaUltimaVisitaISO,
     }
-
-    if (resultado.esRecurrente) {
-      logger.info(
-        {
-          clienteId,
-          conductorId,
-          mesesTranscurridos,
-          mesesMinimos,
-          ultimoTurnoId: ultimoTurno.id,
-          fechaUltimaVisita: fechaUltimaVisitaISO,
-        },
-        '🔄 RECURRENTE detectado'
-      )
-    }
-
-    return resultado
   }
 
   // ==================== DETECCIÓN DE SERVICIO Y TIPO VEHÍCULO ====================
@@ -514,7 +509,6 @@ export default class RepGeneralImportController {
           const dt = DateTime.fromJSDate(cell.value, { zone: 'America/Bogota' })
           values[idx] = dt.toFormat('dd/MM/yyyy HH:mm:ss')
         } else if (cell.type === ExcelJS.ValueType.Number && typeof cell.value === 'number') {
-          // ✅ FIX 4: Sin notación científica para documentos y teléfonos
           values[idx] = Number.isInteger(cell.value)
             ? cell.value.toString()
             : Math.round(cell.value).toString()
@@ -680,7 +674,6 @@ export default class RepGeneralImportController {
 
     let debeGuardar = false
 
-    // Datos técnicos: solo llenar si están vacíos
     if (!vehiculo.marca && marca) {
       vehiculo.marca = marca
       debeGuardar = true
@@ -702,24 +695,15 @@ export default class RepGeneralImportController {
       debeGuardar = true
     }
 
-    // ✅ LÓGICA DE DUEÑO MÁS RECIENTE
     if (cliente?.id) {
       if (!vehiculo.clienteId) {
-        // Sin dueño previo → asignar directamente
         vehiculo.clienteId = cliente.id
         debeGuardar = true
       } else if (vehiculo.clienteId !== cliente.id) {
         if (!fechaFila) {
-          // Modo RepGeneral: el CDA es la fuente de verdad del estado actual
-          // Si hoy el CDA dice que el dueño es X, entonces X es el dueño
-          logger.info(
-            { placa, clienteAnterior: vehiculo.clienteId, clienteNuevo: cliente.id },
-            '🔄 [RepGeneral] Actualizando dueño al estado actual del CDA'
-          )
           vehiculo.clienteId = cliente.id
           debeGuardar = true
         } else {
-          // Modo TECNOBASE: comparar fechas para saber quién es el dueño más reciente
           const ultimoTurnoConDuenoActual = await TurnoRtm.query()
             .where('placa', placa)
             .where('cliente_id', vehiculo.clienteId)
@@ -728,7 +712,6 @@ export default class RepGeneralImportController {
             .first()
 
           if (!ultimoTurnoConDuenoActual) {
-            // El dueño actual nunca tuvo turnos → reemplazar
             vehiculo.clienteId = cliente.id
             debeGuardar = true
           } else {
@@ -740,21 +723,9 @@ export default class RepGeneralImportController {
                   })
 
             if (fechaFila > fechaUltimoTurno) {
-              // Esta fila del TECNOBASE es más reciente → nuevo dueño
-              logger.info(
-                {
-                  placa,
-                  clienteAnterior: vehiculo.clienteId,
-                  clienteNuevo: cliente.id,
-                  fechaAnterior: fechaUltimoTurno.toISODate(),
-                  fechaNueva: fechaFila.toISODate(),
-                },
-                '🔄 [TECNOBASE] Actualizando dueño (propietario más reciente)'
-              )
               vehiculo.clienteId = cliente.id
               debeGuardar = true
             }
-            // Si la fecha es anterior o igual → el dueño actual se mantiene
           }
         }
       }
@@ -808,8 +779,8 @@ export default class RepGeneralImportController {
     if (debeGuardar) await conductor.save()
     return { conductor, creado: false }
   }
-
   // ==================== CREAR TURNO HISTÓRICO (TECNOBASE) ====================
+  // 🆕 SOLO inserta el histórico limpio, SIN detectar recurrencia
 
   private async crearTurnoHistorico(
     row: string[],
@@ -817,10 +788,9 @@ export default class RepGeneralImportController {
     vehiculo: Vehiculo | null,
     conductor: Conductor | null,
     funcionarioId: number,
-    sedeId: number,
-    mesesMinimos: number
-  ): Promise<{ creados: number; actualizados: number; recurrentes: number; nuevos: number }> {
-    if (!vehiculo?.placa) return { creados: 0, actualizados: 0, recurrentes: 0, nuevos: 0 }
+    sedeId: number
+  ): Promise<{ creados: number; actualizados: number }> {
+    if (!vehiculo?.placa) return { creados: 0, actualizados: 0 }
 
     const placa = vehiculo.placa
     const fechaRaw = this.normText(row[this.IDX_FECHA])
@@ -828,7 +798,7 @@ export default class RepGeneralImportController {
 
     if (!fecha?.isValid) {
       logger.warn({ placa, fechaRaw }, '⚠️ Fecha inválida, omitiendo fila')
-      return { creados: 0, actualizados: 0, recurrentes: 0, nuevos: 0 }
+      return { creados: 0, actualizados: 0 }
     }
 
     const fechaISO = fecha.toISODate()!
@@ -839,7 +809,7 @@ export default class RepGeneralImportController {
     const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? 1
     const conductorIdFinal = conductor?.id ?? null
 
-    // ¿Ya existe un turno con esa placa y fecha?
+    // Si ya existe ese turno (misma placa + fecha), solo actualizar datos faltantes
     const turnoExistente = await TurnoRtm.query()
       .where('placa', placa)
       .where('fecha', fechaISO)
@@ -868,44 +838,11 @@ export default class RepGeneralImportController {
         changed = true
       }
 
-      // Calcular recurrencia si aún no está registrada
-      if (!turnoExistente.esRecurrente && turnoExistente.mesesDesdeUltimaVisita === null) {
-        const recurrencia = await this.detectarRecurrencia(
-          turnoExistente.clienteId,
-          turnoExistente.conductorId,
-          fechaISO,
-          mesesMinimos,
-          turnoExistente.id
-        )
-        turnoExistente.esRecurrente = recurrencia.esRecurrente
-        turnoExistente.mesesDesdeUltimaVisita = recurrencia.mesesDesdeUltimaVisita
-        turnoExistente.ultimoTurnoId = recurrencia.ultimoTurnoId
-        ;(turnoExistente as any).fechaUltimaVisita = recurrencia.fechaUltimaVisita
-        changed = true
-
-        if (changed) await turnoExistente.save()
-        return {
-          creados: 0,
-          actualizados: 1,
-          recurrentes: recurrencia.esRecurrente ? 1 : 0,
-          nuevos: recurrencia.esRecurrente ? 0 : 1,
-        }
-      }
-
       if (changed) await turnoExistente.save()
-      return { creados: 0, actualizados: changed ? 1 : 0, recurrentes: 0, nuevos: 0 }
+      return { creados: 0, actualizados: changed ? 1 : 0 }
     }
 
-    // 🔍 Detectar recurrencia ANTES de crear el turno nuevo
-    const recurrencia = await this.detectarRecurrencia(
-      clienteIdFinal,
-      conductorIdFinal,
-      fechaISO,
-      mesesMinimos,
-      null
-    )
-
-    // Calcular consecutivos por sede y fecha
+    // Crear turno histórico limpio SIN clasificación de recurrencia
     const maxTurnoNumero = await TurnoRtm.query()
       .where('sede_id', sedeId)
       .where('fecha', fechaISO)
@@ -923,7 +860,6 @@ export default class RepGeneralImportController {
       .first()
     const turnoNumeroServicio = (maxTurnoServicio?.max ?? 0) + 1
 
-    // ✅ FIX 3: Prefijo HIST para no colisionar con turnos normales del sistema
     const fechaPart = fecha.toFormat('yyyyMMdd')
     const turnoCodigo = `HIST-${fechaPart}-${sedeId}-${turnoNumero}`
 
@@ -941,67 +877,69 @@ export default class RepGeneralImportController {
       clienteId: clienteIdFinal,
       conductorId: conductorIdFinal,
       claseVehiculoId: claseVehiculoIdFinal,
-      funcionarioId, // ✅ FIX 1: ID real de la DB
-      sedeId, // ✅ FIX 1: ID real de la DB
+      funcionarioId,
+      sedeId,
       servicioId,
       observaciones: ['Importado desde TECNOBASE', observacion].filter(Boolean).join(' '),
       canalAtribucion: 'FACHADA',
-      // 🆕 Campos de recurrencia
-      esRecurrente: recurrencia.esRecurrente,
-      mesesDesdeUltimaVisita: recurrencia.mesesDesdeUltimaVisita,
-      ultimoTurnoId: recurrencia.ultimoTurnoId,
-      fechaUltimaVisita: recurrencia.fechaUltimaVisita,
+      // 🆕 Sin clasificación: se dejan en null/false para que RepGeneral los clasifique después
+      esRecurrente: false,
+      esRecuperacion: false,
+      mesesDesdeUltimaVisita: null,
+      ultimoTurnoId: null,
+      fechaUltimaVisita: null,
     } as any)
 
-    return {
-      creados: 1,
-      actualizados: 0,
-      recurrentes: recurrencia.esRecurrente ? 1 : 0,
-      nuevos: recurrencia.esRecurrente ? 0 : 1,
-    }
+    return { creados: 1, actualizados: 0 }
   }
 
   // ==================== EMPALMAR TURNOS (REP GENERAL DIARIO) ====================
+  // Clasifica TODAS las filas del CSV, dateadas o no
 
-  /**
-   * Modo RepGeneral diario:
-   *
-   * 1. Actualiza cliente, vehículo y conductor en los turnos existentes.
-   *    El dueño del vehículo se actualiza SIEMPRE porque el CDA es la fuente de
-   *    verdad del estado actual (si hoy cambió el dueño, el CDA lo sabe).
-   *
-   * 2. Detecta recurrencia usando la cédula del cliente/conductor recién vinculado:
-   *    - Si ese cliente ya tiene turnos finalizados anteriores con 24+ meses → recurrente
-   *    - Si el cliente es nuevo en la base de datos → cliente nuevo
-   *    - Solo calcula si el turno aún no tiene recurrencia calculada
-   */
   private async empalmarTurnosDesdeFila(
+    row: string[],
     cliente: Cliente | null,
     vehiculo: Vehiculo | null,
     conductor: Conductor | null,
     mesesMinimos: number
-  ): Promise<{ actualizados: number; recurrentes: number; nuevos: number }> {
-    if (!vehiculo?.placa) return { actualizados: 0, recurrentes: 0, nuevos: 0 }
+  ): Promise<{ actualizados: number; recurrentes: number; recuperacion: number; nuevos: number }> {
+    if (!vehiculo?.placa) return { actualizados: 0, recurrentes: 0, recuperacion: 0, nuevos: 0 }
 
     const placa = vehiculo.placa
-    const turnos = await TurnoRtm.query()
-      .where('placa', placa)
-      .whereIn('estado', ['activo', 'finalizado'])
-
-    if (!turnos.length) return { actualizados: 0, recurrentes: 0, nuevos: 0 }
-
     const clienteIdFinal = cliente?.id ?? vehiculo.clienteId ?? null
     const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? null
     const conductorIdFinal = conductor?.id ?? null
 
+    // Fecha de la visita del RepGeneral (columna C del CSV)
+    const fechaRaw = this.normText(row[this.IDX_FECHA])
+    const fechaParseada = fechaRaw ? this.parsearFecha(fechaRaw) : null
+    const fechaCSV = fechaParseada?.isValid ? fechaParseada.toISODate()! : null
+
+    // Detectar recurrencia usando la fecha del CSV
+    const fechaParaComparar = fechaCSV ?? DateTime.now().toISODate()!
+
+    const rec = await this.detectarRecurrencia(
+      clienteIdFinal,
+      conductorIdFinal,
+      fechaParaComparar,
+      mesesMinimos,
+      null
+    )
+
+    // Contabilizar en el resumen SIEMPRE (dateado o no)
+    let turnosRecurrentes = rec.esRecurrente ? 1 : 0
+    let turnosRecuperacion = rec.esRecuperacion ? 1 : 0
+    let turnosNuevos = !rec.esRecurrente && !rec.esRecuperacion ? 1 : 0
     let turnosActualizados = 0
-    let turnosRecurrentes = 0
-    let turnosNuevos = 0
+
+    // Buscar turnos dateados de esta placa para actualizar
+    const turnos = await TurnoRtm.query()
+      .where('placa', placa)
+      .whereIn('estado', ['activo', 'finalizado'])
 
     for (const turno of turnos) {
       let changed = false
 
-      // Empalmar datos faltantes
       if (!turno.vehiculoId && vehiculo.id) {
         turno.vehiculoId = vehiculo.id
         changed = true
@@ -1019,44 +957,172 @@ export default class RepGeneralImportController {
         changed = true
       }
 
-      // Fecha del turno como string ISO
-      let fechaTurnoISO: string
-      if (turno.fecha instanceof DateTime) {
-        fechaTurnoISO = turno.fecha.toISODate() ?? ''
-      } else {
-        fechaTurnoISO = String(turno.fecha).substring(0, 10)
-      }
+      // 🔧 FIX: Recalcular siempre — no solo cuando es null
+      // Antes solo clasificaba si mesesDesdeUltimaVisita === null,
+      // lo que impedía recalcular tras corregir errores o volver a subir el Rep General
+      const necesitaClasificar =
+        turno.mesesDesdeUltimaVisita === null || (!turno.esRecurrente && !turno.esRecuperacion)
 
-      // Detectar recurrencia solo si aún no está calculada para este turno
-      if (fechaTurnoISO && turno.mesesDesdeUltimaVisita === null) {
-        const recurrencia = await this.detectarRecurrencia(
-          turno.clienteId, // Usar el clienteId ya actualizado en este turno
-          turno.conductorId, // Usar el conductorId ya actualizado en este turno
+      if (necesitaClasificar) {
+        let fechaTurnoISO: string
+        if (turno.fecha instanceof DateTime) {
+          fechaTurnoISO = turno.fecha.toISODate() ?? fechaParaComparar
+        } else {
+          fechaTurnoISO = String(turno.fecha).substring(0, 10) || fechaParaComparar
+        }
+
+        const recTurno = await this.detectarRecurrencia(
+          turno.clienteId,
+          turno.conductorId,
           fechaTurnoISO,
           mesesMinimos,
-          turno.id // Excluir el turno actual de la búsqueda
+          turno.id
         )
 
-        turno.esRecurrente = recurrencia.esRecurrente
-        turno.mesesDesdeUltimaVisita = recurrencia.mesesDesdeUltimaVisita
-        turno.ultimoTurnoId = recurrencia.ultimoTurnoId
-        ;(turno as any).fechaUltimaVisita = recurrencia.fechaUltimaVisita
+        turno.esRecurrente = recTurno.esRecurrente
+        turno.esRecuperacion = recTurno.esRecuperacion
+        turno.mesesDesdeUltimaVisita = recTurno.mesesDesdeUltimaVisita
+        turno.ultimoTurnoId = recTurno.ultimoTurnoId
+        ;(turno as any).fechaUltimaVisita = recTurno.fechaUltimaVisita
         changed = true
-
-        if (recurrencia.esRecurrente) turnosRecurrentes++
-        else turnosNuevos++
       }
 
       if (changed) {
         await turno.save()
         turnosActualizados++
+
+        // Si el turno tiene dateo y la clasificación cambió → recalcular comisión
+        if (turno.captacionDateoId && turno.mesesDesdeUltimaVisita !== null) {
+          const recParaComision: RecurrenciaResult = {
+            esRecurrente: turno.esRecurrente,
+            esRecuperacion: turno.esRecuperacion,
+            mesesDesdeUltimaVisita: turno.mesesDesdeUltimaVisita,
+            ultimoTurnoId: turno.ultimoTurnoId,
+            fechaUltimaVisita: turno.fechaUltimaVisita
+              ? turno.fechaUltimaVisita instanceof DateTime
+                ? turno.fechaUltimaVisita.toISODate()
+                : String(turno.fechaUltimaVisita).substring(0, 10)
+              : null,
+          }
+          console.log(`   🔄 Recalculando comisión para dateo ${turno.captacionDateoId}`)
+          await this.recalcularComisionSiExiste(
+            turno.captacionDateoId,
+            recParaComision,
+            turno.tipoVehiculo
+          )
+        }
       }
     }
 
     return {
       actualizados: turnosActualizados,
       recurrentes: turnosRecurrentes,
+      recuperacion: turnosRecuperacion,
       nuevos: turnosNuevos,
     }
+  }
+
+  // ==================== RECALCULAR COMISIÓN AL SUBIR REP GENERAL ====================
+
+  private async recalcularComisionSiExiste(
+    dateoId: number,
+    rec: RecurrenciaResult,
+    tipoVehiculo: string | null
+  ): Promise<void> {
+    const comision = await Comision.query()
+      .where('captacion_dateo_id', dateoId)
+      .where('estado', 'PENDIENTE')
+      .where('tipo_servicio', 'RTM')
+      .first()
+
+    if (!comision) {
+      console.log(`   ⚠️ No hay comisión PENDIENTE para dateo ${dateoId}`)
+      return
+    }
+
+    // Detectar si es moto
+    const esMoto = tipoVehiculo === 'Motocicleta'
+    console.log(`   🚗 tipoVehiculo: ${tipoVehiculo} | esMoto: ${esMoto}`)
+
+    const asesorId = comision.asesorId
+    const configGlobal = await db
+      .from('configuracion_recurrencia_global')
+      .orderBy('id', 'asc')
+      .first()
+
+    // Leer valores según tipo de vehículo desde config global
+    let valorRecurrente: number
+    let valorRecuperacion: number
+
+    if (esMoto) {
+      valorRecurrente = Number(
+        configGlobal?.valor_dateo_recurrencia_moto ?? configGlobal?.valor_dateo_recurrencia ?? 4300
+      )
+      valorRecuperacion = Number(
+        configGlobal?.valor_dateo_recuperacion_moto ??
+          configGlobal?.valor_dateo_recuperacion ??
+          8600
+      )
+    } else {
+      valorRecurrente = Number(
+        configGlobal?.valor_dateo_recurrencia_vehiculo ??
+          configGlobal?.valor_dateo_recurrencia ??
+          4300
+      )
+      valorRecuperacion = Number(
+        configGlobal?.valor_dateo_recuperacion_vehiculo ??
+          configGlobal?.valor_dateo_recuperacion ??
+          8600
+      )
+    }
+
+    // Sobrescribir con config específica del asesor si existe
+    if (asesorId) {
+      const asesorCfg = await db
+        .from('configuracion_recurrencia_asesores') // 🔧 FIX: nombre correcto de la tabla
+        .where('asesor_id', asesorId)
+        .where('recurrencia_habilitada', true)
+        .first()
+
+      if (asesorCfg) {
+        if (esMoto) {
+          if (asesorCfg.valor_dateo_recurrencia_moto)
+            valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia_moto)
+          else if (asesorCfg.valor_dateo_recurrencia)
+            valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
+
+          if (asesorCfg.valor_dateo_recuperacion_moto)
+            valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion_moto)
+          else if (asesorCfg.valor_dateo_recuperacion)
+            valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+        } else {
+          if (asesorCfg.valor_dateo_recurrencia)
+            valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
+          if (asesorCfg.valor_dateo_recuperacion)
+            valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+        }
+      }
+    }
+
+    if (rec.esRecurrente) {
+      comision.monto = String(valorRecurrente)
+      comision.montoAsesor = String(valorRecurrente)
+      comision.montoConvenio = '0'
+      comision.base = '0'
+      console.log(
+        `   🔄 Comisión #${comision.id} → RECURRENTE ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'} $${valorRecurrente}`
+      )
+    } else if (rec.esRecuperacion) {
+      comision.monto = String(valorRecuperacion)
+      comision.montoAsesor = String(valorRecuperacion)
+      comision.montoConvenio = '0'
+      comision.base = '0'
+      console.log(
+        `   💛 Comisión #${comision.id} → RECUPERACIÓN ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'} $${valorRecuperacion}`
+      )
+    }
+
+    await comision.save()
+    console.log(`   ✅ Comisión #${comision.id} actualizada correctamente`)
   }
 }

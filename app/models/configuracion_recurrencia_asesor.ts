@@ -22,8 +22,21 @@ export default class ConfiguracionRecurrenciaAsesor extends BaseModel {
   @column({ columnName: 'meses_minimos' })
   declare mesesMinimos: number | null
 
+  /**
+   * 🔄 Valor personalizado de dateo para clientes RECURRENTES de este asesor
+   * (vino hace MENOS de mesesMinimos)
+   * NULL = usa el valor global
+   */
   @column({ columnName: 'valor_dateo_recurrencia' })
   declare valorDateoRecurrencia: number | null
+
+  /**
+   * 💛 Valor personalizado de dateo para clientes RECUPERACIÓN de este asesor
+   * (vino hace MÁS de mesesMinimos — regresó después de mucho tiempo)
+   * NULL = usa el valor global
+   */
+  @column({ columnName: 'valor_dateo_recuperacion' })
+  declare valorDateoRecuperacion: number | null
 
   @column({ columnName: 'tipo_vehiculo' })
   declare tipoVehiculo: RecurrenciaTipoVehiculo

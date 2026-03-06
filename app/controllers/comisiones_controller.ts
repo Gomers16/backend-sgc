@@ -5,9 +5,7 @@ import Database from '@adonisjs/lucid/services/db'
 
 import Comision from '#models/comision'
 import AgenteCaptacion from '#models/agente_captacion'
-
-// app/controllers/comisiones_controller.ts
-// REEMPLAZA la función mapComisionToDto (aproximadamente línea 50-120)
+import TurnoRtm from '#models/turno_rtm'
 
 /* ========= Helpers ========= */
 function toNumber(v: any): number {
@@ -19,9 +17,13 @@ function toNumber(v: any): number {
   return 0
 }
 
+function parseNullable(v: any): number | null {
+  if (v === null || v === undefined || v === '') return null
+  return Math.max(0, toNumber(v))
+}
+
 /**
  * Mapea una comision REAL (es_config = false) a DTO de lista/detalle
- * AHORA con desglose interno para mostrar distribución de pagos
  */
 function mapComisionToDto(c: Comision) {
   const anyC: any = c
@@ -30,22 +32,17 @@ function mapComisionToDto(c: Comision) {
   const turno = dateo?.$preloaded?.turno || null
   const servicio = turno?.$preloaded?.servicio || null
 
-  // 💸 Valores principales (compatibilidad con UI antigua)
-  const valorAsesor = toNumber(c.monto) // dateo
-  const valorCliente = toNumber(c.base) // placa
+  const valorAsesor = toNumber(c.monto)
+  const valorCliente = toNumber(c.base)
   const valorTotal = valorAsesor + valorCliente
 
-  // 💰 DESGLOSE DETALLADO (NUEVO)
   const montoAsesorComercial = c.montoAsesor ? toNumber(c.montoAsesor) : null
   const montoConvenioPlaca = c.montoConvenio ? toNumber(c.montoConvenio) : null
   const asesorSecundario = anyC.$preloaded?.asesorSecundario || null
 
-  // Determinar si hay desglose
   const tieneDesglose = montoAsesorComercial !== null || montoConvenioPlaca !== null
 
-  // Turnos: global y por servicio
   const numeroGlobal = turno?.numeroGlobal ?? turno?.turnoNumero ?? turno?.numero ?? turno?.id
-
   const numeroServicio =
     turno?.numeroServicio ??
     turno?.numero_servicio ??
@@ -54,24 +51,78 @@ function mapComisionToDto(c: Comision) {
     turno?.numeroPorServicio ??
     null
 
+  const fechaUltimaVisitaRaw = turno
+    ? ((turno as any).fechaUltimaVisita ?? (turno as any).fecha_ultima_visita ?? null)
+    : null
+  const fechaUltimaVisitaISO = fechaUltimaVisitaRaw
+    ? fechaUltimaVisitaRaw instanceof DateTime
+      ? fechaUltimaVisitaRaw.toISODate()
+      : String(fechaUltimaVisitaRaw).substring(0, 10)
+    : null
+
+  // 🆕 Extraer descuento del ticket CONFIRMADO del turno
+  const tickets: any[] = turno?.$preloaded?.facturacionTickets ?? []
+  const ticket = tickets.find((t: any) => t.estado === 'CONFIRMADA') ?? tickets[0] ?? null
+
+  const descuentoRaw = ticket?.$preloaded?.descuento ?? null
+  const confirmedByRaw = ticket?.$preloaded?.confirmedBy ?? null
+  const autorizadoPorRaw = ticket?.$preloaded?.autorizadoPor ?? null
+
+  const descuento = descuentoRaw
+    ? {
+        id: descuentoRaw.id,
+        codigo: String(descuentoRaw.codigo ?? ''),
+        nombre: String(descuentoRaw.nombre ?? ''),
+      }
+    : null
+
+  // Si tiene autorizadoPorId → fue aplicado manualmente en caja; si no → venía pre-marcado del dateo
+  const descuentoOrigen: 'dateo' | 'caja' | null = descuento
+    ? ticket?.autorizadoPorId
+      ? 'caja'
+      : 'dateo'
+    : null
+
+  let descuentoAplicadoAt: string | null = null
+  if (ticket?.confirmadoAt) {
+    descuentoAplicadoAt =
+      ticket.confirmadoAt instanceof DateTime
+        ? ticket.confirmadoAt.toISO()
+        : String(ticket.confirmadoAt)
+  }
+
+  const descuentoAplicadoPor = confirmedByRaw
+    ? {
+        id: confirmedByRaw.id,
+        nombres: confirmedByRaw.nombres ?? confirmedByRaw.nombre ?? null,
+        apellidos: confirmedByRaw.apellidos ?? null,
+      }
+    : null
+
+  const descuentoAutorizadoPor = autorizadoPorRaw
+    ? {
+        id: autorizadoPorRaw.id,
+        nombres: autorizadoPorRaw.nombres ?? autorizadoPorRaw.nombre ?? null,
+        apellidos: autorizadoPorRaw.apellidos ?? null,
+      }
+    : null
+
   return {
     id: c.id,
     dateo_id: c.captacionDateoId,
     estado: c.estado,
     cantidad: 1,
 
-    // 👇 Valores tradicionales (para compatibilidad)
-    valor_unitario: valorAsesor, // dateo
-    valor_cliente: valorCliente, // placa
+    valor_unitario: valorAsesor,
+    valor_cliente: valorCliente,
     valor_total: valorTotal,
     generado_at: c.fechaCalculo ? c.fechaCalculo.toISO() : null,
 
-    // 💰 DESGLOSE DETALLADO (para mostrar en modal)
     tiene_desglose: tieneDesglose,
     desglose: tieneDesglose
       ? {
-          monto_asesor_comercial: montoAsesorComercial, // Lo que cobra el comercial
-          monto_convenio_placa: montoConvenioPlaca, // Lo que cobra el convenio
+          monto_asesor_comercial: montoAsesorComercial,
+          monto_convenio_placa: montoConvenioPlaca,
           asesor_secundario: asesorSecundario
             ? {
                 id: asesorSecundario.id,
@@ -82,7 +133,6 @@ function mapComisionToDto(c: Comision) {
         }
       : null,
 
-    // Asesor principal
     asesor: anyC.$preloaded?.asesor
       ? {
           id: anyC.$preloaded.asesor.id,
@@ -112,14 +162,38 @@ function mapComisionToDto(c: Comision) {
                 nombre: (servicio as any).nombreServicio,
               }
             : null,
+          es_recurrente: Boolean(
+            (turno as any).esRecurrente ?? (turno as any).es_recurrente ?? false
+          ),
+          es_recuperacion: Boolean(
+            (turno as any).esRecuperacion ?? (turno as any).es_recuperacion ?? false
+          ),
+          meses_desde_ultima_visita:
+            (turno as any).mesesDesdeUltimaVisita ??
+            (turno as any).meses_desde_ultima_visita ??
+            null,
+          ultimo_turno_id: (turno as any).ultimoTurnoId ?? (turno as any).ultimo_turno_id ?? null,
+          fecha_ultima_visita: fechaUltimaVisitaISO,
+          ultima_visita: null as {
+            placa: string | null
+            conductor_nombre: string | null
+            vehiculo_descripcion: string | null
+            fecha: string | null
+          } | null,
         }
       : null,
+
+    // 🆕 Descuento informativo (viene del FacturacionTicket CONFIRMADA del turno)
+    descuento,
+    descuento_origen: descuentoOrigen,
+    descuento_aplicado_at: descuentoAplicadoAt,
+    descuento_aplicado_por: descuentoAplicadoPor,
+    descuento_autorizado_por: descuentoAutorizadoPor,
   }
 }
 
 /**
  * Mapea una FILA DE CONFIGURACIÓN (es_config = true) a DTO
- * para la vista de parámetros de comisiones (reglas de placa/dateo).
  */
 function mapConfigToDto(c: Comision) {
   return {
@@ -127,30 +201,28 @@ function mapConfigToDto(c: Comision) {
     es_config: true,
     asesor_id: c.asesorId ?? null,
     tipo_vehiculo: (c as any).tipoVehiculo ?? null,
-    // base = comisión por placa
+    // incentivo base (fallback cuando no hay específico por tipo)
     valor_placa: toNumber(c.base),
-    // monto = comisión por dateo
+    // 🆕 incentivos específicos por tipo de vehículo (null = sin configurar, usa valor_placa)
+    valor_placa_vehiculo: c.valorPlacaVehiculo !== null ? toNumber(c.valorPlacaVehiculo) : null,
+    valor_placa_moto: c.valorPlacaMoto !== null ? toNumber(c.valorPlacaMoto) : null,
+    // dateo nuevo via convenio ($8.600)
     valor_dateo: toNumber(c.monto),
-    // metas / % meta (solo tiene sentido en configs de meta, pero no estorba aquí)
+    // dateo nuevo directo sin convenio ($17.200)
+    valor_nuevo_directo: toNumber(c.valorNuevoDirecto ?? 0),
     meta_rtm: c.metaRtm ?? 0,
     porcentaje_comision_meta: toNumber(c.porcentajeComisionMeta ?? 0),
     fecha_calculo: c.fechaCalculo ? c.fechaCalculo.toISO() : null,
   }
 }
 
-/**
- * Mapea una fila de CONFIG (es_config = true) vista como "meta mensual"
- */
 function mapMetaToDto(c: Comision) {
   return {
     id: c.id,
     asesor_id: c.asesorId,
     tipo_vehiculo: (c as any).tipoVehiculo ?? null,
-    // meta mensual de RTM (cantidad)
     meta_mensual: c.metaRtm ?? 0,
-    // % extra de comisión si cumple la meta
     porcentaje_extra: toNumber(c.porcentajeComisionMeta ?? 0),
-    // valores de referencia de RTM (moto / vehículo)
     valor_rtm_moto: c.valorRtmMoto ?? 0,
     valor_rtm_vehiculo: c.valorRtmVehiculo ?? 0,
     fecha_actualizacion: c.updatedAt?.toISO() ?? c.createdAt?.toISO() ?? null,
@@ -158,17 +230,13 @@ function mapMetaToDto(c: Comision) {
 }
 
 export default class ComisionesController {
-  // app/controllers/comisiones_controller.ts
-  // REEMPLAZA el método index() (aproximadamente línea 130-200)
-
   /**
    * GET /api/comisiones
-   * Lista comisiones (SOLO reales, es_config = false / null) con filtros
    */
   public async index({ request, response }: HttpContext) {
     const page = Number(request.input('page') || 1)
     const perPage = Math.min(Number(request.input('perPage') || 10), 100)
-    const mes = request.input('mes') as string | undefined // "YYYY-MM"
+    const mes = request.input('mes') as string | undefined
     const asesorId = request.input('asesorId') as number | undefined
     const convenioId = request.input('convenioId') as number | undefined
     const estado = request.input('estado') as string | undefined
@@ -176,43 +244,36 @@ export default class ComisionesController {
     const order = (request.input('order') || 'desc') as 'asc' | 'desc'
 
     const query = Comision.query()
-      // 👇 comisiones reales: es_config = false O NULL
       .where((q) => {
         q.where('es_config', false).orWhereNull('es_config')
       })
       .preload('asesor')
       .preload('convenio')
-      .preload('asesorSecundario') // 👈 NUEVO: preload del asesor secundario
+      .preload('asesorSecundario')
       .preload('dateo', (dq) => {
         dq.preload('turno', (tq) => {
           tq.preload('servicio')
+          // 🆕 Cargar tickets confirmados con descuento y usuarios relacionados
+          tq.preload('facturacionTickets', (fq) => {
+            fq.whereNotNull('descuento_id')
+              .preload('descuento')
+              .preload('confirmedBy')
+              .preload('autorizadoPor')
+          })
         })
       })
 
-    // Filtro por mes (año-mes)
     if (mes && /^\d{4}-\d{2}$/.test(mes)) {
       const [year, month] = mes.split('-').map(Number)
       const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
       const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
-      if (start && end) {
-        query.whereBetween('fecha_calculo', [start, end])
-      }
+      if (start && end) query.whereBetween('fecha_calculo', [start, end])
     }
 
-    // Filtro por asesor
-    if (asesorId) {
-      query.where('asesor_id', asesorId)
-    }
-
-    // Filtro por convenio
-    if (convenioId) {
-      query.where('convenio_id', convenioId)
-    }
-
-    // Filtro por estado
+    if (asesorId) query.where('asesor_id', asesorId)
+    if (convenioId) query.where('convenio_id', convenioId)
     if (estado) query.where('estado', estado)
 
-    // Ordenamiento
     const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
     let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
     if (!SORTABLE.has(sortCol)) sortCol = 'id'
@@ -221,7 +282,6 @@ export default class ComisionesController {
     const paginated = await query.paginate(page, perPage)
     const meta = paginated.getMeta()
     const data = paginated.all()
-
     const rows = data.map((c) => mapComisionToDto(c))
 
     return response.ok({
@@ -231,22 +291,14 @@ export default class ComisionesController {
       perPage: meta.perPage,
     })
   }
+
   /**
    * GET /api/comisiones/metas-mensuales
-   * Resumen mensual por asesor:
-   *  - rtm_motos
-   *  - rtm_vehiculos
-   *  - meta_global_rtm
-   *  - porcentaje_comision_meta
-   *
-   * 🔥 CORRECCIÓN: Solo muestra metas para asesores con configuración específica
-   * YA NO usa una "meta global" como fallback para todos los asesores
    */
   public async metasMensuales({ request, response }: HttpContext) {
-    const mes = request.input('mes') as string | undefined // "YYYY-MM"
+    const mes = request.input('mes') as string | undefined
     const asesorIdParam = request.input('asesorId') as number | string | undefined
 
-    // Mes a usar (por defecto, mes actual)
     let year: number
     let month: number
 
@@ -266,7 +318,6 @@ export default class ComisionesController {
     const asesorId =
       asesorIdParam !== undefined && asesorIdParam !== null ? Number(asesorIdParam) : undefined
 
-    // 1️⃣ Agregamos RTM por asesor (motos / vehículos)
     const baseQ = Database.from('comisiones')
       .where((q) => {
         q.where('es_config', false).orWhereNull('es_config')
@@ -275,13 +326,8 @@ export default class ComisionesController {
       .whereIn('estado', ['PENDIENTE', 'APROBADA', 'PAGADA'])
       .whereNotNull('asesor_id')
 
-    if (start && end) {
-      baseQ.whereBetween('fecha_calculo', [start, end])
-    }
-
-    if (asesorId) {
-      baseQ.andWhere('asesor_id', asesorId)
-    }
+    if (start && end) baseQ.whereBetween('fecha_calculo', [start, end])
+    if (asesorId) baseQ.andWhere('asesor_id', asesorId)
 
     const agregados = await baseQ
       .select('asesor_id')
@@ -303,29 +349,16 @@ export default class ComisionesController {
       })
     }
 
-    // 2️⃣ Configs de meta (es_config = true, meta_rtm > 0)
     const cfgRows = await Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
-
-    // 🔥 CAMBIO: Ya NO usamos cfgGlobal - solo metas específicas por asesor
     const cfgByAsesor = new Map<number, Comision>()
-
     for (const c of cfgRows) {
-      // Solo guardamos metas con asesor_id específico
-      if (c.asesorId !== null) {
-        cfgByAsesor.set(c.asesorId, c)
-      }
-      // Si asesor_id es null, la ignoramos (no aplica a todos)
+      if (c.asesorId !== null) cfgByAsesor.set(c.asesorId, c)
     }
 
-    // 🎯 CORRECCIÓN: Solo mostrar asesores que tienen meta ESPECÍFICA configurada
-    // Si se solicita un asesor específico, incluirlo aunque no tenga meta
     const allIds = new Set<number>()
-
     if (asesorId) {
-      // Si se pide un asesor específico, incluirlo siempre
       allIds.add(asesorId)
     } else {
-      // Si no, solo mostrar asesores con RTM o con meta específica
       countsByAsesor.forEach((_v, id) => allIds.add(id))
       cfgByAsesor.forEach((_v, id) => allIds.add(id))
     }
@@ -336,54 +369,36 @@ export default class ComisionesController {
     if (asesorIds.length > 0) {
       const asesores = await AgenteCaptacion.query().whereIn('id', asesorIds)
       for (const a of asesores) {
-        asesoresMap.set(a.id, {
-          nombre: a.nombre,
-          tipo: (a as any).tipo ?? null,
-        })
+        asesoresMap.set(a.id, { nombre: a.nombre, tipo: (a as any).tipo ?? null })
       }
     }
 
     const rows = asesorIds.map((id) => {
       const counts = countsByAsesor.get(id) ?? { rtm_motos: 0, rtm_vehiculos: 0 }
-
-      // 🔥 CORRECCIÓN: Solo usar meta específica del asesor, NO global
-      const cfg = cfgByAsesor.get(id) ?? null // 👈 YA NO USA cfgGlobal
+      const cfg = cfgByAsesor.get(id) ?? null
 
       const metaRtm = cfg ? (cfg.metaRtm ?? 0) : 0
       const pctMeta = cfg ? toNumber(cfg.porcentajeComisionMeta ?? 0) : 0
-
-      // 💵 Valores unitarios de referencia para RTM
-      // Si no hay cfg específico, usar valores por defecto
       const valorRtmMoto = cfg ? (cfg.valorRtmMoto ?? 126100) : 126100
       const valorRtmVehiculo = cfg ? (cfg.valorRtmVehiculo ?? 208738) : 208738
 
-      // 📈 Facturación real estimada según las unidades y los valores de RTM
       const totalFacturacionMotos = counts.rtm_motos * valorRtmMoto
       const totalFacturacionVehiculos = counts.rtm_vehiculos * valorRtmVehiculo
       const totalFacturacionGlobal = totalFacturacionMotos + totalFacturacionVehiculos
-
       const info = asesoresMap.get(id)
 
       return {
         asesor_id: id,
         asesor_nombre: info?.nombre ?? '—',
         asesor_tipo: info?.tipo ?? null,
-
-        // Cantidades
         rtm_motos: counts.rtm_motos,
         rtm_vehiculos: counts.rtm_vehiculos,
         total_rtm_motos: counts.rtm_motos,
         total_rtm_vehiculos: counts.rtm_vehiculos,
-
-        // Meta y % meta (en cantidad) - será 0 si no tiene cfg
         meta_global_rtm: metaRtm,
         porcentaje_comision_meta: pctMeta,
-
-        // Valores unitarios configurados para RTM
         valor_rtm_moto: valorRtmMoto,
         valor_rtm_vehiculo: valorRtmVehiculo,
-
-        // Facturación calculada
         total_facturacion_motos: totalFacturacionMotos,
         total_facturacion_vehiculos: totalFacturacionVehiculos,
         total_facturacion_global: totalFacturacionGlobal,
@@ -393,12 +408,8 @@ export default class ComisionesController {
     return response.ok({ data: rows })
   }
 
-  // app/controllers/comisiones_controller.ts
-  // REEMPLAZA el método show() (aproximadamente línea 210-250)
-
   /**
    * GET /api/comisiones/:id
-   * Detalle de una comisión REAL con todas sus relaciones
    */
   public async show({ params, response }: HttpContext) {
     const comision = await Comision.query()
@@ -408,21 +419,52 @@ export default class ComisionesController {
       })
       .preload('asesor')
       .preload('convenio')
-      .preload('asesorSecundario') // 👈 NUEVO
+      .preload('asesorSecundario')
       .preload('dateo', (dq) => {
         dq.preload('turno', (tq) => {
           tq.preload('servicio')
+          // 🆕 Cargar tickets con descuento para trazabilidad completa
+          tq.preload('facturacionTickets', (fq) => {
+            fq.whereNotNull('descuento_id')
+              .preload('descuento')
+              .preload('confirmedBy')
+              .preload('autorizadoPor')
+          })
         })
       })
       .first()
 
-    if (!comision) {
-      return response.notFound({ message: 'Comisión no encontrada' })
-    }
+    if (!comision) return response.notFound({ message: 'Comisión no encontrada' })
 
     const dto = mapComisionToDto(comision)
 
-    // Extendemos con campos de detalle
+    const ultimoTurnoId = dto.turno?.ultimo_turno_id ?? null
+    if (ultimoTurnoId && dto.turno) {
+      const ultimoTurno = await TurnoRtm.query()
+        .where('id', ultimoTurnoId)
+        .preload('conductor')
+        .preload('vehiculo')
+        .first()
+
+      if (ultimoTurno) {
+        const conductor = (ultimoTurno as any).$preloaded?.conductor ?? null
+        const vehiculo = (ultimoTurno as any).$preloaded?.vehiculo ?? null
+        const vehiculoDescripcion = vehiculo
+          ? [vehiculo.marca, vehiculo.linea, vehiculo.modelo].filter(Boolean).join(' ') || null
+          : null
+
+        dto.turno.ultima_visita = {
+          placa: (ultimoTurno as any).placa ?? null,
+          conductor_nombre: conductor?.nombre ?? null,
+          vehiculo_descripcion: vehiculoDescripcion,
+          fecha:
+            ultimoTurno.fecha instanceof DateTime
+              ? ultimoTurno.fecha.toISODate()
+              : String(ultimoTurno.fecha).substring(0, 10),
+        }
+      }
+    }
+
     const result = {
       ...dto,
       aprobado_at: null,
@@ -436,101 +478,70 @@ export default class ComisionesController {
 
   /**
    * PATCH /api/comisiones/:id/valores
-   * Actualiza cantidad y valor_unitario (solo si estado = PENDIENTE y no es config)
-   * Aquí asumimos que se está editando el valor del ASESOR (monto).
    */
   public async actualizarValores({ params, request, response }: HttpContext) {
     const comision = await Comision.find(params.id)
 
-    if (!comision || comision.esConfig) {
+    if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
-    }
 
-    if (comision.estado !== 'PENDIENTE') {
+    if (comision.estado !== 'PENDIENTE')
       return response.badRequest({
         message: 'Solo se pueden editar comisiones en estado PENDIENTE',
       })
-    }
 
-    // ✅ Extraer y renombrar
     const { cantidad, valor_unitario: valorUnitario } = request.only(['cantidad', 'valor_unitario'])
     const cant = toNumber(cantidad || 1)
-    const vu = toNumber(valorUnitario || 0) // ✅ Usar variable renombrada
+    const vu = toNumber(valorUnitario || 0)
 
-    // Recalcular monto (asesor)
     comision.monto = String(cant * vu)
     await comision.save()
 
-    // reutilizamos show para devolver el DTO actualizado
     return this.show({ params, response } as any)
   }
 
   /**
    * POST /api/comisiones/:id/aprobar
-   * Cambia estado a APROBADA (solo comisiones reales)
    */
   public async aprobar({ params, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-
-    if (!comision || comision.esConfig) {
+    if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
-    }
-
-    if (comision.estado !== 'PENDIENTE') {
-      return response.badRequest({
-        message: 'Solo se pueden aprobar comisiones PENDIENTES',
-      })
-    }
+    if (comision.estado !== 'PENDIENTE')
+      return response.badRequest({ message: 'Solo se pueden aprobar comisiones PENDIENTES' })
 
     comision.estado = 'APROBADA'
     await comision.save()
-
     return this.show({ params, response } as any)
   }
 
   /**
    * POST /api/comisiones/:id/pagar
-   * Cambia estado a PAGADA (solo comisiones reales)
    */
   public async pagar({ params, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-
-    if (!comision || comision.esConfig) {
+    if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
-    }
-
-    if (comision.estado !== 'APROBADA') {
-      return response.badRequest({
-        message: 'Solo se pueden pagar comisiones APROBADAS',
-      })
-    }
+    if (comision.estado !== 'APROBADA')
+      return response.badRequest({ message: 'Solo se pueden pagar comisiones APROBADAS' })
 
     comision.estado = 'PAGADA'
     await comision.save()
-
     return this.show({ params, response } as any)
   }
 
   /**
    * POST /api/comisiones/:id/anular
-   * Cambia estado a ANULADA (solo comisiones reales)
    */
   public async anular({ params, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-
-    if (!comision || comision.esConfig) {
+    if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
-    }
-
-    if (comision.estado === 'PAGADA') {
-      return response.badRequest({
-        message: 'No se pueden anular comisiones PAGADAS',
-      })
-    }
+    if (comision.estado === 'PAGADA')
+      return response.badRequest({ message: 'No se pueden anular comisiones PAGADAS' })
 
     comision.estado = 'ANULADA'
     await comision.save()
-
     return this.show({ params, response } as any)
   }
 
@@ -540,47 +551,32 @@ export default class ComisionesController {
 
   /**
    * GET /api/comisiones/config
-   * Lista las reglas de configuración (es_config = true)
-   * Filtros opcionales:
-   *  - asesorId
-   *  - tipoVehiculo ('MOTO' | 'VEHICULO')
    */
   public async configsIndex({ request, response }: HttpContext) {
     const asesorId = request.input('asesorId') as number | undefined
     const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
 
     const query = Comision.query().where('es_config', true)
-
-    if (asesorId) {
-      query.where('asesor_id', asesorId)
-    }
-
-    if (tipoVehiculo) {
-      query.where('tipo_vehiculo', tipoVehiculo)
-    }
-
+    if (asesorId) query.where('asesor_id', asesorId)
+    if (tipoVehiculo) query.where('tipo_vehiculo', tipoVehiculo)
     query.orderBy('asesor_id', 'asc').orderBy('tipo_vehiculo', 'asc')
 
     const result = await query
-
-    const rows = result.map((c) => mapConfigToDto(c))
-
-    return response.ok({ data: rows })
+    return response.ok({ data: result.map((c) => mapConfigToDto(c)) })
   }
 
   /**
    * POST /api/comisiones/config
-   * Crea o actualiza (UPSERT) una regla de comisión:
-   *  - combinación (asesor_id, tipo_vehiculo)
-   *
-   * (Reglas de comisión por placa/dateo, NO metas mensuales)
    */
   public async configsUpsert({ request, response }: HttpContext) {
     const payload = request.only([
       'asesor_id',
       'tipo_vehiculo',
       'valor_placa',
+      'valor_placa_vehiculo',
+      'valor_placa_moto',
       'valor_dateo',
+      'valor_nuevo_directo',
       'meta_rtm',
       'porcentaje_comision_meta',
     ])
@@ -589,14 +585,15 @@ export default class ComisionesController {
     const asesorId = asesorIdRaw ? Number(asesorIdRaw) : null
     const tipoVehiculo = (payload.tipo_vehiculo || '').toUpperCase()
 
-    if (!['MOTO', 'VEHICULO'].includes(tipoVehiculo)) {
+    if (!['MOTO', 'VEHICULO'].includes(tipoVehiculo))
       return response.badRequest({ message: 'tipo_vehiculo inválido (MOTO o VEHICULO)' })
-    }
 
     const valorPlaca = Math.max(0, toNumber(payload.valor_placa))
     const valorDateo = Math.max(0, toNumber(payload.valor_dateo))
+    const valorNuevoDirecto = Math.max(0, toNumber(payload.valor_nuevo_directo ?? 0))
+    const valorPlacaVehiculo = parseNullable(payload.valor_placa_vehiculo)
+    const valorPlacaMoto = parseNullable(payload.valor_placa_moto)
 
-    // Buscar si ya existe una regla para (asesorId, tipoVehiculo)
     const existingQuery = Comision.query()
       .where('es_config', true)
       .where('tipo_vehiculo', tipoVehiculo)
@@ -615,162 +612,122 @@ export default class ComisionesController {
       comision.captacionDateoId = null
       comision.asesorId = asesorId
       comision.convenioId = null
-      comision.tipoServicio = 'OTRO' // para reglas no depende del servicio
+      comision.tipoServicio = 'OTRO'
       ;(comision as any).tipoVehiculo = tipoVehiculo
       comision.porcentaje = '0'
       comision.estado = 'PENDIENTE'
       comision.fechaCalculo = DateTime.now()
       comision.metaRtm = 0
       comision.porcentajeComisionMeta = '0'
-      // valores RTM no aplican aquí, se quedan en 0
       comision.valorRtmMoto = 0
       comision.valorRtmVehiculo = 0
     }
 
-    comision.base = String(valorPlaca) // placa
-    comision.monto = String(valorDateo) // dateo
+    comision.base = String(valorPlaca)
+    comision.monto = String(valorDateo)
+    comision.valorNuevoDirecto = String(valorNuevoDirecto)
+    comision.valorPlacaVehiculo = valorPlacaVehiculo !== null ? String(valorPlacaVehiculo) : null
+    comision.valorPlacaMoto = valorPlacaMoto !== null ? String(valorPlacaMoto) : null
 
-    // Meta y % de comisión de meta (si vienen)
-    if (payload.meta_rtm !== undefined) {
-      comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
-    }
-    if (payload.porcentaje_comision_meta !== undefined) {
+    if (payload.meta_rtm !== undefined) comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
+    if (payload.porcentaje_comision_meta !== undefined)
       comision.porcentajeComisionMeta = String(
         Math.max(0, toNumber(payload.porcentaje_comision_meta))
       )
-    }
 
     await comision.save()
-
     return response.ok(mapConfigToDto(comision))
   }
 
   /**
    * PATCH /api/comisiones/config/:id
-   * Edita una regla existente (solo es_config = true)
    */
   public async configsUpdate({ params, request, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-
-    if (!comision || !comision.esConfig) {
+    if (!comision || !comision.esConfig)
       return response.notFound({ message: 'Configuración no encontrada' })
-    }
 
     const payload = request.only([
       'asesor_id',
       'tipo_vehiculo',
       'valor_placa',
+      'valor_placa_vehiculo',
+      'valor_placa_moto',
       'valor_dateo',
+      'valor_nuevo_directo',
       'meta_rtm',
       'porcentaje_comision_meta',
     ])
 
-    if (payload.asesor_id !== undefined) {
-      const asesorIdRaw = payload.asesor_id
-      comision.asesorId = asesorIdRaw ? Number(asesorIdRaw) : null
-    }
+    if (payload.asesor_id !== undefined)
+      comision.asesorId = payload.asesor_id ? Number(payload.asesor_id) : null
 
     if (payload.tipo_vehiculo) {
       const tipoVehiculo = String(payload.tipo_vehiculo).toUpperCase()
-      if (!['MOTO', 'VEHICULO'].includes(tipoVehiculo)) {
+      if (!['MOTO', 'VEHICULO'].includes(tipoVehiculo))
         return response.badRequest({ message: 'tipo_vehiculo inválido (MOTO o VEHICULO)' })
-      }
       ;(comision as any).tipoVehiculo = tipoVehiculo
     }
 
-    if (payload.valor_placa !== undefined) {
+    if (payload.valor_placa !== undefined)
       comision.base = String(Math.max(0, toNumber(payload.valor_placa)))
-    }
 
-    if (payload.valor_dateo !== undefined) {
+    if (payload.valor_dateo !== undefined)
       comision.monto = String(Math.max(0, toNumber(payload.valor_dateo)))
+
+    if (payload.valor_nuevo_directo !== undefined)
+      comision.valorNuevoDirecto = String(Math.max(0, toNumber(payload.valor_nuevo_directo)))
+
+    if (payload.valor_placa_vehiculo !== undefined) {
+      const v = parseNullable(payload.valor_placa_vehiculo)
+      comision.valorPlacaVehiculo = v !== null ? String(v) : null
     }
 
-    if (payload.meta_rtm !== undefined) {
-      comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
+    if (payload.valor_placa_moto !== undefined) {
+      const v = parseNullable(payload.valor_placa_moto)
+      comision.valorPlacaMoto = v !== null ? String(v) : null
     }
 
-    if (payload.porcentaje_comision_meta !== undefined) {
+    if (payload.meta_rtm !== undefined) comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
+
+    if (payload.porcentaje_comision_meta !== undefined)
       comision.porcentajeComisionMeta = String(
         Math.max(0, toNumber(payload.porcentaje_comision_meta))
       )
-    }
 
     await comision.save()
-
     return response.ok(mapConfigToDto(comision))
   }
 
   /**
    * DELETE /api/comisiones/config/:id
-   * Elimina una regla de configuración (solo es_config = true)
    */
   public async configsDestroy({ params, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-
-    if (!comision || !comision.esConfig) {
+    if (!comision || !comision.esConfig)
       return response.notFound({ message: 'Configuración no encontrada' })
-    }
 
     await comision.delete()
-
     return response.ok({ message: 'Configuración eliminada correctamente' })
   }
 
   /* ============================================================
-   *          NUEVA SECCIÓN: CRUD DE METAS MENSUALES
-   *          usando la MISMA tabla comisiones (es_config = true)
+   *          METAS MENSUALES
    * ============================================================*/
 
-  /**
-   * GET /api/comisiones/metas
-   * Lista metas mensuales configuradas.
-   * Filtros opcionales:
-   *  - asesorId
-   *  - tipoVehiculo ('MOTO' | 'VEHICULO' | null para global)
-   *
-   * Usa:
-   *  - meta_rtm                 → meta_mensual
-   *  - porcentaje_comision_meta → porcentaje_extra
-   *  - valor_rtm_moto           → valor_rtm_moto
-   *  - valor_rtm_vehiculo       → valor_rtm_vehiculo
-   */
   public async metasIndex({ request, response }: HttpContext) {
     const asesorId = request.input('asesorId') as number | undefined
     const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
 
     const q = Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
-
-    if (asesorId) {
-      q.where('asesor_id', asesorId)
-    }
-
-    if (tipoVehiculo) {
-      q.where('tipo_vehiculo', tipoVehiculo)
-    }
-
+    if (asesorId) q.where('asesor_id', asesorId)
+    if (tipoVehiculo) q.where('tipo_vehiculo', tipoVehiculo)
     q.orderBy('asesor_id', 'asc').orderBy('tipo_vehiculo', 'asc')
 
     const rows = await q
-
-    return response.ok({
-      data: rows.map((c) => mapMetaToDto(c)),
-    })
+    return response.ok({ data: rows.map((c) => mapMetaToDto(c)) })
   }
 
-  /**
-   * POST /api/comisiones/metas
-   * Crea o actualiza (UPSERT) una meta mensual:
-   *  combinación (asesor_id, tipo_vehiculo) en la MISMA tabla comisiones.
-   *
-   * Body esperado:
-   *  - asesor_id
-   *  - tipo_vehiculo ('MOTO' | 'VEHICULO' | null/'' para Global)
-   *  - meta_mensual
-   *  - porcentaje_extra
-   *  - valor_rtm_moto
-   *  - valor_rtm_vehiculo
-   */
   public async metasUpsert({ request, response }: HttpContext) {
     const payload = request.only([
       'asesor_id',
@@ -788,11 +745,10 @@ export default class ComisionesController {
     let tipoVehiculo: string | null = null
     if (rawTipo !== undefined && rawTipo !== null && String(rawTipo).trim() !== '') {
       const tv = String(rawTipo).toUpperCase()
-      if (!['MOTO', 'VEHICULO'].includes(tv)) {
+      if (!['MOTO', 'VEHICULO'].includes(tv))
         return response.badRequest({
           message: 'tipo_vehiculo inválido (MOTO o VEHICULO o vacío para Global)',
         })
-      }
       tipoVehiculo = tv
     }
 
@@ -802,18 +758,10 @@ export default class ComisionesController {
     const valorRtmVehiculo = Math.max(0, toNumber(payload.valor_rtm_vehiculo))
 
     const existingQuery = Comision.query().where('es_config', true)
-
-    if (tipoVehiculo === null) {
-      existingQuery.whereNull('tipo_vehiculo')
-    } else {
-      existingQuery.where('tipo_vehiculo', tipoVehiculo)
-    }
-
-    if (asesorId === null) {
-      existingQuery.whereNull('asesor_id')
-    } else {
-      existingQuery.where('asesor_id', asesorId)
-    }
+    if (tipoVehiculo === null) existingQuery.whereNull('tipo_vehiculo')
+    else existingQuery.where('tipo_vehiculo', tipoVehiculo)
+    if (asesorId === null) existingQuery.whereNull('asesor_id')
+    else existingQuery.where('asesor_id', asesorId)
 
     let comision = await existingQuery.first()
 
@@ -827,6 +775,9 @@ export default class ComisionesController {
       ;(comision as any).tipoVehiculo = tipoVehiculo
       comision.base = '0'
       comision.monto = '0'
+      comision.valorNuevoDirecto = '0'
+      comision.valorPlacaVehiculo = null
+      comision.valorPlacaMoto = null
       comision.porcentaje = '0'
       comision.estado = 'PENDIENTE'
       comision.fechaCalculo = DateTime.now()
@@ -842,20 +793,13 @@ export default class ComisionesController {
     comision.valorRtmVehiculo = valorRtmVehiculo
 
     await comision.save()
-
     return response.ok(mapMetaToDto(comision))
   }
 
-  /**
-   * PATCH /api/comisiones/metas/:id
-   * Actualiza una meta existente (fila es_config = true).
-   */
   public async metasUpdate({ params, request, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-
-    if (!comision || !comision.esConfig) {
+    if (!comision || !comision.esConfig)
       return response.notFound({ message: 'Meta mensual no encontrada' })
-    }
 
     const payload = request.only([
       'asesor_id',
@@ -866,103 +810,96 @@ export default class ComisionesController {
       'valor_rtm_vehiculo',
     ])
 
-    if (payload.asesor_id !== undefined) {
-      const asesorIdRaw = payload.asesor_id
-      comision.asesorId = asesorIdRaw ? Number(asesorIdRaw) : null
-    }
+    if (payload.asesor_id !== undefined)
+      comision.asesorId = payload.asesor_id ? Number(payload.asesor_id) : null
 
     if (payload.tipo_vehiculo !== undefined) {
       const rawTipo = payload.tipo_vehiculo
       if (rawTipo === null || String(rawTipo).trim() === '') {
-        // Global
         ;(comision as any).tipoVehiculo = null
       } else {
         const tv = String(rawTipo).toUpperCase()
-        if (!['MOTO', 'VEHICULO'].includes(tv)) {
+        if (!['MOTO', 'VEHICULO'].includes(tv))
           return response.badRequest({
             message: 'tipo_vehiculo inválido (MOTO o VEHICULO o vacío para Global)',
           })
-        }
         ;(comision as any).tipoVehiculo = tv
       }
     }
 
-    if (payload.meta_mensual !== undefined) {
+    if (payload.meta_mensual !== undefined)
       comision.metaRtm = Math.max(0, toNumber(payload.meta_mensual))
-    }
-
-    if (payload.porcentaje_extra !== undefined) {
+    if (payload.porcentaje_extra !== undefined)
       comision.porcentajeComisionMeta = String(Math.max(0, toNumber(payload.porcentaje_extra)))
-    }
-
-    if (payload.valor_rtm_moto !== undefined) {
+    if (payload.valor_rtm_moto !== undefined)
       comision.valorRtmMoto = Math.max(0, toNumber(payload.valor_rtm_moto))
-    }
-
-    if (payload.valor_rtm_vehiculo !== undefined) {
+    if (payload.valor_rtm_vehiculo !== undefined)
       comision.valorRtmVehiculo = Math.max(0, toNumber(payload.valor_rtm_vehiculo))
-    }
 
     await comision.save()
-
     return response.ok(mapMetaToDto(comision))
   }
 
-  /**
-   * DELETE /api/comisiones/metas/:id
-   * Elimina una meta mensual (fila de configuración).
-   */
   public async metasDestroy({ params, response }: HttpContext) {
     const comision = await Comision.find(params.id)
-    if (!comision || !comision.esConfig) {
+    if (!comision || !comision.esConfig)
       return response.notFound({ message: 'Meta mensual no encontrada' })
-    }
-
     await comision.delete()
-
     return response.ok({ success: true })
   }
 
   /* ============================================================
-   *   CONFIGURACIÓN DE RECURRENCIAS (NUEVO)
+   *   CONFIGURACIÓN DE RECURRENCIAS
    * ============================================================*/
 
-  /**
-   * GET /api/comisiones/recurrencia/config/global
-   * Obtiene la configuración global de recurrencias
-   */
   public async recurrenciaConfigGlobalGet({ response }: HttpContext) {
     const { default: ConfiguracionRecurrenciaGlobal } = await import(
       '#models/configuracion_recurrencia_global'
     )
 
     let config = await ConfiguracionRecurrenciaGlobal.query().first()
-
     if (!config) {
       config = await ConfiguracionRecurrenciaGlobal.create({
         mesesMinimos: 24,
         valorDateoRecurrencia: 4300,
-      })
+        valorDateoRecuperacion: 8600,
+      } as any)
     }
 
     return response.ok({
       meses_minimos: config.mesesMinimos,
       valor_dateo_recurrencia: config.valorDateoRecurrencia,
+      valor_dateo_recuperacion: config.valorDateoRecuperacion ?? 8600,
+      valor_dateo_recurrencia_vehiculo: (config as any).valorDateoRecurrenciaVehiculo ?? null,
+      valor_dateo_recurrencia_moto: (config as any).valorDateoRecurrenciaMoto ?? null,
+      valor_dateo_recuperacion_vehiculo: (config as any).valorDateoRecuperacionVehiculo ?? null,
+      valor_dateo_recuperacion_moto: (config as any).valorDateoRecuperacionMoto ?? null,
     })
   }
 
-  /**
-   * POST /api/comisiones/recurrencia/config/global
-   */
   public async recurrenciaConfigGlobalUpsert({ request, response }: HttpContext) {
     const { default: ConfiguracionRecurrenciaGlobal } = await import(
       '#models/configuracion_recurrencia_global'
     )
 
-    const payload = request.only(['meses_minimos', 'valor_dateo_recurrencia'])
+    const payload = request.only([
+      'meses_minimos',
+      'valor_dateo_recurrencia',
+      'valor_dateo_recuperacion',
+      'valor_dateo_recurrencia_vehiculo',
+      'valor_dateo_recurrencia_moto',
+      'valor_dateo_recuperacion_vehiculo',
+      'valor_dateo_recuperacion_moto',
+    ])
 
     const mesesMinimos = Math.max(1, toNumber(payload.meses_minimos))
     const valorDateoRecurrencia = Math.max(0, toNumber(payload.valor_dateo_recurrencia))
+    const valorDateoRecuperacion = Math.max(0, toNumber(payload.valor_dateo_recuperacion ?? 8600))
+
+    const valorDateoRecurrenciaVehiculo = parseNullable(payload.valor_dateo_recurrencia_vehiculo)
+    const valorDateoRecurrenciaMoto = parseNullable(payload.valor_dateo_recurrencia_moto)
+    const valorDateoRecuperacionVehiculo = parseNullable(payload.valor_dateo_recuperacion_vehiculo)
+    const valorDateoRecuperacionMoto = parseNullable(payload.valor_dateo_recuperacion_moto)
 
     let config = await ConfiguracionRecurrenciaGlobal.query().first()
 
@@ -970,40 +907,46 @@ export default class ComisionesController {
       config = await ConfiguracionRecurrenciaGlobal.create({
         mesesMinimos,
         valorDateoRecurrencia,
-      })
+        valorDateoRecuperacion,
+        valorDateoRecurrenciaVehiculo,
+        valorDateoRecurrenciaMoto,
+        valorDateoRecuperacionVehiculo,
+        valorDateoRecuperacionMoto,
+      } as any)
     } else {
       config.mesesMinimos = mesesMinimos
       config.valorDateoRecurrencia = valorDateoRecurrencia
+      config.valorDateoRecuperacion = valorDateoRecuperacion
+      config.valorDateoRecurrenciaVehiculo = valorDateoRecurrenciaVehiculo
+      config.valorDateoRecurrenciaMoto = valorDateoRecurrenciaMoto
+      config.valorDateoRecuperacionVehiculo = valorDateoRecuperacionVehiculo
+      config.valorDateoRecuperacionMoto = valorDateoRecuperacionMoto
       await config.save()
     }
 
     return response.ok({
       meses_minimos: config.mesesMinimos,
       valor_dateo_recurrencia: config.valorDateoRecurrencia,
+      valor_dateo_recuperacion: config.valorDateoRecuperacion,
+      valor_dateo_recurrencia_vehiculo: (config as any).valorDateoRecurrenciaVehiculo ?? null,
+      valor_dateo_recurrencia_moto: (config as any).valorDateoRecurrenciaMoto ?? null,
+      valor_dateo_recuperacion_vehiculo: (config as any).valorDateoRecuperacionVehiculo ?? null,
+      valor_dateo_recuperacion_moto: (config as any).valorDateoRecuperacionMoto ?? null,
     })
   }
 
-  /**
-   * GET /api/comisiones/recurrencia/config/asesores
-   */
   public async recurrenciaConfigAsesoresIndex({ request, response }: HttpContext) {
     const { default: ConfiguracionRecurrenciaAsesor } = await import(
       '#models/configuracion_recurrencia_asesor'
     )
 
     const asesorId = request.input('asesorId') as number | undefined
-
     const query = ConfiguracionRecurrenciaAsesor.query().preload('asesor')
-
-    if (asesorId) {
-      query.where('asesor_id', asesorId)
-    }
+    if (asesorId) query.where('asesor_id', asesorId)
 
     const configs = await query
-
     const data = configs.map((c) => {
       const asesor = (c as any).$preloaded?.asesor || null
-
       return {
         id: c.id,
         asesor_id: c.asesorId,
@@ -1011,6 +954,7 @@ export default class ComisionesController {
         recurrencia_habilitada: c.recurrenciaHabilitada,
         meses_minimos: c.mesesMinimos,
         valor_dateo_recurrencia: c.valorDateoRecurrencia,
+        valor_dateo_recuperacion: c.valorDateoRecuperacion,
         tipo_vehiculo: c.tipoVehiculo,
       }
     })
@@ -1018,9 +962,6 @@ export default class ComisionesController {
     return response.ok({ data })
   }
 
-  /**
-   * POST /api/comisiones/recurrencia/config/asesores
-   */
   public async recurrenciaConfigAsesoresUpsert({ request, response }: HttpContext) {
     const { default: ConfiguracionRecurrenciaAsesor } = await import(
       '#models/configuracion_recurrencia_asesor'
@@ -1031,31 +972,27 @@ export default class ComisionesController {
       'recurrencia_habilitada',
       'meses_minimos',
       'valor_dateo_recurrencia',
+      'valor_dateo_recuperacion',
       'tipo_vehiculo',
     ])
 
     const asesorId = Number(payload.asesor_id)
-    if (!asesorId) {
-      return response.badRequest({ message: 'asesor_id es requerido' })
-    }
+    if (!asesorId) return response.badRequest({ message: 'asesor_id es requerido' })
 
     const recurrenciaHabilitada = Boolean(payload.recurrencia_habilitada)
     const mesesMinimos =
-      payload.meses_minimos !== undefined && payload.meses_minimos !== null
-        ? Math.max(1, toNumber(payload.meses_minimos))
-        : null
-
+      payload.meses_minimos !== null ? Math.max(1, toNumber(payload.meses_minimos)) : null
     const valorDateoRecurrencia =
-      payload.valor_dateo_recurrencia !== undefined && payload.valor_dateo_recurrencia !== null
+      payload.valor_dateo_recurrencia !== null
         ? Math.max(0, toNumber(payload.valor_dateo_recurrencia))
         : null
-
+    const valorDateoRecuperacion =
+      payload.valor_dateo_recuperacion !== null
+        ? Math.max(0, toNumber(payload.valor_dateo_recuperacion))
+        : null
     const tipoVehiculo = String(payload.tipo_vehiculo || 'AMBOS').toUpperCase()
-    if (!['MOTO', 'VEHICULO', 'AMBOS'].includes(tipoVehiculo)) {
-      return response.badRequest({
-        message: 'tipo_vehiculo debe ser MOTO, VEHICULO o AMBOS',
-      })
-    }
+    if (!['MOTO', 'VEHICULO', 'AMBOS'].includes(tipoVehiculo))
+      return response.badRequest({ message: 'tipo_vehiculo debe ser MOTO, VEHICULO o AMBOS' })
 
     let config = await ConfiguracionRecurrenciaAsesor.query()
       .where('asesor_id', asesorId)
@@ -1068,12 +1005,14 @@ export default class ComisionesController {
         recurrenciaHabilitada,
         mesesMinimos,
         valorDateoRecurrencia,
+        valorDateoRecuperacion,
         tipoVehiculo: tipoVehiculo as any,
       })
     } else {
       config.recurrenciaHabilitada = recurrenciaHabilitada
       config.mesesMinimos = mesesMinimos
       config.valorDateoRecurrencia = valorDateoRecurrencia
+      config.valorDateoRecuperacion = valorDateoRecuperacion
       await config.save()
     }
 
@@ -1087,26 +1026,20 @@ export default class ComisionesController {
       recurrencia_habilitada: config.recurrenciaHabilitada,
       meses_minimos: config.mesesMinimos,
       valor_dateo_recurrencia: config.valorDateoRecurrencia,
+      valor_dateo_recuperacion: config.valorDateoRecuperacion,
       tipo_vehiculo: config.tipoVehiculo,
     })
   }
 
-  /**
-   * DELETE /api/comisiones/recurrencia/config/asesores/:id
-   */
   public async recurrenciaConfigAsesoresDelete({ params, response }: HttpContext) {
     const { default: ConfiguracionRecurrenciaAsesor } = await import(
       '#models/configuracion_recurrencia_asesor'
     )
 
     const config = await ConfiguracionRecurrenciaAsesor.find(params.id)
-
-    if (!config) {
-      return response.notFound({ message: 'Configuración no encontrada' })
-    }
+    if (!config) return response.notFound({ message: 'Configuración no encontrada' })
 
     await config.delete()
-
     return response.ok({ message: 'Configuración eliminada correctamente' })
   }
 }

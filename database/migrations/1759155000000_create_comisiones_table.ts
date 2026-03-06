@@ -49,9 +49,19 @@ export default class extends BaseSchema {
         })
         .nullable()
 
+      // base = incentivo convenio / comisión por placa (FALLBACK GLOBAL)
       table.decimal('base', 12, 2).notNullable().defaultTo(0)
       table.decimal('porcentaje', 5, 2).notNullable().defaultTo(0)
+
+      // monto = dateo cliente nuevo (via convenio $8.600) o dateo recurrente/recuperacion
       table.decimal('monto', 12, 2).notNullable().defaultTo(0)
+
+      // valor_nuevo_directo = cuando comercial trae cliente SIN convenio ($17.200)
+      table.decimal('valor_nuevo_directo', 12, 2).notNullable().defaultTo(0)
+
+      // 🆕 Incentivos específicos por tipo de vehículo (null = usa `base` como fallback)
+      table.decimal('valor_placa_vehiculo', 12, 2).nullable().defaultTo(null)
+      table.decimal('valor_placa_moto', 12, 2).nullable().defaultTo(null)
 
       // ========== 💰 DESGLOSE INTERNO ==========
       table.decimal('monto_asesor', 12, 2).nullable()
@@ -64,7 +74,7 @@ export default class extends BaseSchema {
         .inTable('agentes_captacions')
         .onDelete('SET NULL')
 
-      // ========== 🔄 CAMPOS DE RECURRENCIA (NUEVO) ==========
+      // ========== 🔄 CAMPOS DE RECURRENCIA ==========
       table.boolean('descuento_recurrencia_aplicado').notNullable().defaultTo(false)
       table
         .enu('tipo_descuento_recurrencia', ['PORCENTAJE', 'VALOR_FIJO'], {
@@ -111,7 +121,7 @@ export default class extends BaseSchema {
       table.index(['fecha_calculo'])
       table.index(['es_config'])
       table.index(['tipo_vehiculo', 'es_config'])
-      table.index(['descuento_recurrencia_aplicado']) // 👈 NUEVO
+      table.index(['descuento_recurrencia_aplicado'])
     })
   }
 

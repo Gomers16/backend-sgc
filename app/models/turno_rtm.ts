@@ -155,10 +155,21 @@ export default class TurnoRtm extends BaseModel {
   @column()
   declare estado: EstadoTurno
 
-  // ── 🆕 Campos de recurrencia
-  // ¿Esta visita es de un cliente/conductor que ya vino antes con 24+ meses de diferencia?
+  // ── 🆕 Campos de recurrencia y recuperación
+  /**
+   * 🔄 RECURRENTE: el cliente vino hace MENOS de mesesMinimos (ej. < 24 meses)
+   * → Comisión reducida (valor_dateo_recurrencia, ej. $4,300)
+   */
   @column({ columnName: 'es_recurrente' })
   declare esRecurrente: boolean
+
+  /**
+   * 💛 RECUPERACIÓN: el cliente vino hace MÁS de mesesMinimos (ej. >= 24 meses)
+   * → Ya estaba en la base pero tardó mucho en regresar
+   * → Comisión intermedia (valor_dateo_recuperacion, ej. $8,600)
+   */
+  @column({ columnName: 'es_recuperacion' })
+  declare esRecuperacion: boolean
 
   // Cuántos meses pasaron desde la última visita de este cliente/conductor
   @column({ columnName: 'meses_desde_ultima_visita' })

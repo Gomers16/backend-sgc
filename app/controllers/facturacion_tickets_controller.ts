@@ -1,4 +1,4 @@
-// app/controllers/facturacion_tickets_controller.ts
+// app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 1/4
 import type { HttpContext } from '@adonisjs/core/http'
 import { cuid } from '@adonisjs/core/helpers'
 import app from '@adonisjs/core/services/app'
@@ -13,6 +13,7 @@ import CaptacionDateo from '#models/captacion_dateo'
 import TurnoRtm from '#models/turno_rtm'
 import Servicio from '#models/servicio'
 import Comision from '#models/comision'
+import Descuento from '#models/descuento' // 🆕
 
 /** Carpeta para subir tickets (local). */
 const UPLOAD_BASE_DIR = app.makePath('uploads/tickets')
@@ -120,6 +121,15 @@ interface ComisionLiteDTO {
   convenio?: { id: number; nombre: string } | null
 }
 
+// 🆕 Descuento aplicado en ticket
+interface DescuentoAplicadoDTO {
+  id: number
+  codigo: string
+  nombre: string
+  montoAplicado: number
+  autorizadoPor: { id: number; nombre: string } | null
+}
+
 interface TicketDTO {
   id: number
   estado: FactEstado
@@ -137,6 +147,7 @@ interface TicketDTO {
   subtotal: number | null
   iva: number | null
   totalFactura: number | null
+  totalSinDescuento: number | null
   vendedorText: string | null
   prefijo: string | null
   consecutivo: string | null
@@ -163,11 +174,19 @@ interface TicketDTO {
   canalAtribucion: string | null
   medioEntero: string | null
 
+  confirmadoAt?: string | null
+  confirmedById?: number | null
+
   turno: TurnoDTO | null
   dateo: DateoDTO | null
 
   comisiones?: ComisionLiteDTO[]
+
+  // 🆕
+  descuentoAplicado?: DescuentoAplicadoDTO | null
+  confirmedBy?: { id: number; nombres?: string | null; apellidos?: string | null } | null
 }
+
 /* ============================== Controlador ============================== */
 
 export default class FacturacionTicketsController {
@@ -214,18 +233,18 @@ export default class FacturacionTicketsController {
       placa: t.placa ?? null,
       fecha_pago: t.fechaPago ?? null,
       total_factura: t.totalFactura ?? t.total ?? null,
-
       servicio_nombre: t.servicioNombre ?? null,
       sede_nombre: t.sedeNombre ?? null,
       vendedor_text: t.vendedorText ?? null,
-
       nit: t.nit ?? null,
       pin: t.pin ?? null,
       marca: t.marca ?? null,
-
       canal_atribucion: t.canalAtribucion ?? null,
       agente_comercial_nombre: t.agenteComercialNombre ?? null,
       convenio_nombre: t.convenioNombre ?? null,
+      // 🆕
+      descuento_id: t.descuentoId ?? null,
+      descuento_monto_aplicado: t.descuentoMontoAplicado ?? null,
     }))
 
     return { meta, data: rows }
@@ -248,7 +267,11 @@ export default class FacturacionTicketsController {
             cq.preload('agente').preload('asesorConvenio').preload('convenio')
           )
       })
-      .first()
+      // 🆕
+      .preload('descuento')
+      .preload('autorizadoPor')
+      .preload('confirmedBy')
+      .firstOrFail()
 
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
     const dto = await this.getTicketDTOById(ticket.id)
@@ -286,8 +309,6 @@ export default class FacturacionTicketsController {
 
   /**
    * POST /facturacion/tickets
-   * Sube archivo + metadatos (turno_id, dateo_id, sede_id, servicio_id).
-   * Completa placa/agente/sede/servicio desde dateo/turno y persiste snapshots.
    */
   public async store({ request, auth, response }: HttpContext) {
     const file = request.file('archivo', { size: '8mb', extnames: ['jpg', 'jpeg', 'png'] })
@@ -297,22 +318,17 @@ export default class FacturacionTicketsController {
     const buffer = await fs.readFile(file.tmpPath!)
     const hash = digestSHA256(buffer)
 
-    // === OBTENER servicioId PRIMERO para detectar si es servicio simplificado ===
     const turnoId = toIntOrNull(request.input('turno_id'))
     const dateoId = toIntOrNull(request.input('dateo_id'))
     const sedeId = toIntOrNull(request.input('sede_id'))
     const servicioId = toIntOrNull(request.input('servicio_id'))
 
-    // === DETECTAR SI ES SERVICIO SIMPLIFICADO (SOAT/PREV/PERI) ===
     let esServicioSimplificado = false
     if (servicioId) {
       const s = await Servicio.find(servicioId)
-      if (s) {
-        esServicioSimplificado = isSOAT(s.codigoServicio, s.nombreServicio)
-      }
+      if (s) esServicioSimplificado = isSOAT(s.codigoServicio, s.nombreServicio)
     }
 
-    // === VALIDAR HASH DUPLICADO SOLO SI NO ES SERVICIO SIMPLIFICADO ===
     if (!esServicioSimplificado) {
       const dup = await FacturacionTicket.findBy('hash', hash)
       if (dup) {
@@ -334,7 +350,7 @@ export default class FacturacionTicketsController {
     const ticket = new FacturacionTicket()
     ticket.hash = hash
     ticket.filePath = filePath.replace(app.makePath(), '')
-    ticket.fileMime = file.type ?? null // 👈 Cambia esto
+    ticket.fileMime = file.type ?? null
     ticket.fileSize = buffer.length
     ticket.imageRotation = imageRotation
     ticket.estado = 'BORRADOR'
@@ -345,7 +361,6 @@ export default class FacturacionTicketsController {
     ticket.sedeId = sedeId
     ticket.servicioId = servicioId
 
-    // === ESTABLECER CAMPOS DE SERVICIO (la detección ya se hizo arriba) ===
     if (servicioId && esServicioSimplificado) {
       const s = await Servicio.find(servicioId)
       if (s) {
@@ -363,13 +378,10 @@ export default class FacturacionTicketsController {
         .first()
 
       if (dateo) {
-        if (!ticket.placa && (dateo.placa || '').trim()) {
+        if (!ticket.placa && (dateo.placa || '').trim())
           ticket.placa = (dateo.placa || '').toUpperCase().replace(/\s+/g, '')
-        }
         ticket.agenteId = dateo.agenteId ?? ticket.agenteId ?? null
         ticket.captacionCanal = dateo.canal ?? null
-
-        // 👇 Opción 1: Type assertion inline
         ticket.agenteComercialNombre = (dateo.agente as any)?.nombre ?? null
         ticket.asesorConvenioNombre = (dateo.asesorConvenio as any)?.nombre ?? null
         ticket.convenioNombre = (dateo.convenio as any)?.nombre ?? null
@@ -388,9 +400,8 @@ export default class FacturacionTicketsController {
 
     if (turno) {
       const turnSnap = turno as unknown as TurnoSnapshotReadable
-      if (!ticket.placa && (turnSnap.placa || '').trim()) {
+      if (!ticket.placa && (turnSnap.placa || '').trim())
         ticket.placa = (turnSnap.placa || '').toUpperCase().replace(/\s+/g, '')
-      }
       ticket.sedeId = ticket.sedeId || turnSnap.sedeId || null
       ticket.agenteId = ticket.agenteId || turnSnap.agenteCaptacionId || null
       ticket.servicioId = ticket.servicioId || turnSnap.servicioId || null
@@ -412,11 +423,8 @@ export default class FacturacionTicketsController {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
-    // === NO HACER OCR SI ES SOAT/PREV/PERI ===
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
-    if (esSOAT) {
-      return response.ok({ message: 'Servicio simplificado no requiere OCR', ticket })
-    }
+    if (esSOAT) return response.ok({ message: 'Servicio simplificado no requiere OCR', ticket })
 
     const res = fakeOCR()
     ticket.ocrText = res.text
@@ -431,14 +439,13 @@ export default class FacturacionTicketsController {
       ticket.totalFactura = res.total
     }
     if (res.fechaHora) ticket.fechaPago = DateTime.fromISO(res.fechaHora)
-
     if (ticket.estado === 'BORRADOR') ticket.estado = 'OCR_LISTO'
 
     await ticket.save()
     return ticket
   }
+  // app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 2/4
 
-  /** PATCH /facturacion/tickets/:id */
   /** PATCH /facturacion/tickets/:id */
   public async update({ params, request, response }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
@@ -476,9 +483,13 @@ export default class FacturacionTicketsController {
       'dateo_id',
       'vendedor',
       'ocr_campos',
+      // 🆕
+      'descuento_id',
+      'autorizado_por_id',
+      'descuento_monto_aplicado',
+      'total_sin_descuento',
     ]) as Record<string, unknown>
 
-    // === DETECTAR SI ES SOAT/PREV/PERI ===
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
 
     if ('placa' in up)
@@ -487,17 +498,13 @@ export default class FacturacionTicketsController {
         .replace(/\s+/g, '')
     if ('total' in up) ticket.total = toNumberOrZero(up.total)
 
-    // 🔥 CORRECCIÓN: Validar que el DateTime sea válido antes de asignar
     if ('fecha_pago' in up) {
       if (up.fecha_pago) {
         const dt = DateTime.fromISO(String(up.fecha_pago))
         if (dt.isValid) {
           ticket.fechaPago = dt
         } else {
-          return response.badRequest({
-            message: 'Fecha de pago inválida',
-            detalles: 'El formato de fecha proporcionado no es válido',
-          })
+          return response.badRequest({ message: 'Fecha de pago inválida' })
         }
       } else {
         ticket.fechaPago = null
@@ -523,25 +530,63 @@ export default class FacturacionTicketsController {
     if ('pin' in up) ticket.pin = nullIfEmpty(String(up.pin))
     if ('marca' in up) ticket.marca = nullIfEmpty(String(up.marca))
     if ('vendedor_text' in up) ticket.vendedorText = nullIfEmpty(String(up.vendedor_text))
-    if ('vendedor' in up && up.vendedor !== undefined && up.vendedor !== null) {
+    if ('vendedor' in up && up.vendedor !== undefined && up.vendedor !== null)
       ticket.vendedorText = nullIfEmpty(String(up.vendedor))
-    }
 
     if ('subtotal' in up) ticket.subtotal = toNumberOrZero(up.subtotal)
     if ('iva' in up) ticket.iva = toNumberOrZero(up.iva)
     if ('total_factura' in up) ticket.totalFactura = toNumberOrZero(up.total_factura)
-
     if ('pago_consignacion' in up) ticket.pagoConsignacion = toNumberOrZero(up.pago_consignacion)
     if ('pago_tarjeta' in up) ticket.pagoTarjeta = toNumberOrZero(up.pago_tarjeta)
     if ('pago_efectivo' in up) ticket.pagoEfectivo = toNumberOrZero(up.pago_efectivo)
     if ('pago_cambio' in up) ticket.pagoCambio = toNumberOrZero(up.pago_cambio)
+
+    // 🆕 Descuento informativo aplicado en caja
+    if ('descuento_id' in up) {
+      const dId = toIntOrNull(up.descuento_id)
+      if (dId === null) {
+        ticket.descuentoId = null
+        ticket.descuentoMontoAplicado = null
+        ticket.autorizadoPorId = null
+      } else {
+        const descuentoExiste = await Descuento.query()
+          .where('id', dId)
+          .where('activo', true)
+          .first()
+        if (!descuentoExiste) {
+          return response.badRequest({ message: 'descuento_id no existe o está inactivo' })
+        }
+        ticket.descuentoId = dId
+      }
+    }
+    if ('autorizado_por_id' in up) ticket.autorizadoPorId = toIntOrNull(up.autorizado_por_id)
+    if ('descuento_monto_aplicado' in up) {
+      ticket.descuentoMontoAplicado =
+        up.descuento_monto_aplicado !== null && up.descuento_monto_aplicado !== undefined
+          ? toNumberOrZero(up.descuento_monto_aplicado)
+          : null
+    }
+
+    // Recalcular total con descuento aplicado
+    // Guardar total original y calcular total con descuento
+    if (ticket.descuentoMontoAplicado && ticket.descuentoMontoAplicado > 0) {
+      const totalBase = ticket.totalFactura || ticket.total || 0
+      if (!ticket.totalSinDescuento && totalBase > 0) {
+        ticket.totalSinDescuento = totalBase
+      }
+      const totalConDescuento = Math.max(
+        0,
+        (ticket.totalSinDescuento || totalBase) - ticket.descuentoMontoAplicado
+      )
+      ticket.totalFactura = totalConDescuento
+      ticket.total = totalConDescuento
+    }
 
     if (up.ocr_campos && typeof up.ocr_campos === 'object') {
       const c = up.ocr_campos as any
       if (c.vendedor) ticket.vendedorText = ticket.vendedorText ?? String(c.vendedor)
       if (c.prefijo) ticket.prefijo = ticket.prefijo ?? String(c.prefijo)
       if (c.consecutivo) ticket.consecutivo = ticket.consecutivo ?? String(c.consecutivo)
-
       if (c.nit) ticket.nit = ticket.nit ?? sanitizeNit(String(c.nit))
       if (c.pin) ticket.pin = ticket.pin ?? String(c.pin)
       if (c.marca) ticket.marca = ticket.marca ?? String(c.marca)
@@ -554,20 +599,13 @@ export default class FacturacionTicketsController {
       if (!ticket.totalFactura && tf) ticket.totalFactura = tf
       if (!ticket.total && tf) ticket.total = tf
 
-      // 🔥 CORRECCIÓN: Validar fechaHora antes de asignar
       if (!ticket.fechaPago && c.fechaHora) {
         const dt = DateTime.fromISO(String(c.fechaHora))
-        if (dt.isValid) {
-          ticket.fechaPago = dt
-        }
+        if (dt.isValid) ticket.fechaPago = dt
       }
-
-      if (!ticket.placa && c.placa) {
-        ticket.placa = String(c.placa).toUpperCase().replace(/\s+/g, '')
-      }
+      if (!ticket.placa && c.placa) ticket.placa = String(c.placa).toUpperCase().replace(/\s+/g, '')
     }
 
-    // === PARA SOAT/PREV/PERI: NO VALIDAR CAMPOS OBLIGATORIOS ===
     if (
       !esSOAT &&
       canConfirm(ticket, false) &&
@@ -619,132 +657,86 @@ export default class FacturacionTicketsController {
     await ticket.save()
     return ticket
   }
+
   /**
    * POST /facturacion/tickets/:id/confirmar
-   * Confirma y persiste snapshots del turno/servicio en la fila.
-   * Genera comisiones según reglas RTM + dateo.
+   *
+   * REGLAS DE COMISIÓN:
+   *
+   * ══════════════════════════════════════════════════════════
+   * SIN CONVENIO — Comercial datea directo
+   * ══════════════════════════════════════════════════════════
+   *   🆕 Nuevo                → valor_nuevo_directo ($17.200)
+   *   🆕 Nuevo + INFORMATIVO  → valor_dateo_recurrencia ($4.300) ← baja de categoría
+   *   🔄 Recurrente           → valor_dateo_recurrencia
+   *   💛 Recuperación         → valor_dateo_recuperacion
+   *
+   * ══════════════════════════════════════════════════════════
+   * CON CONVENIO — Asesor CONVENIO datea él mismo
+   * ══════════════════════════════════════════════════════════
+   *   🆕 Nuevo       → incentivo ($14.000)
+   *   🔄 Recurrente  + dató la última visita → incentivo
+   *   🔄 Recurrente  + NO dató la última visita → valor_dateo_recurrencia
+   *   💛 Recuperación → valor_dateo_recuperacion
+   *
+   * ══════════════════════════════════════════════════════════
+   * CON CONVENIO — COMERCIAL datea
+   * ══════════════════════════════════════════════════════════
+   *   🆕 Nuevo       → comercial: valor_dateo ($8.600) + convenio: incentivo ($14.000)
+   *   🔄 Recurrente  → comercial: valor_dateo_recurrencia SOLO (sin incentivo)
+   *   💛 Recuperación → comercial: valor_dateo_recuperacion SOLO (sin incentivo)
    */
   public async confirmar({ params, request, response, auth }: HttpContext) {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
     console.log('🟢 INICIO CONFIRMAR - Ticket ID:', params.id)
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
     const forzar = Boolean(request.input('forzar'))
     const ticket = await FacturacionTicket.find(params.id)
-
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
 
-    console.log('📋 TICKET ANTES DE PROCESAR:')
-    console.log('   - ID:', ticket.id)
-    console.log('   - placa:', ticket.placa)
-    console.log('   - total:', ticket.total)
-    console.log('   - totalFactura:', ticket.totalFactura)
-    console.log('   - fechaPago:', ticket.fechaPago?.toISO())
-    console.log('   - sedeId:', ticket.sedeId)
-    console.log('   - agenteId:', ticket.agenteId)
-    console.log('   - turnoId:', ticket.turnoId)
-    console.log('   - dateoId:', ticket.dateoId)
-    console.log('   - servicioCodigo:', ticket.servicioCodigo)
-    console.log('   - servicioNombre:', ticket.servicioNombre)
-
     const esSOAT = isSOAT(ticket.servicioCodigo, ticket.servicioNombre)
-    console.log('🔍 Es SOAT/PREV/PERI:', esSOAT)
 
     // COMPLETAR desde dateo
     if (!ticket.agenteId && ticket.dateoId) {
-      console.log('🔄 Intentando obtener agenteId desde dateo:', ticket.dateoId)
       const d = await CaptacionDateo.find(ticket.dateoId)
-      console.log('   Dateo encontrado:', !!d)
       if (d) {
         const agenteIdFromDateo = (d as any)?.agenteId ?? (d as any)?.agente_id ?? null
-        console.log('   agenteId en dateo:', agenteIdFromDateo)
-        if (agenteIdFromDateo) {
-          ticket.agenteId = agenteIdFromDateo
-          console.log('   ✅ agenteId asignado:', ticket.agenteId)
-        }
+        if (agenteIdFromDateo) ticket.agenteId = agenteIdFromDateo
       }
     }
 
     // COMPLETAR desde turno
     if (!ticket.sedeId && ticket.turnoId) {
-      console.log('🔄 Intentando obtener sedeId desde turno:', ticket.turnoId)
       const t = await TurnoRtm.find(ticket.turnoId)
-      console.log('   Turno encontrado:', !!t)
       if (t) {
-        console.log('   Turno completo:', JSON.stringify(t.serialize(), null, 2))
         const sedeIdFromTurno = (t as any)?.sedeId ?? (t as any)?.sede_id ?? null
-        console.log('   sedeId en turno:', sedeIdFromTurno)
-        if (sedeIdFromTurno) {
-          ticket.sedeId = sedeIdFromTurno
-          console.log('   ✅ sedeId asignado:', ticket.sedeId)
-        }
+        if (sedeIdFromTurno) ticket.sedeId = sedeIdFromTurno
       }
     }
 
     if (!ticket.agenteId && ticket.turnoId) {
-      console.log('🔄 Intentando obtener agenteId desde turno:', ticket.turnoId)
       const t = await TurnoRtm.find(ticket.turnoId)
       if (t) {
         const agenteIdFromTurno =
           (t as any)?.agenteCaptacionId ?? (t as any)?.agente_captacion_id ?? null
-        console.log('   agenteCaptacionId en turno:', agenteIdFromTurno)
-        if (agenteIdFromTurno) {
-          ticket.agenteId = agenteIdFromTurno
-          console.log('   ✅ agenteId asignado:', ticket.agenteId)
-        }
+        if (agenteIdFromTurno) ticket.agenteId = agenteIdFromTurno
       }
     }
 
-    console.log('📋 TICKET DESPUÉS DE COMPLETAR CAMPOS:')
-    console.log('   - sedeId:', ticket.sedeId)
-    console.log('   - agenteId:', ticket.agenteId)
-
-    // Guardar cambios
     await ticket.save()
-    console.log('💾 Ticket guardado')
 
     // VALIDACIÓN
     if (!esSOAT) {
-      console.log('🔍 VALIDANDO CAMPOS OBLIGATORIOS (no es SOAT):')
-      const totalNum = ticket.total && ticket.total > 0 ? ticket.total : ticket.totalFactura || 0
-      console.log('   - placa:', ticket.placa)
-      console.log('   - placaValida:', placaValida(ticket.placa))
-      console.log('   - totalNum:', totalNum)
-      console.log('   - totalNum > 0:', totalNum > 0)
-      console.log('   - fechaPago:', ticket.fechaPago?.toISO())
-      console.log('   - !!fechaPago:', !!ticket.fechaPago)
-      console.log('   - sedeId:', ticket.sedeId)
-      console.log('   - agenteId:', ticket.agenteId)
-      console.log('   - sedeId || agenteId:', !!(ticket.sedeId || ticket.agenteId))
-
       const puedeConfirmar = canConfirm(ticket, true)
-      console.log('   🎯 canConfirm resultado:', puedeConfirmar)
-
-      if (!puedeConfirmar) {
-        console.log('❌ FALLO canConfirm - Respondiendo badRequest')
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      if (!puedeConfirmar)
         return response.badRequest({ message: 'Faltan campos obligatorios para confirmar' })
-      }
     }
 
-    console.log('✅ VALIDACIÓN PASÓ - Continuando con confirmación...')
-
-    // === PARA SOAT/PREV/PERI: SOLO VALIDAR QUE TENGA IMAGEN ===
-    if (esSOAT && !ticket.filePath) {
+    if (esSOAT && !ticket.filePath)
       return response.badRequest({
         message: 'Servicio simplificado requiere al menos la imagen de la factura',
       })
-    }
 
-    // ... resto del código de confirmar sin cambios ...
-    // === PARA SOAT/PREV/PERI: SOLO VALIDAR QUE TENGA IMAGEN ===
-    if (esSOAT && !ticket.filePath) {
-      return response.badRequest({
-        message: 'Servicio simplificado requiere al menos la imagen de la factura',
-      })
-    }
-
-    // Duplicado por contenido (solo si NO es SOAT/PREV/PERI)
     if (!esSOAT) {
       const dup = await isContentDuplicate(ticket)
       ticket.duplicadoPorContenido = dup
@@ -807,29 +799,24 @@ export default class FacturacionTicketsController {
         const nowBog = DateTime.local().setZone('America/Bogota')
         turnoToUpdate.tieneFacturacion = true
         turnoToUpdate.horaFacturacion = nowBog.toFormat('HH:mm:ss')
-        turnoToUpdate.facturacionFuncionarioId = auth.user?.id ?? null //  AGREGAR ESTA LÍNEA
+        turnoToUpdate.facturacionFuncionarioId = auth.user?.id ?? null
 
-        // 👇 NUEVO: Si es SOAT/PREV/PERI y está activo, finalizarlo automáticamente
         const esServicioSimplificado = isSOAT(
           turnoToUpdate.servicio?.codigoServicio,
           turnoToUpdate.servicio?.nombreServicio
         )
 
         if (esServicioSimplificado && turnoToUpdate.estado === 'activo') {
-          // Calcular tiempo de servicio
           let entrada = DateTime.fromFormat(turnoToUpdate.horaIngreso, 'HH:mm:ss', {
             zone: 'America/Bogota',
           })
-          if (!entrada.isValid) {
+          if (!entrada.isValid)
             entrada = DateTime.fromFormat(turnoToUpdate.horaIngreso, 'HH:mm', {
               zone: 'America/Bogota',
             })
-          }
 
           let diff = nowBog.diff(entrada, ['hours', 'minutes']).toObject()
-          if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
-            diff = { hours: 0, minutes: 0 }
-          }
+          if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) diff = { hours: 0, minutes: 0 }
 
           let tiempoServicioStr = ''
           if (diff.hours && diff.hours >= 1) tiempoServicioStr += `${Math.floor(diff.hours)} h `
@@ -838,17 +825,12 @@ export default class FacturacionTicketsController {
           turnoToUpdate.horaSalida = nowBog.toFormat('HH:mm:ss')
           turnoToUpdate.tiempoServicio = tiempoServicioStr
           turnoToUpdate.estado = 'finalizado'
-
-          console.log(
-            `✅ Turno SOAT/PREV/PERI #${turnoToUpdate.id} finalizado automáticamente al facturar`
-          )
         }
 
         await turnoToUpdate.save()
       }
     }
 
-    // === COMISIONES: SOLO PARA RTM (NO PARA SOAT/PREV/PERI) ===
     if (!esSOAT) {
       try {
         await this.applyCommissionHook(ticket)
@@ -860,28 +842,48 @@ export default class FacturacionTicketsController {
     const dto = await this.getTicketDTOById(ticket.id)
     return dto
   }
+  // app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 3/4
 
-  // ========================== Privados / Hook Comisiones ==========================
+  // ========================== Hook principal de comisiones ==========================
 
   private async applyCommissionHook(ticket: FacturacionTicket) {
-    if (ticket.estado !== 'CONFIRMADA') return
+    console.log('━━━━ applyCommissionHook ━━━━')
+    console.log('ticket.id:', ticket.id)
+    console.log('ticket.estado:', ticket.estado)
+    console.log('ticket.servicioCodigo:', ticket.servicioCodigo)
+    console.log('ticket.servicioNombre:', ticket.servicioNombre)
+    console.log('ticket.dateoId:', ticket.dateoId)
+    console.log('ticket.turnoId:', ticket.turnoId)
+    console.log('ticket.descuentoId:', ticket.descuentoId) // 🆕
 
-    // === SOLO RTM GENERA COMISIONES ===
+    if (ticket.estado !== 'CONFIRMADA') {
+      console.log('❌ SALIDA: no es CONFIRMADA')
+      return
+    }
+
     const esRTM = isRTM(ticket.servicioCodigo, ticket.servicioNombre)
-    if (!esRTM) return
+    console.log('esRTM:', esRTM)
+    if (!esRTM) {
+      console.log('❌ SALIDA: no es RTM')
+      return
+    }
 
-    let turnoForTipo: TurnoRtm | null = null
+    let turnoActual: TurnoRtm | null = null
 
     if (!ticket.dateoId && ticket.turnoId) {
-      turnoForTipo = await TurnoRtm.find(ticket.turnoId)
-      const maybe = turnoForTipo as unknown as { captacionDateoId?: number | null } | null
-      if (maybe?.captacionDateoId) {
-        ticket.dateoId = maybe.captacionDateoId
+      turnoActual = await TurnoRtm.find(ticket.turnoId)
+      console.log('turnoActual.captacionDateoId:', (turnoActual as any)?.captacionDateoId)
+      if ((turnoActual as any)?.captacionDateoId) {
+        ticket.dateoId = (turnoActual as any).captacionDateoId
         await ticket.save()
       }
     }
 
-    if (!ticket.dateoId) return
+    console.log('dateoId final:', ticket.dateoId)
+    if (!ticket.dateoId) {
+      console.log('❌ SALIDA: dateoId sigue null')
+      return
+    }
 
     const dateo = await CaptacionDateo.query()
       .where('id', ticket.dateoId)
@@ -894,80 +896,75 @@ export default class FacturacionTicketsController {
 
     if (!dateo) return
 
+    // Tipo de vehículo
+    if (!turnoActual && ticket.turnoId) turnoActual = await TurnoRtm.find(ticket.turnoId)
     let turnoTipoVehiculo: string | null = null
-    if (!turnoForTipo && ticket.turnoId) {
-      turnoForTipo = await TurnoRtm.find(ticket.turnoId)
-    }
-    if (turnoForTipo) {
-      const anyTurno = turnoForTipo as any
+    if (turnoActual) {
+      const anyTurno = turnoActual as any
       turnoTipoVehiculo = anyTurno.tipoVehiculo ?? anyTurno.tipo_vehiculo ?? null
     }
 
+    // ── Estado del cliente ──
+    const esClienteRecurrente = Boolean((turnoActual as any)?.esRecurrente ?? false)
+    const esClienteRecuperacion = Boolean((turnoActual as any)?.esRecuperacion ?? false)
+    const esClienteNuevo = !esClienteRecurrente && !esClienteRecuperacion
+
     const tipoVehiculoComision = inferTipoVehiculoComision({
-      ticketTipo: (ticket as any).tipoVehiculoSnapshot ?? (ticket as any).tipo_vehiculo ?? null,
+      ticketTipo: (ticket as any).tipoVehiculoSnapshot ?? null,
       turnoTipo: turnoTipoVehiculo,
     })
 
     const now = DateTime.now()
     const usuarioId = ticket.confirmedById ?? ticket.createdById ?? null
 
-    let valorPlacaAsesor = 0
-    let valorDateoAsesor = 0
-    let valorPlacaConvenio = 0
-    let valorDateoConvenio = 0
+    // ── Leer ID real del asesor convenio ──
+    let asesorConvenioIdReal: number | null = null
+    if (dateo.convenioId && (dateo.convenio as any)?.$preloaded?.asesorConvenio) {
+      asesorConvenioIdReal = (dateo.convenio as any).$preloaded.asesorConvenio.id
+    }
 
-    const configGlobal = await findConfigComisionDateo({
-      asesorId: null,
+    // ── Leer configs de comisión (incentivo, dateo nuevo, nuevo directo) ──
+    const cfgValues = await resolveConfigComision({
+      asesorId: dateo.agenteId,
+      asesorConvenioId: asesorConvenioIdReal,
       tipoVehiculo: tipoVehiculoComision,
     })
 
-    if (configGlobal) {
-      valorPlacaAsesor = configGlobal.valorPlaca
-      valorDateoAsesor = configGlobal.valorDateo
-      valorPlacaConvenio = configGlobal.valorPlaca
-      valorDateoConvenio = configGlobal.valorDateo
-    }
+    // ── Leer valores recurrente/recuperación ──
+    const recValues = await resolveConfigRecurrencia(dateo.agenteId, tipoVehiculoComision)
 
-    if (dateo.agenteId) {
-      const cfgAsesor = await findConfigComisionDateo({
-        asesorId: dateo.agenteId,
-        tipoVehiculo: tipoVehiculoComision,
-      })
-
-      if (cfgAsesor) {
-        valorPlacaAsesor = cfgAsesor.valorPlaca
-        valorDateoAsesor = cfgAsesor.valorDateo
-      }
-    }
-
-    let asesorConvenioIdReal: number | null = null
-
-    if (dateo.convenioId && (dateo.convenio as any)?.$preloaded?.asesorConvenio) {
-      asesorConvenioIdReal = (dateo.convenio as any).$preloaded.asesorConvenio.id
-
-      const cfgConvenio = await findConfigComisionDateo({
-        asesorId: asesorConvenioIdReal,
-        tipoVehiculo: tipoVehiculoComision,
-      })
-
-      if (cfgConvenio) {
-        valorPlacaConvenio = cfgConvenio.valorPlaca
-        valorDateoConvenio = cfgConvenio.valorDateo
-      }
-    }
-
-    if (
-      valorPlacaAsesor === 0 &&
-      valorDateoAsesor === 0 &&
-      valorPlacaConvenio === 0 &&
-      valorDateoConvenio === 0
-    ) {
-      console.warn(
-        `⚠️ No hay configuración de comisión para tipo_vehiculo: ${tipoVehiculoComision}`
+    // 🆕 ── Detectar si hay descuento informativo ──
+    // Prioridad: ticket (aplicado en caja) > dateo (pre-marcado por el comercial)
+    const descuentoIdActivo = ticket.descuentoId ?? (dateo as any).descuentoId ?? null
+    let tieneInformativo = false
+    if (descuentoIdActivo) {
+      const descuentoInfo = await Descuento.query()
+        .where('id', descuentoIdActivo)
+        .where('activo', true)
+        .first()
+      tieneInformativo = descuentoInfo !== null
+      console.log(
+        `🏷️ Descuento informativo: ${tieneInformativo ? `${descuentoInfo!.nombre} (ID ${descuentoIdActivo})` : 'NO'}`
       )
-      return
+    } else {
+      console.log('🏷️ Descuento informativo: NO')
     }
 
+    console.log(
+      `💰 Cliente: ${esClienteNuevo ? '🆕 NUEVO' : esClienteRecurrente ? '🔄 RECURRENTE' : '💛 RECUPERACIÓN'}`
+    )
+
+    // ── Verificar CONTINUIDAD ──
+    const tuvoContinuidad = await verificarContinuidad({
+      ultimoTurnoId:
+        (turnoActual as any)?.ultimoTurnoId ?? (turnoActual as any)?.ultimo_turno_id ?? null,
+      asesorConvenioIdActual: asesorConvenioIdReal,
+      convenioIdActual: dateo.convenioId,
+    })
+
+    console.log(`🔗 Continuidad asesor convenio: ${tuvoContinuidad ? '✅ SÍ' : '❌ NO'}`)
+
+    // ── Verificar duplicado ──
     const startDay = now.startOf('day').toSQL()
     const endDay = now.endOf('day').toSQL()
 
@@ -985,64 +982,12 @@ export default class FacturacionTicketsController {
         return
       }
 
-      if (dateo.convenioId) {
-        const esAsesorConvenioQuienDatea =
-          dateo.agenteId && asesorConvenioIdReal && dateo.agenteId === asesorConvenioIdReal
-
-        if (esAsesorConvenioQuienDatea) {
-          const c = new Comision()
-          c.captacionDateoId = dateo.id
-          c.asesorId = asesorConvenioIdReal
-          c.convenioId = dateo.convenioId
-          c.tipoServicio = 'RTM'
-          c.base = String(valorPlacaConvenio)
-          c.porcentaje = '0'
-          c.monto = '0' // ✅ CORREGIDO
-          c.montoAsesor = '0' // ✅ CORREGIDO
-          c.montoConvenio = String(valorPlacaConvenio)
-          c.asesorSecundarioId = null
-          c.estado = 'PENDIENTE'
-          c.fechaCalculo = now
-          c.calculadoPor = usuarioId
-          if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
-          await c.useTransaction(trx).save()
-
-          console.log(
-            `✅ Comisión creada (Caso 3A): Asesor convenio datea cliente nuevo - Solo incentivo: ${valorPlacaConvenio}`
-          )
-        } else {
-          if (!dateo.agenteId) {
-            console.warn('⚠️ No hay asesor comercial')
-            await trx.rollback()
-            return
-          }
-
-          const c = new Comision()
-          c.captacionDateoId = dateo.id
-          c.asesorId = dateo.agenteId
-          c.convenioId = dateo.convenioId
-          c.tipoServicio = 'RTM'
-          c.base = String(valorPlacaConvenio)
-          c.porcentaje = '0'
-          c.monto = String(valorDateoAsesor)
-
-          c.montoAsesor = String(valorDateoAsesor)
-          c.montoConvenio = String(valorPlacaConvenio)
-          c.asesorSecundarioId = asesorConvenioIdReal
-
-          c.estado = 'PENDIENTE'
-          c.fechaCalculo = now
-          c.calculadoPor = usuarioId
-          if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
-          await c.useTransaction(trx).save()
-
-          console.log(
-            `✅ Comisión creada (Caso 1): Comercial datea convenio - Asesor: ${valorDateoAsesor}, Convenio: ${valorPlacaConvenio}, Total: ${valorDateoAsesor + valorPlacaConvenio}`
-          )
-        }
-      } else {
+      // ════════════════════════════════════════════════════
+      //  CASO 1: SIN CONVENIO — Comercial datea directo
+      // ════════════════════════════════════════════════════
+      if (!dateo.convenioId) {
         if (!dateo.agenteId) {
-          console.warn('⚠️ No hay asesor')
+          console.warn('⚠️ Sin convenio y sin asesor')
           await trx.rollback()
           return
         }
@@ -1052,21 +997,150 @@ export default class FacturacionTicketsController {
         c.asesorId = dateo.agenteId
         c.convenioId = null
         c.tipoServicio = 'RTM'
-        c.base = String(valorPlacaAsesor)
-        c.porcentaje = '0'
-        c.monto = String(valorDateoAsesor)
-        c.montoAsesor = String(valorDateoAsesor)
-        c.montoConvenio = String(valorPlacaAsesor)
-        c.asesorSecundarioId = null
         c.estado = 'PENDIENTE'
         c.fechaCalculo = now
         c.calculadoPor = usuarioId
+        c.porcentaje = '0'
+        c.asesorSecundarioId = null
+        c.base = '0'
+        c.montoConvenio = '0'
         if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
+
+        if (esClienteNuevo) {
+          if (tieneInformativo) {
+            // 🆕 Nuevo + INFORMATIVO → baja de $17.200 a valor recurrente ($4.300)
+            c.monto = String(recValues.valorRecurrente)
+            c.montoAsesor = String(recValues.valorRecurrente)
+            c.valorNuevoDirecto = '0'
+            console.log(
+              `✅ Sin convenio 🆕 NUEVO + INFORMATIVO → $${recValues.valorRecurrente} (bajó de $${cfgValues.valorNuevoDirecto})`
+            )
+          } else {
+            // Nuevo directo sin descuento → valor_nuevo_directo
+            c.monto = String(cfgValues.valorNuevoDirecto)
+            c.montoAsesor = String(cfgValues.valorNuevoDirecto)
+            c.valorNuevoDirecto = String(cfgValues.valorNuevoDirecto)
+            console.log(`✅ Sin convenio 🆕 NUEVO DIRECTO → $${cfgValues.valorNuevoDirecto}`)
+          }
+        } else if (esClienteRecurrente) {
+          c.monto = String(recValues.valorRecurrente)
+          c.montoAsesor = String(recValues.valorRecurrente)
+          c.valorNuevoDirecto = '0'
+          console.log(`✅ Sin convenio 🔄 RECURRENTE → $${recValues.valorRecurrente}`)
+        } else {
+          c.monto = String(recValues.valorRecuperacion)
+          c.montoAsesor = String(recValues.valorRecuperacion)
+          c.valorNuevoDirecto = '0'
+          console.log(`✅ Sin convenio 💛 RECUPERACIÓN → $${recValues.valorRecuperacion}`)
+        }
+
         await c.useTransaction(trx).save()
 
-        console.log(
-          `✅ Comisión creada (Caso 3): Sin convenio - Dateo: ${valorDateoAsesor}, Placa: ${valorPlacaAsesor}, Total: ${valorPlacaAsesor + valorDateoAsesor}`
-        )
+        // ════════════════════════════════════════════════════
+        //  CASO 2: CON CONVENIO — el mismo asesor convenio datea
+        // ════════════════════════════════════════════════════
+      } else if (
+        dateo.agenteId &&
+        asesorConvenioIdReal &&
+        dateo.agenteId === asesorConvenioIdReal
+      ) {
+        const c = new Comision()
+        c.captacionDateoId = dateo.id
+        c.asesorId = asesorConvenioIdReal
+        c.convenioId = dateo.convenioId
+        c.tipoServicio = 'RTM'
+        c.estado = 'PENDIENTE'
+        c.fechaCalculo = now
+        c.calculadoPor = usuarioId
+        c.porcentaje = '0'
+        c.asesorSecundarioId = null
+        c.valorNuevoDirecto = '0'
+        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
+
+        if (esClienteNuevo) {
+          c.base = String(cfgValues.valorIncentivoPorTipo)
+          c.monto = '0'
+          c.montoAsesor = '0'
+          c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+          console.log(`✅ Convenio datea 🆕 NUEVO → incentivo $${cfgValues.valorIncentivoPorTipo}`)
+        } else if (esClienteRecurrente) {
+          if (tuvoContinuidad) {
+            c.base = String(cfgValues.valorIncentivoPorTipo)
+            c.monto = '0'
+            c.montoAsesor = '0'
+            c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+            console.log(
+              `✅ Convenio datea 🔄 RECURRENTE + continuidad → incentivo $${cfgValues.valorIncentivoPorTipo}`
+            )
+          } else {
+            c.base = '0'
+            c.monto = String(recValues.valorRecurrente)
+            c.montoAsesor = String(recValues.valorRecurrente)
+            c.montoConvenio = '0'
+            console.log(
+              `✅ Convenio datea 🔄 RECURRENTE sin continuidad → dateo $${recValues.valorRecurrente}`
+            )
+          }
+        } else {
+          c.base = '0'
+          c.monto = String(recValues.valorRecuperacion)
+          c.montoAsesor = String(recValues.valorRecuperacion)
+          c.montoConvenio = '0'
+          console.log(`✅ Convenio datea 💛 RECUPERACIÓN → $${recValues.valorRecuperacion}`)
+        }
+
+        await c.useTransaction(trx).save()
+
+        // ════════════════════════════════════════════════════
+        //  CASO 3: CON CONVENIO — Comercial datea
+        // ════════════════════════════════════════════════════
+      } else {
+        if (!dateo.agenteId) {
+          console.warn('⚠️ Con convenio pero sin asesor comercial')
+          await trx.rollback()
+          return
+        }
+
+        const c = new Comision()
+        c.captacionDateoId = dateo.id
+        c.asesorId = dateo.agenteId
+        c.convenioId = dateo.convenioId
+        c.tipoServicio = 'RTM'
+        c.estado = 'PENDIENTE'
+        c.fechaCalculo = now
+        c.calculadoPor = usuarioId
+        c.porcentaje = '0'
+        c.asesorSecundarioId = asesorConvenioIdReal
+        c.valorNuevoDirecto = '0'
+        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
+
+        if (esClienteNuevo) {
+          c.monto = String(cfgValues.valorDateoNuevo)
+          c.montoAsesor = String(cfgValues.valorDateoNuevo)
+          c.base = String(cfgValues.valorIncentivoPorTipo)
+          c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+          console.log(
+            `✅ Comercial con convenio 🆕 NUEVO → dateo $${cfgValues.valorDateoNuevo} + incentivo $${cfgValues.valorIncentivoPorTipo}`
+          )
+        } else if (esClienteRecurrente) {
+          c.monto = String(recValues.valorRecurrente)
+          c.montoAsesor = String(recValues.valorRecurrente)
+          c.base = '0'
+          c.montoConvenio = '0'
+          console.log(
+            `✅ Comercial con convenio 🔄 RECURRENTE → dateo $${recValues.valorRecurrente} (sin incentivo)`
+          )
+        } else {
+          c.monto = String(recValues.valorRecuperacion)
+          c.montoAsesor = String(recValues.valorRecuperacion)
+          c.base = '0'
+          c.montoConvenio = '0'
+          console.log(
+            `✅ Comercial con convenio 💛 RECUPERACIÓN → dateo $${recValues.valorRecuperacion} (sin incentivo)`
+          )
+        }
+
+        await c.useTransaction(trx).save()
       }
 
       if (dateo.resultado !== 'EXITOSO') {
@@ -1075,11 +1149,14 @@ export default class FacturacionTicketsController {
       }
 
       await trx.commit()
+      console.log('✅ Comisión guardada correctamente')
     } catch (err) {
       await trx.rollback()
       throw err
     }
   }
+
+  // ========================== Helpers privados ==========================
 
   private async fillSnapshotsFromTurno(ticket: FacturacionTicket, turno: TurnoRtm) {
     const t = turno as unknown as TurnoSnapshotReadable
@@ -1087,7 +1164,6 @@ export default class FacturacionTicketsController {
     ticket.turnoNumeroGlobal = t.turnoNumero ?? ticket.turnoNumeroGlobal ?? null
     ticket.turnoNumeroServicio = t.turnoNumeroServicio ?? ticket.turnoNumeroServicio ?? null
     ticket.turnoCodigo = t.turnoCodigo ?? ticket.turnoCodigo ?? null
-
     ticket.tipoVehiculoSnapshot = t.tipoVehiculo ?? ticket.tipoVehiculoSnapshot ?? null
     ticket.placaTurno = t.placa ?? ticket.placaTurno ?? null
     ticket.canalAtribucion = t.canalAtribucion ?? ticket.canalAtribucion ?? null
@@ -1127,6 +1203,9 @@ export default class FacturacionTicketsController {
             cq.preload('agente').preload('asesorConvenio').preload('convenio')
           )
       )
+      .preload('descuento')
+      .preload('autorizadoPor')
+      .preload('confirmedBy') // ← esta línea falta
       .firstOrFail()
 
     const dto = buildTicketDTO(t)
@@ -1145,7 +1224,6 @@ export default class FacturacionTicketsController {
       dto.comisiones = comisiones.map((c) => {
         const asesor = c.asesor as any
         const convenio = c.convenio as any
-
         return {
           id: c.id,
           estado: c.estado,
@@ -1156,30 +1234,51 @@ export default class FacturacionTicketsController {
       })
     }
 
+    // 🆕 Poblar descuentoAplicado en el DTO
+    const descuento = pre.descuento ?? null
+    const autorizadoPor = pre.autorizadoPor ?? null
+    const confirmedBy = pre.confirmedBy ?? null
+
+    if (confirmedBy) {
+      dto.confirmedBy = {
+        id: confirmedBy.id,
+        nombres: confirmedBy.nombres ?? null,
+        apellidos: confirmedBy.apellidos ?? null,
+      }
+    }
+
+    if (descuento && (t as any).descuentoMontoAplicado !== null) {
+      dto.descuentoAplicado = {
+        id: descuento.id,
+        codigo: descuento.codigo,
+        nombre: descuento.nombre,
+        montoAplicado: Number((t as any).descuentoMontoAplicado ?? 0),
+        autorizadoPor: autorizadoPor
+          ? {
+              id: autorizadoPor.id,
+              nombre: [autorizadoPor.nombres, autorizadoPor.apellidos].filter(Boolean).join(' '),
+            }
+          : null,
+      }
+    } else {
+      dto.descuentoAplicado = null
+    }
+
     return dto
   }
+
   /**
    * GET /facturacion/tickets/:id/imagen
-   * Sirve la imagen del ticket de facturación
    */
   public async servirImagen({ params, response }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
-
-    if (!ticket) {
-      return response.notFound({ message: 'Ticket no encontrado' })
-    }
-
-    if (!ticket.filePath) {
+    if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
+    if (!ticket.filePath)
       return response.notFound({ message: 'El ticket no tiene imagen asociada' })
-    }
 
     try {
       const absolutePath = app.makePath(ticket.filePath)
-
-      // Verificar que el archivo existe
       await fs.access(absolutePath)
-
-      // Servir el archivo con el tipo MIME correcto
       return response.header('Content-Type', ticket.fileMime || 'image/jpeg').download(absolutePath)
     } catch (err) {
       console.error('Error sirviendo imagen del ticket:', err)
@@ -1187,10 +1286,9 @@ export default class FacturacionTicketsController {
     }
   }
 }
-
+// app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 4/4
 /* ============================== Utils ============================== */
 
-/** Detecta si un servicio es RTM por código o nombre */
 function isRTM(codigo?: string | null, nombre?: string | null): boolean {
   const c = (codigo || '').toUpperCase().trim()
   const n = (nombre || '').toUpperCase().trim()
@@ -1201,23 +1299,12 @@ function isRTM(codigo?: string | null, nombre?: string | null): boolean {
   return false
 }
 
-/**
- * Detecta si un servicio es SOAT, PREVENTIVA o PERITAJE (servicios simplificados)
- * Estos servicios NO requieren OCR completo ni generan comisiones automáticas
- */
 function isSOAT(codigo?: string | null, nombre?: string | null): boolean {
   const c = (codigo || '').toUpperCase().trim()
   const n = (nombre || '').toUpperCase().trim()
-
-  // SOAT
   if (c.includes('SOAT') || n.includes('SOAT')) return true
-
-  // PREVENTIVA
   if (c.includes('PREV') || n.includes('PREVENTIVA')) return true
-
-  // PERITAJE
   if (c.includes('PERI') || n.includes('PERITAJE')) return true
-
   return false
 }
 
@@ -1251,19 +1338,18 @@ function sanitizeNit(v: string): string {
 function placaValida(placa?: string | null): boolean {
   if (!placa) return false
   const rex = /^(?:[A-Z]{3}\d{3}|[A-Z]{3}\d{2}[A-Z]|\d{3}[A-Z]{3})$/
-  //                                              ^^^^^^^^^ NUEVO: acepta 123TYU (motos viejas)
   return rex.test(placa.toUpperCase())
 }
 
 function canConfirm(t: FacturacionTicket, _hard: boolean): boolean {
   const totalNum = t.total && t.total > 0 ? t.total : t.totalFactura || 0
-  const base =
+  return (
     placaValida(t.placa) &&
     !!totalNum &&
     totalNum > 0 &&
     !!t.fechaPago &&
     (!!t.sedeId || !!t.agenteId)
-  return base
+  )
 }
 
 async function isContentDuplicate(t: FacturacionTicket): Promise<boolean> {
@@ -1357,7 +1443,6 @@ function serializeTurnoEnriquecido(turno: TurnoRtm): TurnoDTO {
 
 function buildTicketDTO(ticket: FacturacionTicket): TicketDTO {
   const s = ticket.serialize() as any
-
   const pick = (camel: string, snake: string) => s[camel] ?? s[snake] ?? null
 
   const pre = (ticket as any).$preloaded || {}
@@ -1408,19 +1493,17 @@ function buildTicketDTO(ticket: FacturacionTicket): TicketDTO {
     pick('turnoNumeroServicio', 'turno_numero_servicio') ?? turnoDTO?.turnoNumeroServicio ?? null
   const turnoCodigo = pick('turnoCodigo', 'turno_codigo') ?? turnoDTO?.turnoCodigo ?? null
   const placaTurno = pick('placaTurno', 'placa_turno') ?? turnoDTO?.placa ?? null
-
   const sedeNombre = pick('sedeNombre', 'sede_nombre') ?? turnoDTO?.sede?.nombre ?? null
   const funcionarioNombre =
     pick('funcionarioNombre', 'funcionario_nombre') ??
     (turnoDTO?.usuario
       ? [turnoDTO.usuario.nombres, turnoDTO.usuario.apellidos].filter(Boolean).join(' ')
       : null)
-
   const canalAtribucion =
     pick('canalAtribucion', 'canal_atribucion') ?? turnoDTO?.canalAtribucion ?? null
   const medioEntero = pick('medioEntero', 'medio_entero') ?? turnoDTO?.medioEntero ?? null
 
-  const dto: TicketDTO = {
+  return {
     id: s.id,
     estado: s.estado,
     hash: s.hash,
@@ -1430,27 +1513,24 @@ function buildTicketDTO(ticket: FacturacionTicket): TicketDTO {
     imageRotation: pick('imageRotation', 'image_rotation'),
     createdAt: pick('createdAt', 'created_at'),
     updatedAt: pick('updatedAt', 'updated_at'),
-
     placa: s.placa ?? null,
     fechaPago: pick('fechaPago', 'fecha_pago'),
     total: s.total ?? null,
     subtotal: pick('subtotal', 'subtotal'),
     iva: pick('iva', 'iva'),
     totalFactura: pick('totalFactura', 'total_factura'),
+    totalSinDescuento: pick('totalSinDescuento', 'total_sin_descuento'),
     vendedorText: pick('vendedorText', 'vendedor_text'),
     prefijo: s.prefijo ?? null,
     consecutivo: s.consecutivo ?? null,
-
     nit: s.nit ?? null,
     pin: s.pin ?? null,
     marca: s.marca ?? null,
-
     turnoId: pick('turnoId', 'turno_id'),
     servicioId: pick('servicioId', 'servicio_id'),
     sedeId: pick('sedeId', 'sede_id'),
     agenteId: pick('agenteId', 'agente_id'),
     dateoId: pick('dateoId', 'dateo_id'),
-
     servicioCodigo,
     servicioNombre,
     tipoVehiculoSnapshot,
@@ -1462,15 +1542,15 @@ function buildTicketDTO(ticket: FacturacionTicket): TicketDTO {
     funcionarioNombre,
     canalAtribucion,
     medioEntero,
-
+    confirmadoAt: pick('confirmadoAt', 'confirmado_at'),
+    confirmedById: pick('confirmedById', 'confirmed_by_id'),
     turno: turnoDTO,
     dateo: dateoEnriquecido,
+    descuentoAplicado: null,
   }
-
-  return dto
 }
 
-/* ======================= Configuración comisiones (helpers) ======================= */
+/* ======================= Helpers de configuración ======================= */
 
 type TipoVehiculoComision = 'MOTO' | 'VEHICULO'
 
@@ -1479,71 +1559,176 @@ function inferTipoVehiculoComision(opts: {
   turnoTipo?: string | null
 }): TipoVehiculoComision | null {
   const normalize = (v?: string | null) => (v ?? '').toString().toUpperCase().trim()
-
-  const t1 = normalize(opts.ticketTipo)
-  const t2 = normalize(opts.turnoTipo)
-  const txt = t1 || t2
+  const txt = normalize(opts.ticketTipo) || normalize(opts.turnoTipo)
   if (!txt) return null
-
   if (txt.includes('MOTO')) return 'MOTO'
   return 'VEHICULO'
 }
 
-async function findConfigComisionDateo(params: {
+/**
+ * Resuelve los 3 valores de comisión (incentivo, dateoNuevo, nuevoDirecto)
+ * buscando primero config específica del asesor, luego config del asesor convenio,
+ * luego config global.
+ */
+async function resolveConfigComision(params: {
   asesorId: number | null
+  asesorConvenioId: number | null
   tipoVehiculo: TipoVehiculoComision | null
-}): Promise<{ valorPlaca: number; valorDateo: number } | null> {
-  const { asesorId, tipoVehiculo } = params
-  if (!tipoVehiculo) return null
-
-  let row: Comision | null = null
-
-  if (asesorId) {
-    row = await Comision.query()
-      .where('es_config', true)
-      .where('asesor_id', asesorId)
-      .where('tipo_vehiculo', tipoVehiculo)
-      .first()
-  }
-
-  if (!row) {
-    row = await Comision.query()
-      .where('es_config', true)
-      .whereNull('asesor_id')
-      .where('tipo_vehiculo', tipoVehiculo)
-      .first()
-  }
-
-  if (!row && asesorId) {
-    row = await Comision.query()
-      .where('es_config', true)
-      .where('asesor_id', asesorId)
-      .whereNull('tipo_vehiculo')
-      .first()
-  }
-
-  if (!row) {
-    row = await Comision.query()
-      .where('es_config', true)
-      .whereNull('asesor_id')
-      .whereNull('tipo_vehiculo')
-      .first()
-  }
-
-  if (!row) return null
+}): Promise<{
+  valorIncentivo: number
+  valorIncentivoPorTipo: number
+  valorDateoNuevo: number
+  valorNuevoDirecto: number
+}> {
+  const { asesorId, asesorConvenioId, tipoVehiculo } = params
 
   const num = (v: any) => {
     const n = Number(String(v ?? '').replace(/[^\d.-]/g, ''))
     return Number.isFinite(n) ? n : 0
   }
 
+  const tryFind = async (aId: number | null, tv: string | null) => {
+    const q = Comision.query().where('es_config', true)
+    if (aId === null) q.whereNull('asesor_id')
+    else q.where('asesor_id', aId)
+    if (tv === null) q.whereNull('tipo_vehiculo')
+    else q.where('tipo_vehiculo', tv)
+    return q.first()
+  }
+
+  let row: Comision | null = null
+
+  if (asesorId && tipoVehiculo) row = await tryFind(asesorId, tipoVehiculo)
+  if (!row && asesorConvenioId && tipoVehiculo) row = await tryFind(asesorConvenioId, tipoVehiculo)
+  if (!row && tipoVehiculo) row = await tryFind(null, tipoVehiculo)
+  if (!row && asesorId) row = await tryFind(asesorId, null)
+  if (!row) row = await tryFind(null, null)
+
+  if (!row)
+    return {
+      valorIncentivo: 14000,
+      valorIncentivoPorTipo: 14000,
+      valorDateoNuevo: 8600,
+      valorNuevoDirecto: 17200,
+    }
+
+  let valorIncentivoPorTipo: number
+  if (tipoVehiculo === 'MOTO') {
+    valorIncentivoPorTipo =
+      row.valorPlacaMoto !== null && row.valorPlacaMoto !== undefined
+        ? num(row.valorPlacaMoto)
+        : num(row.base)
+  } else if (tipoVehiculo === 'VEHICULO') {
+    valorIncentivoPorTipo =
+      row.valorPlacaVehiculo !== null && row.valorPlacaVehiculo !== undefined
+        ? num(row.valorPlacaVehiculo)
+        : num(row.base)
+  } else {
+    valorIncentivoPorTipo = num(row.base)
+  }
+
+  console.log(
+    `   💰 resolveConfigComision | tipoVehiculo: ${tipoVehiculo} | incentivo base: $${num(row.base)} | incentivoPorTipo: $${valorIncentivoPorTipo}`
+  )
+
   return {
-    valorPlaca: num(row.base),
-    valorDateo: num(row.monto),
+    valorIncentivo: num(row.base),
+    valorIncentivoPorTipo,
+    valorDateoNuevo: num(row.monto),
+    valorNuevoDirecto: num(row.valorNuevoDirecto),
   }
 }
 
-/* ======================== OCR Fake (ejemplo) ======================== */
+/**
+ * Resuelve los valores de recurrencia (recurrente y recuperación)
+ * buscando config por asesor primero, luego global.
+ */
+async function resolveConfigRecurrencia(
+  asesorId: number | null,
+  tipoVehiculo: TipoVehiculoComision | null = null
+): Promise<{
+  valorRecurrente: number
+  valorRecuperacion: number
+}> {
+  const esMoto = tipoVehiculo === 'MOTO'
+
+  const globalCfg = await Database.from('configuracion_recurrencia_global')
+    .orderBy('id', 'asc')
+    .first()
+
+  let valorRecurrente: number
+  let valorRecuperacion: number
+
+  if (esMoto) {
+    valorRecurrente = Number(
+      globalCfg?.valor_dateo_recurrencia_moto ?? globalCfg?.valor_dateo_recurrencia ?? 4300
+    )
+    valorRecuperacion = Number(
+      globalCfg?.valor_dateo_recuperacion_moto ?? globalCfg?.valor_dateo_recuperacion ?? 8600
+    )
+  } else {
+    valorRecurrente = Number(
+      globalCfg?.valor_dateo_recurrencia_vehiculo ?? globalCfg?.valor_dateo_recurrencia ?? 4300
+    )
+    valorRecuperacion = Number(
+      globalCfg?.valor_dateo_recuperacion_vehiculo ?? globalCfg?.valor_dateo_recuperacion ?? 8600
+    )
+  }
+
+  if (asesorId) {
+    const asesorCfg = await Database.from('configuracion_recurrencia_asesores')
+      .where('asesor_id', asesorId)
+      .where('recurrencia_habilitada', true)
+      .first()
+
+    if (asesorCfg?.valor_dateo_recurrencia)
+      valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
+    if (asesorCfg?.valor_dateo_recuperacion)
+      valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+  }
+
+  console.log(
+    `   💰 resolveConfigRecurrencia | tipoVehiculo: ${tipoVehiculo} | recurrente: $${valorRecurrente} | recuperacion: $${valorRecuperacion}`
+  )
+
+  return { valorRecurrente, valorRecuperacion }
+}
+
+/**
+ * Verifica si el asesor convenio dató este vehículo LA ÚLTIMA VEZ que vino.
+ */
+async function verificarContinuidad(params: {
+  ultimoTurnoId: number | null
+  asesorConvenioIdActual: number | null
+  convenioIdActual: number | null
+}): Promise<boolean> {
+  const { ultimoTurnoId, asesorConvenioIdActual, convenioIdActual } = params
+
+  if (!ultimoTurnoId) return false
+  if (!convenioIdActual && !asesorConvenioIdActual) return false
+
+  const turnoAnterior = await Database.from('turno_rtms')
+    .where('id', ultimoTurnoId)
+    .select('captacion_dateo_id')
+    .first()
+
+  const dateoAnteriorId = turnoAnterior?.captacion_dateo_id ?? null
+  if (!dateoAnteriorId) return false
+
+  const dateoAnterior = await Database.from('captacion_dateos')
+    .where('id', dateoAnteriorId)
+    .select('convenio_id', 'asesor_convenio_id', 'agente_id')
+    .first()
+
+  if (!dateoAnterior) return false
+
+  if (convenioIdActual && dateoAnterior.convenio_id === convenioIdActual) return true
+  if (asesorConvenioIdActual && dateoAnterior.agente_id === asesorConvenioIdActual) return true
+
+  return false
+}
+
+/* ======================== OCR Fake ======================== */
 
 function fakeOCR(): {
   text: string

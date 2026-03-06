@@ -10,6 +10,7 @@ import Sede from '#models/sede'
 import Servicio from '#models/servicio'
 import Cliente from '#models/cliente'
 import Vehiculo from '#models/vehiculo'
+import Descuento from '#models/descuento'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 
 export type FactEstado = 'BORRADOR' | 'OCR_LISTO' | 'LISTA_CONFIRMAR' | 'CONFIRMADA' | 'REVERTIDA'
@@ -143,6 +144,30 @@ export default class FacturacionTicket extends BaseModel {
   @column({ columnName: 'revertida_motivo' }) declare revertidaMotivo: string | null
   @column.dateTime({ columnName: 'revertida_at' }) declare revertidaAt: DateTime | null
 
+  /* ============== 🆕 Descuento informativo ============== */
+
+  /** FK al descuento aplicado (informativo u otro) */
+  @column({ columnName: 'descuento_id' })
+  declare descuentoId: number | null
+
+  @belongsTo(() => Descuento, { foreignKey: 'descuentoId' })
+  declare descuento: BelongsTo<typeof Descuento>
+
+  /** Usuario que autorizó el descuento (admin o comercial pre-marcó en dateo) */
+  @column({ columnName: 'autorizado_por_id' })
+  declare autorizadoPorId: number | null
+
+  @belongsTo(() => Usuario, { foreignKey: 'autorizadoPorId' })
+  declare autorizadoPor: BelongsTo<typeof Usuario>
+
+  /** Monto exacto descontado de la factura */
+  @column({ columnName: 'descuento_monto_aplicado' })
+  declare descuentoMontoAplicado: number | null
+
+  /** Total original antes de aplicar el descuento (para trazabilidad) */
+  @column({ columnName: 'total_sin_descuento' })
+  declare totalSinDescuento: number | null
+
   /* ============== Auditoría ============== */
   @column({ columnName: 'created_by_id' }) declare createdById: number | null
   @belongsTo(() => Usuario, { foreignKey: 'createdById' })
@@ -154,7 +179,8 @@ export default class FacturacionTicket extends BaseModel {
   @column.dateTime({ columnName: 'updated_at', autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
-  /* ============== Helpers de presentación ============== */
+  /* ============== Helpers ============== */
+
   @computed()
   public get prefijoConsecutivo(): string | null {
     if (!this.prefijo && !this.consecutivo) return null
@@ -166,7 +192,6 @@ export default class FacturacionTicket extends BaseModel {
   public static normalize(t: FacturacionTicket) {
     if (t.placa) t.placa = t.placa.toUpperCase().replace(/\s+/g, '')
     if (t.nit) t.nit = t.nit.replace(/[^\d\-\.]/g, '')
-    // Sincroniza total vs totalFactura
     if ((!t.total || t.total === 0) && t.totalFactura && t.totalFactura > 0) {
       t.total = t.totalFactura
     }

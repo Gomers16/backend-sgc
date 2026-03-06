@@ -8,6 +8,7 @@ import Convenio from '#models/convenio'
 import TurnoRtm from '#models/turno_rtm'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import Prospecto from '#models/prospecto'
+import Descuento from '#models/descuento' // 🆕
 
 /* ======================= Constantes / Tipos ======================= */
 const CANALES_DB = ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'] as const
@@ -63,6 +64,8 @@ function toSnake(row: any) {
     imagen_subida_por: row.imagenSubidaPor ?? null,
     consumido_turno_id: row.consumidoTurnoId ?? null,
     consumido_at: row.consumidoAt ?? null,
+    // 🆕
+    descuento_id: row.descuentoId ?? null,
   }
 }
 
@@ -87,6 +90,10 @@ function serializeTurnoInfo(t: any | null) {
     numeroServicio: numeroServicio,
     estado: t.estado ?? null,
     servicioCodigo: (t as any).$preloaded?.servicio?.codigoServicio ?? null,
+    // 🆕 Campos para clasificar tipo de cliente en ficha comercial
+    es_recurrente: t.esRecurrente ?? t.es_recurrente ?? null,
+    es_recuperacion: t.esRecuperacion ?? t.es_recuperacion ?? null,
+    meses_desde_ultima_visita: t.mesesDesdeUltimaVisita ?? t.meses_desde_ultima_visita ?? null,
   }
 }
 
@@ -210,6 +217,7 @@ export default class CaptacionDateosController {
     const q = CaptacionDateo.query()
       .preload('agente')
       .preload('convenio', (qb) => qb.select(['id', 'nombre']))
+      .preload('descuento') // 🆕
 
     if (placa) q.andWhere('placa', placa)
     if (telefono) q.andWhere('telefono', telefono)
@@ -242,10 +250,21 @@ export default class CaptacionDateosController {
     let turnosById: Record<number, any> = {}
     if (turnoIds.length) {
       const uniq = Array.from(new Set(turnoIds))
+      // 🆕 se agregan es_recurrente, es_recuperacion, meses_desde_ultima_visita al select
       const turnos = await TurnoRtm.query()
         .whereIn('id', uniq)
         .preload('servicio')
-        .select(['id', 'fecha', 'turnoNumero', 'turno_numero_servicio', 'estado', 'servicio_id'])
+        .select([
+          'id',
+          'fecha',
+          'turnoNumero',
+          'turno_numero_servicio',
+          'estado',
+          'servicio_id',
+          'es_recurrente',
+          'es_recuperacion',
+          'meses_desde_ultima_visita',
+        ])
       turnosById = Object.fromEntries(turnos.map((t) => [t.id, t]))
     }
 
@@ -273,6 +292,7 @@ export default class CaptacionDateosController {
       .where('id', params.id)
       .preload('agente')
       .preload('convenio', (qb) => qb.select(['id', 'nombre']))
+      .preload('descuento') // 🆕
       .first()
 
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
@@ -284,10 +304,21 @@ export default class CaptacionDateosController {
 
     let turnoInfo = null
     if (item.consumidoTurnoId) {
+      // 🆕 se agregan es_recurrente, es_recuperacion, meses_desde_ultima_visita al select
       const t = await TurnoRtm.query()
         .where('id', item.consumidoTurnoId)
         .preload('servicio')
-        .select(['id', 'fecha', 'turnoNumero', 'turno_numero_servicio', 'estado', 'servicio_id'])
+        .select([
+          'id',
+          'fecha',
+          'turnoNumero',
+          'turno_numero_servicio',
+          'estado',
+          'servicio_id',
+          'es_recurrente',
+          'es_recuperacion',
+          'meses_desde_ultima_visita',
+        ])
         .first()
       turnoInfo = serializeTurnoInfo(t)
     }
@@ -361,6 +392,22 @@ export default class CaptacionDateosController {
     const imagenOrigenId =
       (request.input('imagen_origen_id') as string | number | undefined) ?? null
     const imagenSubidaPor = readOptionalNumber(request.input('imagen_subida_por') as unknown)
+
+    // 🆕 Descuento informativo pre-marcado por el comercial
+    const descuentoIdRaw = readOptionalNumber(
+      (request.input('descuento_id') ?? request.input('descuentoId')) as unknown
+    )
+    let descuentoId: number | null = null
+    if (descuentoIdRaw !== null) {
+      const descuentoExiste = await Descuento.query()
+        .where('id', descuentoIdRaw)
+        .where('activo', true)
+        .first()
+      if (!descuentoExiste) {
+        return response.badRequest({ message: 'descuento_id no existe o está inactivo' })
+      }
+      descuentoId = descuentoIdRaw
+    }
 
     if (!ORIGENES.includes(origen)) {
       return response.badRequest({ message: 'origen inválido (UI | WHATSAPP | IMPORT)' })
@@ -545,6 +592,7 @@ export default class CaptacionDateosController {
       imagenHash,
       imagenOrigenId: imagenOrigenId === null ? null : String(imagenOrigenId),
       imagenSubidaPor,
+      descuentoId, // 🆕
     })
 
     if (placa) {
@@ -600,6 +648,26 @@ export default class CaptacionDateosController {
     const imagenSubidaPorRaw = request.input('imagen_subida_por') as unknown
 
     const consumidoTurnoIdRaw = request.input('consumido_turno_id') as unknown
+
+    // 🆕 Descuento informativo (puede actualizarse o quitarse)
+    const descuentoIdInput = request.input('descuento_id')
+    if (descuentoIdInput !== undefined) {
+      if (descuentoIdInput === null || descuentoIdInput === '') {
+        item.descuentoId = null
+      } else {
+        const descuentoIdNum = readOptionalNumber(descuentoIdInput as unknown)
+        if (descuentoIdNum !== null) {
+          const descuentoExiste = await Descuento.query()
+            .where('id', descuentoIdNum)
+            .where('activo', true)
+            .first()
+          if (!descuentoExiste) {
+            return response.badRequest({ message: 'descuento_id no existe o está inactivo' })
+          }
+          item.descuentoId = descuentoIdNum
+        }
+      }
+    }
 
     if (placa !== undefined) {
       item.placa = normalizePlaca(placa)
@@ -663,10 +731,21 @@ export default class CaptacionDateosController {
 
     let turnoInfo = null
     if (item.consumidoTurnoId) {
+      // 🆕 se agregan es_recurrente, es_recuperacion, meses_desde_ultima_visita al select
       const t = await TurnoRtm.query()
         .where('id', item.consumidoTurnoId)
         .preload('servicio')
-        .select(['id', 'fecha', 'turnoNumero', 'turno_numero_servicio', 'estado', 'servicio_id'])
+        .select([
+          'id',
+          'fecha',
+          'turnoNumero',
+          'turno_numero_servicio',
+          'estado',
+          'servicio_id',
+          'es_recurrente',
+          'es_recuperacion',
+          'meses_desde_ultima_visita',
+        ])
         .first()
       turnoInfo = serializeTurnoInfo(t)
     }

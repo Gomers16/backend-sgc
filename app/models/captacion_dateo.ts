@@ -1,3 +1,4 @@
+// app/models/captacion_dateo.ts
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo, beforeSave, computed } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
@@ -9,6 +10,7 @@ import Vehiculo from '#models/vehiculo'
 import Cliente from '#models/cliente'
 import Usuario from '#models/usuario'
 import TurnoRtm from '#models/turno_rtm'
+import Descuento from '#models/descuento'
 
 export type Canal = 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES'
 export type Origen = 'UI' | 'WHATSAPP' | 'IMPORT'
@@ -115,7 +117,7 @@ export default class CaptacionDateo extends BaseModel {
   @column({ columnName: 'detectado_por_convenio' })
   declare detectadoPorConvenio: boolean
 
-  // 🆕 CAMPOS DE RECURRENCIA
+  // ========== 🔄 CAMPOS DE RECURRENCIA ==========
   @column({ columnName: 'es_cliente_recurrente' })
   declare esClienteRecurrente: boolean
 
@@ -124,8 +126,20 @@ export default class CaptacionDateo extends BaseModel {
 
   @column({ columnName: 'turno_recurrente_id' })
   declare turnoRecurrenteId: number | null
+  // ========== FIN RECURRENCIA ==========
+
+  // 🆕 Descuento informativo pre-marcado por el comercial
+  @column({ columnName: 'descuento_id' })
+  declare descuentoId: number | null
+
+  @column.dateTime({ autoCreate: true })
+  declare createdAt: DateTime
+
+  @column.dateTime({ autoCreate: true, autoUpdate: true })
+  declare updatedAt: DateTime
 
   // ===== Relaciones =====
+
   @belongsTo(() => AgenteCaptacion, { foreignKey: 'agenteId' })
   declare agente: BelongsTo<typeof AgenteCaptacion>
 
@@ -150,6 +164,10 @@ export default class CaptacionDateo extends BaseModel {
   @belongsTo(() => TurnoRtm, { foreignKey: 'consumidoTurnoId' })
   declare turno: BelongsTo<typeof TurnoRtm>
 
+  // 🆕
+  @belongsTo(() => Descuento, { foreignKey: 'descuentoId' })
+  declare descuento: BelongsTo<typeof Descuento>
+
   // ===== Normalización =====
   @beforeSave()
   public static normalize(d: CaptacionDateo) {
@@ -173,10 +191,4 @@ export default class CaptacionDateo extends BaseModel {
     const days = this.consumidoTurnoId && this.consumidoAt ? ttlPostConsumo() : ttlSinConsumir()
     return DateTime.now() < base.plus({ days })
   }
-
-  @column.dateTime({ autoCreate: true })
-  declare createdAt: DateTime
-
-  @column.dateTime({ autoCreate: true, autoUpdate: true })
-  declare updatedAt: DateTime
 }

@@ -16,7 +16,7 @@ export default class TurnosRtms extends BaseSchema {
         .inTable('usuarios')
         .onDelete('CASCADE')
 
-      // 👇 ========== NUEVOS CAMPOS PARA ETAPAS ==========
+      // ========== CAMPOS PARA ETAPAS ==========
       table
         .integer('facturacion_funcionario_id')
         .unsigned()
@@ -32,7 +32,7 @@ export default class TurnosRtms extends BaseSchema {
         .references('id')
         .inTable('usuarios')
         .onDelete('SET NULL')
-      // 👆 ================================================
+      // =========================================
 
       table
         .integer('sede_id')
@@ -143,12 +143,13 @@ export default class TurnosRtms extends BaseSchema {
         .notNullable()
         .defaultTo('activo')
 
-      // 🆕 ========== CAMPOS DE RECURRENCIA ==========
+      // ========== CAMPOS DE RECURRENCIA Y RECUPERACIÓN ==========
       table.boolean('es_recurrente').notNullable().defaultTo(false)
+      table.boolean('es_recuperacion').notNullable().defaultTo(false) // 🆕
       table.integer('meses_desde_ultima_visita').unsigned().nullable()
       table.integer('ultimo_turno_id').unsigned().nullable()
       table.date('fecha_ultima_visita').nullable()
-      // 👆 ============================================
+      // ===========================================================
 
       // Únicos
       table.unique(['sede_id', 'fecha', 'turno_numero'], 'uq_turno_por_dia_y_sede')
@@ -169,10 +170,11 @@ export default class TurnosRtms extends BaseSchema {
       table.index(['facturacion_funcionario_id'], 'idx_turno_facturacion_funcionario')
       table.index(['certificacion_funcionario_id'], 'idx_turno_certificacion_funcionario')
 
-      // 🆕 Índices para recurrencia (performance)
+      // Índices para recurrencia (performance)
       table.index(['cliente_id', 'fecha', 'estado'], 'idx_turnos_recurrencia_cliente')
       table.index(['conductor_id', 'fecha', 'estado'], 'idx_turnos_recurrencia_conductor')
       table.index(['es_recurrente'], 'idx_turnos_es_recurrente')
+      table.index(['es_recuperacion'], 'idx_turnos_es_recuperacion') // 🆕
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

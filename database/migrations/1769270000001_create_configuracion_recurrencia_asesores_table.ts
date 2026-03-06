@@ -5,7 +5,6 @@ export default class ConfiguracionRecurrenciaAsesores extends BaseSchema {
   protected tableName = 'configuracion_recurrencia_asesores'
 
   public async up() {
-    // 👇 Eliminar si existe (desarrollo)
     await this.schema.dropTableIfExists(this.tableName)
 
     await this.schema.createTable(this.tableName, (table) => {
@@ -33,9 +32,18 @@ export default class ConfiguracionRecurrenciaAsesores extends BaseSchema {
       table.integer('meses_minimos').unsigned().nullable()
 
       /**
-       * Valor personalizado de dateo recurrencia (NULL = usa global)
+       * 🔄 Valor personalizado de dateo RECURRENTE para este asesor
+       * (vino hace MENOS de mesesMinimos)
+       * NULL = usa el valor global
        */
       table.decimal('valor_dateo_recurrencia', 12, 2).nullable()
+
+      /**
+       * 💛 Valor personalizado de dateo RECUPERACIÓN para este asesor
+       * (vino hace MÁS de mesesMinimos — regresó después de mucho tiempo)
+       * NULL = usa el valor global
+       */
+      table.decimal('valor_dateo_recuperacion', 12, 2).nullable()
 
       /**
        * Tipo de vehículo al que aplica
@@ -55,7 +63,7 @@ export default class ConfiguracionRecurrenciaAsesores extends BaseSchema {
       /* ===== Índices ===== */
       table.index(['asesor_id'])
       table.index(['recurrencia_habilitada'])
-      table.unique(['asesor_id', 'tipo_vehiculo'], 'cfg_recur_asesor_unique') // 👈 Nombre corto
+      table.unique(['asesor_id', 'tipo_vehiculo'], 'cfg_recur_asesor_unique')
     })
   }
 
