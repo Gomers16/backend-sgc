@@ -172,14 +172,15 @@ export default class DescuentosController {
       const page = Math.max(1, Number(request.input('page') || 1))
       const perPage = Math.min(200, Math.max(1, Number(request.input('per_page') || 50)))
 
-      // Rango de fechas — por defecto hoy
+      // Rango de fechas en zona Colombia.
+      // Se usa { zone } en el constructor (NO .setZone() después) para que
+      // startOf/endOf calculen correctamente las 00:00 y 23:59:59 hora Bogotá,
+      // evitando el desfase UTC que mostraba registros del día anterior.
       const hoy = DateTime.now().setZone('America/Bogota').toISODate()!
-      const desde = DateTime.fromISO(fechaDesdeRaw || hoy)
-        .setZone('America/Bogota')
-        .startOf('day')
-      const hasta = DateTime.fromISO(fechaHastaRaw || hoy)
-        .setZone('America/Bogota')
-        .endOf('day')
+      const desde = DateTime.fromISO(fechaDesdeRaw || hoy, { zone: 'America/Bogota' }).startOf(
+        'day'
+      )
+      const hasta = DateTime.fromISO(fechaHastaRaw || hoy, { zone: 'America/Bogota' }).endOf('day')
 
       if (!desde.isValid || !hasta.isValid) {
         return response.badRequest({ success: false, message: 'Fechas inválidas' })
@@ -232,6 +233,11 @@ export default class DescuentosController {
         const agente = dateo?.$preloaded?.agente ?? null
         const servicio = turno?.$preloaded?.servicio ?? null
 
+        // 🆕 Comprobante de avance desde el dateo
+        const esAvance = Boolean(dateo?.esAvance ?? (dateo as any)?.es_avance ?? false)
+        const comprobanteAvanceUrl =
+          (dateo as any)?.comprobanteAvanceUrl ?? (dateo as any)?.comprobante_avance_url ?? null
+
         // Origen: si tiene autorizadoPorId fue aplicado en caja, si no venía del dateo
         const origenRow: 'dateo' | 'caja' = t.autorizadoPorId ? 'caja' : 'dateo'
 
@@ -277,6 +283,10 @@ export default class DescuentosController {
                 nombre: [autoriza.nombres, autoriza.apellidos].filter(Boolean).join(' '),
               }
             : null,
+
+          // 🆕 Comprobante de avance (comercial solicitando en nombre del convenio)
+          es_avance: esAvance,
+          comprobante_avance_url: esAvance && comprobanteAvanceUrl ? comprobanteAvanceUrl : null,
         }
       })
 

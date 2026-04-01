@@ -145,6 +145,28 @@ export default class Comision extends BaseModel {
 
   @column({ columnName: 'monto_original_placa' })
   declare montoOriginalPlaca: number | null
+  // ========== FIN RECURRENCIA ==========
+
+  // ========== 🆕 AVANCE ==========
+  /**
+   * es_avance: heredado del dateo/turno. Cuando true:
+   *   - base                     = incentivo original (valorIncentivoPorTipo, ej: $20.000)
+   *   - descuento_monto_aplicado = monto real cobrado al cliente (ej: $6.000)
+   *   - monto_convenio           = base - descuento_monto_aplicado (ej: $14.000)
+   *   - monto_asesor             = intacto
+   * Sirve de trazabilidad para contabilidad.
+   */
+  @column({ columnName: 'es_avance' })
+  declare esAvance: boolean
+
+  /**
+   * Monto real del avance cobrado al cliente en caja.
+   * Guardado directamente en la comisión para trazabilidad
+   * sin depender de la cadena ticket → dateo.
+   */
+  @column({ columnName: 'descuento_monto_aplicado' })
+  declare descuentoMontoAplicado: number | null
+  // ========== FIN AVANCE ==========
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime

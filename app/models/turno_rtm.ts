@@ -183,6 +183,16 @@ export default class TurnoRtm extends BaseModel {
   @column.date({ columnName: 'fecha_ultima_visita' })
   declare fechaUltimaVisita: DateTime | null
 
+  // ========== 🆕 AVANCE ==========
+  /**
+   * es_avance: heredado del dateo al crear el turno.
+   * true → caja debe aplicar descuento AVANCE al ticket;
+   *        monto_convenio de la comisión queda en $0.
+   */
+  @column({ columnName: 'es_avance' })
+  declare esAvance: boolean
+  // ========== FIN AVANCE ==========
+
   // ── Timestamps
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })
   declare createdAt: DateTime

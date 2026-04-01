@@ -59,7 +59,7 @@ export default class extends BaseSchema {
       // valor_nuevo_directo = cuando comercial trae cliente SIN convenio ($17.200)
       table.decimal('valor_nuevo_directo', 12, 2).notNullable().defaultTo(0)
 
-      // 🆕 Incentivos específicos por tipo de vehículo (null = usa `base` como fallback)
+      // Incentivos específicos por tipo de vehículo (null = usa `base` como fallback)
       table.decimal('valor_placa_vehiculo', 12, 2).nullable().defaultTo(null)
       table.decimal('valor_placa_moto', 12, 2).nullable().defaultTo(null)
 
@@ -86,6 +86,16 @@ export default class extends BaseSchema {
       table.decimal('monto_original_dateo', 12, 2).nullable()
       table.decimal('monto_original_placa', 12, 2).nullable()
       // ========== FIN RECURRENCIA ==========
+
+      // ========== 🆕 AVANCE ==========
+      // es_avance: heredado del dateo/turno.
+      //   - monto_convenio = incentivo - descuento_monto_aplicado
+      //   - monto_asesor   = intacto
+      //   - base           = incentivo original (antes del descuento)
+      //   - descuento_monto_aplicado = monto real cobrado al cliente en caja
+      table.boolean('es_avance').notNullable().defaultTo(false)
+      table.decimal('descuento_monto_aplicado', 12, 2).nullable().defaultTo(null) // 🆕
+      // ========== FIN AVANCE ==========
 
       table.integer('meta_rtm').unsigned().notNullable().defaultTo(0)
       table.decimal('valor_rtm_moto', 12, 2).notNullable().defaultTo(0)
@@ -122,6 +132,7 @@ export default class extends BaseSchema {
       table.index(['es_config'])
       table.index(['tipo_vehiculo', 'es_config'])
       table.index(['descuento_recurrencia_aplicado'])
+      table.index(['es_avance'])
     })
   }
 

@@ -34,7 +34,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
       table.decimal('iva', 14, 2).nullable()
       table.decimal('total_factura', 14, 2).nullable()
 
-      // 🆕 Total original antes de aplicar descuento (trazabilidad)
+      // Total original antes de aplicar descuento (trazabilidad)
       table.decimal('total_sin_descuento', 14, 2).nullable()
 
       // Datos OCR adicionales
@@ -187,7 +187,7 @@ export default class CreateFacturacionTickets extends BaseSchema {
       table.string('revertida_motivo', 180).nullable()
       table.dateTime('revertida_at', { useTz: true }).nullable()
 
-      // 🆕 Descuento informativo aplicado en caja
+      // ====== Descuento informativo aplicado en caja ======
       table
         .integer('descuento_id')
         .unsigned()
@@ -207,6 +207,12 @@ export default class CreateFacturacionTickets extends BaseSchema {
         .index()
 
       table.decimal('descuento_monto_aplicado', 14, 2).nullable()
+
+      // ====== 🆕 Documentos verificación INFORMATIVO_POLICIA ======
+      // Se requieren las 3 fotos para poder aplicar el descuento policial/militar
+      table.string('doc_carnet_path', 512).nullable() // Carnet policial/militar
+      table.string('doc_tarjeta_propiedad_path', 512).nullable() // Tarjeta de propiedad
+      table.string('doc_cedula_path', 512).nullable() // Cédula
 
       // Auditoría
       table

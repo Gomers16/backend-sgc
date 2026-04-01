@@ -4,7 +4,7 @@ import Descuento from '#models/descuento'
 
 export default class extends BaseSeeder {
   async run() {
-    await Descuento.createMany([
+    await Descuento.updateOrCreateMany('codigo', [
       {
         codigo: 'INFORMATIVO',
         nombre: 'Informativo',
@@ -43,6 +43,22 @@ export default class extends BaseSeeder {
         valorCarro: 90000.0,
         valorMoto: 55000.0,
         descripcion: 'Descuento por avance para propietarios',
+        activo: true,
+      },
+      {
+        codigo: 'INFORMATIVO_OBSEQUIO',
+        nombre: 'Informativo Obsequio',
+        valorCarro: 0.0,
+        valorMoto: 0.0,
+        descripcion: 'Descuento informativo por obsequio',
+        activo: true,
+      },
+      {
+        codigo: 'INFORMATIVO_SOAT_RTM',
+        nombre: 'Informativo SOAT-RTM',
+        valorCarro: 0.0,
+        valorMoto: 0.0,
+        descripcion: 'Descuento informativo para combo SOAT y RTM',
         activo: true,
       },
     ])

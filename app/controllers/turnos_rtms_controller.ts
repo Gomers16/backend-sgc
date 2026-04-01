@@ -371,7 +371,6 @@ export default class TurnosRtmController {
       return response.internalServerError({ message: 'Error al obtener el turno' })
     }
   }
-
   /** Crear turno */
   public async store({ request, response }: HttpContext) {
     const trx = await Database.transaction()
@@ -680,6 +679,11 @@ export default class TurnosRtmController {
       }
 
       let captacionDateoId: number | null = null
+
+      // ========== 🆕 AVANCE: variable para heredar del dateo ==========
+      let esAvanceHeredado: boolean = false
+      // ================================================================
+
       if (dateo) {
         const r = buildReserva(dateo)
         if (r.vigente) {
@@ -695,6 +699,11 @@ export default class TurnosRtmController {
           }
 
           captacionDateoId = dateo.id
+
+          // ========== 🆕 AVANCE: heredar esAvance del dateo vigente ==========
+          esAvanceHeredado = Boolean((dateo as any).esAvance ?? false)
+          console.log(`🆕 esAvance heredado del dateo ${dateo.id}: ${esAvanceHeredado}`)
+          // ====================================================================
         } else {
           dateo = null
           dateoObservacion = null
@@ -725,6 +734,9 @@ export default class TurnosRtmController {
         dateoObservacion,
         dateoImagenUrl,
         dateoCanal,
+        // ========== 🆕 AVANCE: heredado del dateo (false si no hay dateo vigente) ==========
+        esAvance: esAvanceHeredado,
+        // ====================================================================================
       }
 
       if (canalAtribucion) {
@@ -807,6 +819,9 @@ export default class TurnosRtmController {
                   consumidoTurnoId: turno.id,
                   consumidoAt: nowBog,
                   observacion: 'Auto-dateo por teléfono detectado',
+                  // ========== 🆕 AVANCE: auto-dateos nunca son avance ==========
+                  esAvance: false,
+                  // ===============================================================
                 } as any,
                 { client: trx }
               )
@@ -845,7 +860,6 @@ export default class TurnosRtmController {
       })
     }
   }
-
   /** Actualizar turno */
   public async update({ params, request, response }: HttpContext) {
     try {

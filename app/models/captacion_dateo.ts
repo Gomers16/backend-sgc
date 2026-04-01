@@ -132,6 +132,28 @@ export default class CaptacionDateo extends BaseModel {
   @column({ columnName: 'descuento_id' })
   declare descuentoId: number | null
 
+  // ========== 🆕 AVANCE ==========
+  /**
+   * es_avance:
+   *   true  → el asesor convenio (o el comercial en su nombre) solicitó
+   *           un avance. El incentivo (monto_convenio) se aplica como
+   *           descuento variable a la factura; el asesor convenio NO cobra.
+   *   false → comportamiento normal (default).
+   */
+  @column({ columnName: 'es_avance' })
+  declare esAvance: boolean
+
+  /**
+   * comprobante_avance_url:
+   *   Path del screenshot de WhatsApp donde el convenio solicitó el avance
+   *   al asesor comercial.
+   *   - Obligatorio cuando esAvance = true Y canal = ASESOR_COMERCIAL.
+   *   - Null cuando es el propio ASESOR_CONVENIO quien datéa.
+   */
+  @column({ columnName: 'comprobante_avance_url' })
+  declare comprobanteAvanceUrl: string | null
+  // ========== FIN AVANCE ==========
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 

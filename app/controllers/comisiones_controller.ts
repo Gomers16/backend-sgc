@@ -32,8 +32,11 @@ function mapComisionToDto(c: Comision) {
   const turno = dateo?.$preloaded?.turno || null
   const servicio = turno?.$preloaded?.servicio || null
 
-  const valorAsesor = toNumber(c.monto)
-  const valorCliente = toNumber(c.base)
+  const montoAsesorRaw = c.montoAsesor !== null ? toNumber(c.montoAsesor) : null
+  const montoConvenioRaw = c.montoConvenio !== null ? toNumber(c.montoConvenio) : null
+
+  const valorAsesor = montoAsesorRaw !== null ? montoAsesorRaw : toNumber(c.monto)
+  const valorCliente = montoConvenioRaw !== null ? montoConvenioRaw : toNumber(c.base)
   const valorTotal = valorAsesor + valorCliente
 
   const montoAsesorComercial = c.montoAsesor ? toNumber(c.montoAsesor) : null
@@ -60,11 +63,12 @@ function mapComisionToDto(c: Comision) {
       : String(fechaUltimaVisitaRaw).substring(0, 10)
     : null
 
-  // 🆕 Extraer descuento del ticket CONFIRMADO del turno
+  // Extraer descuento del ticket CONFIRMADO del turno
   const tickets: any[] = turno?.$preloaded?.facturacionTickets ?? []
   const ticket = tickets.find((t: any) => t.estado === 'CONFIRMADA') ?? tickets[0] ?? null
 
-  const descuentoRaw = ticket?.$preloaded?.descuento ?? null
+  // FIX: descuento puede venir del ticket (caja) o del dateo (pre-marcado)
+  const descuentoRaw = ticket?.$preloaded?.descuento ?? dateo?.$preloaded?.descuento ?? null
   const confirmedByRaw = ticket?.$preloaded?.confirmedBy ?? null
   const autorizadoPorRaw = ticket?.$preloaded?.autorizadoPor ?? null
 
@@ -76,7 +80,6 @@ function mapComisionToDto(c: Comision) {
       }
     : null
 
-  // Si tiene autorizadoPorId → fue aplicado manualmente en caja; si no → venía pre-marcado del dateo
   const descuentoOrigen: 'dateo' | 'caja' | null = descuento
     ? ticket?.autorizadoPorId
       ? 'caja'
@@ -94,8 +97,10 @@ function mapComisionToDto(c: Comision) {
   const descuentoAplicadoPor = confirmedByRaw
     ? {
         id: confirmedByRaw.id,
-        nombres: confirmedByRaw.nombres ?? confirmedByRaw.nombre ?? null,
-        apellidos: confirmedByRaw.apellidos ?? null,
+        nombre:
+          [confirmedByRaw.nombres, confirmedByRaw.apellidos].filter(Boolean).join(' ') ||
+          confirmedByRaw.nombre ||
+          null,
       }
     : null
 
@@ -107,8 +112,34 @@ function mapComisionToDto(c: Comision) {
       }
     : null
 
+  // es_avance viene de la comisión guardada
+  const esAvance = Boolean(anyC.esAvance ?? (anyC as any).es_avance ?? false)
+
+  // descuento_monto_aplicado: leer DIRECTO de la comisión (guardado por el hook).
+  // Fallback al ticket por compatibilidad con registros anteriores al fix.
+  const descuentoMontoAplicadoComision =
+    c.descuentoMontoAplicado !== null ? Number(c.descuentoMontoAplicado) : null
+  const descuentoMontoAplicadoTicket =
+    ticket?.descuentoMontoAplicado !== null ? Number(ticket.descuentoMontoAplicado) : null
+  const descuentoMontoAplicado = descuentoMontoAplicadoComision ?? descuentoMontoAplicadoTicket
+
+  // base = incentivo original antes del avance (guardado por el hook como valorIncentivoPorTipo).
+  // Si base = 0 (registro viejo sin fix), reconstruir como monto_convenio + descuento_monto_aplicado.
+  let baseIncentivo = c.base !== null ? toNumber(c.base) : null
+  if (
+    esAvance &&
+    (baseIncentivo === null || baseIncentivo === 0) &&
+    montoConvenioRaw !== null &&
+    descuentoMontoAplicado !== null &&
+    descuentoMontoAplicado > 0
+  ) {
+    baseIncentivo = montoConvenioRaw + descuentoMontoAplicado
+  }
+
   return {
     id: c.id,
+    // 🆕 tipo_vehiculo directo de la comisión para filtrado y comprobante
+    tipo_vehiculo: (c as any).tipoVehiculo ?? null,
     dateo_id: c.captacionDateoId,
     estado: c.estado,
     cantidad: 1,
@@ -117,6 +148,12 @@ function mapComisionToDto(c: Comision) {
     valor_cliente: valorCliente,
     valor_total: valorTotal,
     generado_at: c.fechaCalculo ? c.fechaCalculo.toISO() : null,
+
+    // campos de desglose correctos
+    monto_asesor: montoAsesorRaw,
+    monto_convenio: montoConvenioRaw,
+    es_avance: esAvance,
+    base: baseIncentivo,
 
     tiene_desglose: tieneDesglose,
     desglose: tieneDesglose
@@ -145,6 +182,8 @@ function mapComisionToDto(c: Comision) {
       ? {
           id: anyC.$preloaded.convenio.id,
           nombre: anyC.$preloaded.convenio.nombre,
+          metodo_pago: anyC.$preloaded.convenio.metodoPago ?? null,
+          numero_metodo_pago: anyC.$preloaded.convenio.numeroMetodoPago ?? null,
         }
       : null,
 
@@ -183,12 +222,14 @@ function mapComisionToDto(c: Comision) {
         }
       : null,
 
-    // 🆕 Descuento informativo (viene del FacturacionTicket CONFIRMADA del turno)
+    // Descuento informativo
     descuento,
     descuento_origen: descuentoOrigen,
     descuento_aplicado_at: descuentoAplicadoAt,
     descuento_aplicado_por: descuentoAplicadoPor,
     descuento_autorizado_por: descuentoAutorizadoPor,
+    // monto del avance/descuento aplicado en caja
+    descuento_monto_aplicado: descuentoMontoAplicado,
   }
 }
 
@@ -201,14 +242,10 @@ function mapConfigToDto(c: Comision) {
     es_config: true,
     asesor_id: c.asesorId ?? null,
     tipo_vehiculo: (c as any).tipoVehiculo ?? null,
-    // incentivo base (fallback cuando no hay específico por tipo)
     valor_placa: toNumber(c.base),
-    // 🆕 incentivos específicos por tipo de vehículo (null = sin configurar, usa valor_placa)
     valor_placa_vehiculo: c.valorPlacaVehiculo !== null ? toNumber(c.valorPlacaVehiculo) : null,
     valor_placa_moto: c.valorPlacaMoto !== null ? toNumber(c.valorPlacaMoto) : null,
-    // dateo nuevo via convenio ($8.600)
     valor_dateo: toNumber(c.monto),
-    // dateo nuevo directo sin convenio ($17.200)
     valor_nuevo_directo: toNumber(c.valorNuevoDirecto ?? 0),
     meta_rtm: c.metaRtm ?? 0,
     porcentaje_comision_meta: toNumber(c.porcentajeComisionMeta ?? 0),
@@ -236,10 +273,12 @@ export default class ComisionesController {
   public async index({ request, response }: HttpContext) {
     const page = Number(request.input('page') || 1)
     const perPage = Math.min(Number(request.input('perPage') || 10), 100)
-    const mes = request.input('mes') as string | undefined
+    const desde = request.input('desde') as string | undefined
+    const hasta = request.input('hasta') as string | undefined
     const asesorId = request.input('asesorId') as number | undefined
     const convenioId = request.input('convenioId') as number | undefined
     const estado = request.input('estado') as string | undefined
+    const tipoVehiculo = request.input('tipoVehiculo') as string | undefined // 🆕
     const sortBy = (request.input('sortBy') || 'id') as string
     const order = (request.input('order') || 'desc') as 'asc' | 'desc'
 
@@ -251,28 +290,27 @@ export default class ComisionesController {
       .preload('convenio')
       .preload('asesorSecundario')
       .preload('dateo', (dq) => {
+        // FIX: preload descuento del dateo para AVANCE pre-marcado
+        dq.preload('descuento')
         dq.preload('turno', (tq) => {
           tq.preload('servicio')
-          // 🆕 Cargar tickets confirmados con descuento y usuarios relacionados
+          // FIX: remover whereNotNull('descuento_id') para capturar tickets
+          // de AVANCE pre-marcado (que tienen monto pero no descuento_id)
           tq.preload('facturacionTickets', (fq) => {
-            fq.whereNotNull('descuento_id')
-              .preload('descuento')
-              .preload('confirmedBy')
-              .preload('autorizadoPor')
+            fq.preload('descuento').preload('confirmedBy').preload('autorizadoPor')
           })
         })
       })
 
-    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
-      const [year, month] = mes.split('-').map(Number)
-      const start = DateTime.fromObject({ year, month, day: 1 }).startOf('day').toSQL()
-      const end = DateTime.fromObject({ year, month, day: 1 }).endOf('month').toSQL()
-      if (start && end) query.whereBetween('fecha_calculo', [start, end])
-    }
+    if (desde) query.where('fecha_calculo', '>=', desde + ' 00:00:00')
+    if (hasta) query.where('fecha_calculo', '<=', hasta + ' 23:59:59')
 
     if (asesorId) query.where('asesor_id', asesorId)
     if (convenioId) query.where('convenio_id', convenioId)
     if (estado) query.where('estado', estado)
+    // 🆕 Filtro por tipo de vehículo (MOTO | VEHICULO)
+    if (tipoVehiculo && ['MOTO', 'VEHICULO'].includes(tipoVehiculo.toUpperCase()))
+      query.where('tipo_vehiculo', tipoVehiculo.toUpperCase())
 
     const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
     let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
@@ -421,14 +459,13 @@ export default class ComisionesController {
       .preload('convenio')
       .preload('asesorSecundario')
       .preload('dateo', (dq) => {
+        // FIX: preload descuento del dateo para AVANCE pre-marcado
+        dq.preload('descuento')
         dq.preload('turno', (tq) => {
           tq.preload('servicio')
-          // 🆕 Cargar tickets con descuento para trazabilidad completa
+          // FIX: remover whereNotNull('descuento_id')
           tq.preload('facturacionTickets', (fq) => {
-            fq.whereNotNull('descuento_id')
-              .preload('descuento')
-              .preload('confirmedBy')
-              .preload('autorizadoPor')
+            fq.preload('descuento').preload('confirmedBy').preload('autorizadoPor')
           })
         })
       })
@@ -549,9 +586,6 @@ export default class ComisionesController {
    *          CONFIGURACIONES DE COMISIONES (es_config = true)
    * ============================================================*/
 
-  /**
-   * GET /api/comisiones/config
-   */
   public async configsIndex({ request, response }: HttpContext) {
     const asesorId = request.input('asesorId') as number | undefined
     const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
@@ -565,9 +599,6 @@ export default class ComisionesController {
     return response.ok({ data: result.map((c) => mapConfigToDto(c)) })
   }
 
-  /**
-   * POST /api/comisiones/config
-   */
   public async configsUpsert({ request, response }: HttpContext) {
     const payload = request.only([
       'asesor_id',
@@ -598,11 +629,8 @@ export default class ComisionesController {
       .where('es_config', true)
       .where('tipo_vehiculo', tipoVehiculo)
 
-    if (asesorId === null) {
-      existingQuery.whereNull('asesor_id')
-    } else {
-      existingQuery.where('asesor_id', asesorId)
-    }
+    if (asesorId === null) existingQuery.whereNull('asesor_id')
+    else existingQuery.where('asesor_id', asesorId)
 
     let comision = await existingQuery.first()
 
@@ -639,9 +667,6 @@ export default class ComisionesController {
     return response.ok(mapConfigToDto(comision))
   }
 
-  /**
-   * PATCH /api/comisiones/config/:id
-   */
   public async configsUpdate({ params, request, response }: HttpContext) {
     const comision = await Comision.find(params.id)
     if (!comision || !comision.esConfig)
@@ -671,25 +696,19 @@ export default class ComisionesController {
 
     if (payload.valor_placa !== undefined)
       comision.base = String(Math.max(0, toNumber(payload.valor_placa)))
-
     if (payload.valor_dateo !== undefined)
       comision.monto = String(Math.max(0, toNumber(payload.valor_dateo)))
-
     if (payload.valor_nuevo_directo !== undefined)
       comision.valorNuevoDirecto = String(Math.max(0, toNumber(payload.valor_nuevo_directo)))
-
     if (payload.valor_placa_vehiculo !== undefined) {
       const v = parseNullable(payload.valor_placa_vehiculo)
       comision.valorPlacaVehiculo = v !== null ? String(v) : null
     }
-
     if (payload.valor_placa_moto !== undefined) {
       const v = parseNullable(payload.valor_placa_moto)
       comision.valorPlacaMoto = v !== null ? String(v) : null
     }
-
     if (payload.meta_rtm !== undefined) comision.metaRtm = Math.max(0, toNumber(payload.meta_rtm))
-
     if (payload.porcentaje_comision_meta !== undefined)
       comision.porcentajeComisionMeta = String(
         Math.max(0, toNumber(payload.porcentaje_comision_meta))
@@ -699,14 +718,10 @@ export default class ComisionesController {
     return response.ok(mapConfigToDto(comision))
   }
 
-  /**
-   * DELETE /api/comisiones/config/:id
-   */
   public async configsDestroy({ params, response }: HttpContext) {
     const comision = await Comision.find(params.id)
     if (!comision || !comision.esConfig)
       return response.notFound({ message: 'Configuración no encontrada' })
-
     await comision.delete()
     return response.ok({ message: 'Configuración eliminada correctamente' })
   }
@@ -895,7 +910,6 @@ export default class ComisionesController {
     const mesesMinimos = Math.max(1, toNumber(payload.meses_minimos))
     const valorDateoRecurrencia = Math.max(0, toNumber(payload.valor_dateo_recurrencia))
     const valorDateoRecuperacion = Math.max(0, toNumber(payload.valor_dateo_recuperacion ?? 8600))
-
     const valorDateoRecurrenciaVehiculo = parseNullable(payload.valor_dateo_recurrencia_vehiculo)
     const valorDateoRecurrenciaMoto = parseNullable(payload.valor_dateo_recurrencia_moto)
     const valorDateoRecuperacionVehiculo = parseNullable(payload.valor_dateo_recuperacion_vehiculo)

@@ -131,7 +131,7 @@ export default class CaptacionDateos extends BaseSchema {
         .onDelete('SET NULL')
       // ========== FIN RECURRENCIA ==========
 
-      // 🆕 Descuento informativo pre-marcado por el comercial
+      // Descuento informativo pre-marcado por el comercial
       table
         .integer('descuento_id')
         .unsigned()
@@ -139,6 +139,26 @@ export default class CaptacionDateos extends BaseSchema {
         .references('id')
         .inTable('descuentos')
         .onDelete('SET NULL')
+
+      // ========== 🆕 AVANCE ==========
+      /**
+       * es_avance:
+       *   true  → el asesor convenio (o el comercial en su nombre) solicitó
+       *           un avance. El incentivo (monto_convenio) se aplica como
+       *           descuento variable a la factura; el asesor convenio NO cobra.
+       *   false → comportamiento normal (default).
+       */
+      table.boolean('es_avance').notNullable().defaultTo(false)
+
+      /**
+       * comprobante_avance_url:
+       *   Path del screenshot de WhatsApp donde el convenio solicitó el avance
+       *   al asesor comercial.
+       *   - Obligatorio cuando es_avance = true Y canal = ASESOR_COMERCIAL.
+       *   - Null cuando es el propio ASESOR_CONVENIO quien datéa.
+       */
+      table.string('comprobante_avance_url', 512).nullable()
+      // ========== FIN AVANCE ==========
 
       // Timestamps
       table.dateTime('created_at', { precision: 0 }).notNullable().defaultTo(this.now())
@@ -155,7 +175,8 @@ export default class CaptacionDateos extends BaseSchema {
       table.index(['prospecto_id'])
       table.index(['liberado', 'resultado'])
       table.index(['es_cliente_recurrente'])
-      table.index(['descuento_id']) // 🆕
+      table.index(['descuento_id'])
+      table.index(['es_avance']) // 🆕
     })
 
     // Corrección de datos existentes

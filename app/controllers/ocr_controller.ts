@@ -47,7 +47,19 @@ export default class OcrController {
       // 3) Detector de plantilla Activautos → extractor dedicado
       let campos: any | null = null
       if (/activautos\.com|TIQUETE\s+POS\s+NO/i.test(text)) {
-        campos = this.extractActivAutos(text)
+        const base = this.extractActivAutos(text)
+        const rois = await this.extractByROI(imagePath, words)
+        let pinFinal = rois.pin || base.pin
+        if (rois.pin) {
+          const tieneSufijo = /\s[A-Z]\d{1,3}$/.test(rois.pin)
+          if (!tieneSufijo) {
+            // Buscar sufijo directamente en la línea del PIN del texto original
+            const pinLinea = (text.match(/^.*\bPIN\b[:\s]*(.+)$/im) || [])[1] || ''
+            const sufijoTexto = pinLinea.toUpperCase().match(/\b([A-Z]\d{1,3})\s*$/)?.[1] || null
+            pinFinal = sufijoTexto ? `${rois.pin} ${sufijoTexto}` : rois.pin
+          }
+        }
+        campos = { ...base, pin: pinFinal }
       }
 
       if (!campos) {
@@ -57,7 +69,7 @@ export default class OcrController {
         campos = {
           placa: this.normalizePlate(rois.placa || base.placa),
           nit: rois.nit || base.nit,
-          pin: this.cleanPin(rois.pin || base.pin),
+          pin: rois.pin || base.pin,
           marca: rois.marca || base.marca,
           vendedor: rois.vendedor || base.vendedor,
           prefijo: rois.prefijo || base.prefijo,
@@ -71,7 +83,15 @@ export default class OcrController {
         }
       }
 
-      return { ok: true, text, campos }
+      const pinTieneAmbiguos = /[08]/.test(campos.pin || '')
+      return {
+        ok: true,
+        text,
+        campos,
+        advertencias: pinTieneAmbiguos
+          ? ['El PIN puede contener dígitos 0/8 confundidos, verifique manualmente']
+          : [],
+      }
     } catch (err) {
       console.error('OCR backend error:', err)
       return response.internalServerError({ ok: false, message: 'Error ejecutando OCR' })
@@ -117,7 +137,9 @@ export default class OcrController {
     const nit = matchAfterLabel(txt, /NIT\b/i)
     const vendedor = matchAfterLabel(txt, /VEND(?:EDOR)?/i)
     const placaRaw = matchAfterLabel(txt, /PLACA\b/i)
-    const pinRaw = matchAfterLabel(txt, /PIN\b/i)
+    const pinLine =
+      (txt.match(/^.*\bPIN\b[:\s]*(.+)$/im) || [])[1] || matchAfterLabel(txt, /PIN\b/i)
+    const pinRaw = pinLine
     const marcaRaw = matchAfterLabel(txt, /MARCA\b/i)
 
     // En la misma línea de cabecera suele estar "FV FE: 1960" (o variantes)
@@ -202,7 +224,10 @@ export default class OcrController {
     // Lecturas con whitelist
     const placaRaw = await read(roiPlaca, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
     const nitRaw = await read(roiNit, '0123456789.- ')
-    const pinRaw = await read(roiPin, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
+    // PIN: multipass para mayor precisión en dígitos 0↔8
+    const pinMulti = roiPin ? await this.readPinMultipass(imagePath, roiPin) : null
+    const pinFullRaw = await read(roiPin, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ')
+    const pinRaw = this.combinePin(pinMulti, pinFullRaw)
     const marcaRaw = await read(roiMarca)
     const venRaw = await read(roiVen)
     const fvRaw = await read(roiFV, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
@@ -216,7 +241,7 @@ export default class OcrController {
     return {
       placa: this.normalizePlate(this.takeFirstToken(placaRaw)),
       nit: this.cleanNit(nitRaw),
-      pin: this.cleanPin(this.takeFirstToken(pinRaw)),
+      pin: this.cleanPin(pinRaw),
       marca: this.cleanSimple(marcaRaw),
       vendedor: this.cleanSimple(venRaw),
       prefijo: prefCons.prefijo,
@@ -239,6 +264,60 @@ export default class OcrController {
       .normalize()
       .toFormat('png')
       .toBuffer()
+  }
+
+  // ================= MULTIPASS PIN (voto por mayoría dígito a dígito) =================
+  private async readPinMultipass(
+    imagePath: string,
+    roi: { x0: number; y0: number; x1: number; y1: number }
+  ): Promise<string | null> {
+    const { default: sharp } = await import('sharp')
+    const left = Math.max(roi.x0 - 6, 0)
+    const top = Math.max(roi.y0 - 6, 0)
+    const width = Math.max(roi.x1 - roi.x0 + 12, 12)
+    const height = Math.max(roi.y1 - roi.y0 + 12, 12)
+
+    // 3 pasadas con distintos thresholds
+    const thresholds = [140, 165, 190]
+    const resultados: string[] = []
+
+    for (const t of thresholds) {
+      const buf = await sharp(imagePath)
+        .extract({ left, top, width, height })
+        .resize(width * 4)
+        .grayscale()
+        .normalize()
+        .sharpen(2, 1, 0.5)
+        .threshold(t)
+        .toFormat('png')
+        .toBuffer()
+
+      const { data } = await Tesseract.recognize(buf, 'eng', {
+        tessedit_pageseg_mode: '7',
+        user_defined_dpi: '300',
+        tessedit_char_whitelist: '0123456789',
+      } as any)
+
+      const digits = (data?.text || '').replace(/\D/g, '')
+      if (digits.length >= 6) resultados.push(digits)
+    }
+
+    if (!resultados.length) return null
+
+    // Voto por mayoría dígito a dígito
+    const maxLen = Math.max(...resultados.map((r) => r.length))
+    let pinFinal = ''
+    for (let i = 0; i < maxLen; i++) {
+      const votos: Record<string, number> = {}
+      for (const r of resultados) {
+        const d = r[i]
+        if (d) votos[d] = (votos[d] || 0) + 1
+      }
+      const ganador = Object.entries(votos).sort((a, b) => b[1] - a[1])[0]?.[0] || '0'
+      pinFinal += ganador
+    }
+
+    return pinFinal.length >= 6 ? pinFinal : null
   }
 
   private takeFirstToken(s?: string | null) {
@@ -268,7 +347,7 @@ export default class OcrController {
         this.takeFirstToken(one.match(/\b([A-Z]{3}\d{2,3}[A-Z]?)\b/)?.[1])
     )
     const nit = this.cleanNit(pickLine(/NIT/i))
-    const pin = this.cleanPin(this.takeFirstToken(pickLine(/PIN/i)))
+    const pin = this.cleanPin(pickLine(/PIN/i))
     const marca = this.cleanSimple(pickLine(/MARCA/i))
     const vendedor = this.cleanSimple(pickLine(/VEN(?:DEDOR)?/i))
 
@@ -373,8 +452,14 @@ export default class OcrController {
 
   private cleanPin(s?: string | null) {
     if (!s) return null
-    const m = s.toUpperCase().match(/^[A-Z0-9\- ]{4,20}$/)
-    return m ? m[0].trim().replace(/\s+/g, ' ') : null
+    return s.trim() || null
+  }
+
+  private combinePin(numPart?: string | null, fullPart?: string | null): string | null {
+    const num = (numPart || '').replace(/\D/g, '')
+    if (!num || num.length < 6) return null
+    const sufijo = (fullPart || '').toUpperCase().match(/\b([A-Z]\d{1,3})\b/)?.[1] || null
+    return sufijo ? `${num} ${sufijo}` : num
   }
 
   /** Normaliza placas colombianas (AAA123 / AAA12A) corrigiendo O↔0, I↔1, S↔5 por posición sin forzar cambios injustificados */
@@ -424,86 +509,72 @@ export default class OcrController {
   }
 
   /**
-   * 🔥 NUEVA FUNCIÓN: Corrige errores comunes del OCR en fechas
+   * Corrige errores comunes del OCR en fechas
    * Recibe formato DD/MM/YYYY y devuelve formato corregido DD/MM/YYYY
    */
   private corregirFechaOCR(fechaStr: string): string {
     if (!fechaStr) return fechaStr
 
-    // Separar componentes (puede venir DD/MM/YYYY o DD-MM-YYYY)
     const parts = fechaStr.replace(/-/g, '/').split('/')
     if (parts.length !== 3) return fechaStr
 
     let [dia, mes, ano] = parts.map((p) => Number.parseInt(p, 10))
 
-    // 🔥 CORRECCIONES COMUNES DEL OCR
-
-    // 1. Año absurdo (>2030 o <2020) - probablemente el OCR confundió dígitos
+    // 1. Año absurdo (>2030 o <2020)
     if (ano > 2030 || ano < 2020) {
-      // Si el año es 26XX, probablemente es 20XX (6→0)
       if (ano >= 2600 && ano <= 2699) {
         ano = 2000 + (ano - 2600)
         console.log('🔧 OCR Backend: Año 26XX → 20XX:', ano)
-      }
-      // Si el año es 21XX, probablemente es 20XX (1→0 al inicio)
-      else if (ano >= 2100 && ano <= 2199) {
+      } else if (ano >= 2100 && ano <= 2199) {
         ano = 2000 + (ano - 2100)
         console.log('🔧 OCR Backend: Año 21XX → 20XX:', ano)
-      }
-      // Si el año es 30XX, probablemente es 20XX (3→2)
-      else if (ano >= 3000 && ano <= 3099) {
+      } else if (ano >= 3000 && ano <= 3099) {
         ano = 2000 + (ano - 3000)
         console.log('🔧 OCR Backend: Año 30XX → 20XX:', ano)
       }
     }
 
-    // 2. Mes inválido (>12) - intentar corregir
+    // 2. Mes inválido (>12)
     if (mes > 12) {
-      // Si el mes es 18, probablemente es 10 (1→1, 8→0) o 08
       if (mes === 18) {
         mes = 10
         console.log('🔧 OCR Backend: Mes 18 → 10')
-      }
-      // Si el mes es 13-17, probablemente es 03-07 (1X→0X)
-      else if (mes >= 13 && mes <= 17) {
+      } else if (mes >= 13 && mes <= 17) {
         mes = mes - 10
         console.log('🔧 OCR Backend: Mes 1X → 0X:', mes)
-      }
-      // Si el mes es 19, probablemente es 09
-      else if (mes === 19) {
+      } else if (mes === 19) {
         mes = 9
         console.log('🔧 OCR Backend: Mes 19 → 09')
-      }
-      // Si el mes es 20-29, probablemente es 00-09 (2→0)
-      else if (mes >= 20 && mes <= 29) {
+      } else if (mes >= 20 && mes <= 29) {
         mes = mes - 20
         console.log('🔧 OCR Backend: Mes 2X → 0X:', mes)
+      } else if (mes >= 80 && mes <= 89) {
+        mes = mes - 80
+        console.log('🔧 OCR Backend: Mes 8X → 0X:', mes)
+      } else if (mes >= 70 && mes <= 79) {
+        mes = mes - 70
+        console.log('🔧 OCR Backend: Mes 7X → 0X:', mes)
       }
     }
 
-    // 3. Día inválido (>31) - intentar corregir
+    // 3. Día inválido (>31)
     if (dia > 31) {
-      // Si el día es 38, probablemente es 28 (3→2)
       if (dia === 38) {
         dia = 28
         console.log('🔧 OCR Backend: Día 38 → 28')
-      }
-      // Si el día es 32-37, probablemente es 22-27
-      else if (dia >= 32 && dia <= 37) {
+      } else if (dia >= 32 && dia <= 37) {
         dia = dia - 10
         console.log('🔧 OCR Backend: Día 3X → 2X:', dia)
-      }
-      // Si el día es 39, probablemente es 29
-      else if (dia === 39) {
+      } else if (dia === 39) {
         dia = 29
         console.log('🔧 OCR Backend: Día 39 → 29')
       }
     }
 
-    // 4. Validación final de rangos
+    // 4. Validación final
     if (dia < 1 || dia > 31) {
       console.warn('⚠️ OCR Backend: Día fuera de rango después de corrección:', dia)
-      return fechaStr // Devolver original si no se puede corregir
+      return fechaStr
     }
     if (mes < 1 || mes > 12) {
       console.warn('⚠️ OCR Backend: Mes fuera de rango después de corrección:', mes)
@@ -514,23 +585,19 @@ export default class OcrController {
       return fechaStr
     }
 
-    // Reconstruir fecha corregida en formato DD/MM/YYYY
     const fechaCorregida = `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`
     console.log('✅ OCR Backend: Fecha corregida:', fechaStr, '→', fechaCorregida)
-
     return fechaCorregida
   }
 
   /**
-   * 🔥 FUNCIÓN MODIFICADA: Aplica corrección de errores OCR antes de convertir a ISO
+   * Aplica corrección de errores OCR antes de convertir a ISO
    */
   private toLocalDatetimeISO(fecha?: string | null, hora?: string | null): string | null {
     if (!fecha) return null
 
-    // 🔥 APLICAR CORRECCIÓN DE ERRORES OCR ANTES DE PROCESAR
     const fechaCorregida = this.corregirFechaOCR(fecha)
 
-    // Soporta "dd/mm/yyyy" o "yyyy-mm-dd"
     let yyyy = ''
     let mm = ''
     let dd = ''
@@ -579,7 +646,6 @@ function norm(text: string) {
 }
 
 function matchAfterLabel(src: string, label: RegExp) {
-  // etiqueta, dos puntos opcional; el valor puede estar en la misma línea o en la siguiente
   const re = new RegExp(`${label.source}[\\s:]*\\n?\\s*([^\\n]+)`, label.flags)
   const m = src.match(re)
   return m ? m[1].trim() : null

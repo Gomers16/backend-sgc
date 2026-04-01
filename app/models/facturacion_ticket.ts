@@ -144,7 +144,7 @@ export default class FacturacionTicket extends BaseModel {
   @column({ columnName: 'revertida_motivo' }) declare revertidaMotivo: string | null
   @column.dateTime({ columnName: 'revertida_at' }) declare revertidaAt: DateTime | null
 
-  /* ============== 🆕 Descuento informativo ============== */
+  /* ============== Descuento informativo aplicado en caja ============== */
 
   /** FK al descuento aplicado (informativo u otro) */
   @column({ columnName: 'descuento_id' })
@@ -153,7 +153,7 @@ export default class FacturacionTicket extends BaseModel {
   @belongsTo(() => Descuento, { foreignKey: 'descuentoId' })
   declare descuento: BelongsTo<typeof Descuento>
 
-  /** Usuario que autorizó el descuento (admin o comercial pre-marcó en dateo) */
+  /** Usuario que autorizó el descuento */
   @column({ columnName: 'autorizado_por_id' })
   declare autorizadoPorId: number | null
 
@@ -164,9 +164,25 @@ export default class FacturacionTicket extends BaseModel {
   @column({ columnName: 'descuento_monto_aplicado' })
   declare descuentoMontoAplicado: number | null
 
-  /** Total original antes de aplicar el descuento (para trazabilidad) */
+  /** Total original antes de aplicar el descuento (trazabilidad) */
   @column({ columnName: 'total_sin_descuento' })
   declare totalSinDescuento: number | null
+
+  /* ============== 🆕 Documentos verificación INFORMATIVO_POLICIA ============== */
+  // Las 3 fotos son obligatorias para poder aplicar el descuento policial/militar.
+  // Se valida en el controller que existan antes de confirmar el descuento.
+
+  /** Carnet policial o militar */
+  @column({ columnName: 'doc_carnet_path' })
+  declare docCarnetPath: string | null
+
+  /** Tarjeta de propiedad del vehículo */
+  @column({ columnName: 'doc_tarjeta_propiedad_path' })
+  declare docTarjetaPropiedadPath: string | null
+
+  /** Cédula del solicitante */
+  @column({ columnName: 'doc_cedula_path' })
+  declare docCedulaPath: string | null
 
   /* ============== Auditoría ============== */
   @column({ columnName: 'created_by_id' }) declare createdById: number | null
@@ -186,6 +202,25 @@ export default class FacturacionTicket extends BaseModel {
     if (!this.prefijo && !this.consecutivo) return null
     const sep = this.prefijo && this.consecutivo ? '-' : ''
     return `${this.prefijo ?? ''}${sep}${this.consecutivo ?? ''}`
+  }
+
+  /**
+   * Verifica si el descuento INFORMATIVO_POLICIA puede aplicarse.
+   * Requiere las 3 fotos cargadas.
+   */
+  public get documentosPoliciaCargados(): boolean {
+    return !!(this.docCarnetPath && this.docTarjetaPropiedadPath && this.docCedulaPath)
+  }
+
+  /**
+   * Retorna qué documentos faltan para INFORMATIVO_POLICIA.
+   */
+  public get documentosPoliciaFaltantes(): string[] {
+    const faltantes: string[] = []
+    if (!this.docCarnetPath) faltantes.push('carnet')
+    if (!this.docTarjetaPropiedadPath) faltantes.push('tarjeta_propiedad')
+    if (!this.docCedulaPath) faltantes.push('cedula')
+    return faltantes
   }
 
   @beforeSave()

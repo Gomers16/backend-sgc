@@ -2,6 +2,8 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 import db from '@adonisjs/lucid/services/db'
+import app from '@adonisjs/core/services/app'
+import fs from 'node:fs/promises'
 import CaptacionDateo, { Canal, Origen } from '#models/captacion_dateo'
 import AgenteCaptacion from '#models/agente_captacion'
 import Convenio from '#models/convenio'
@@ -66,6 +68,10 @@ function toSnake(row: any) {
     consumido_at: row.consumidoAt ?? null,
     // 🆕
     descuento_id: row.descuentoId ?? null,
+    // ========== 🆕 AVANCE ==========
+    es_avance: row.esAvance ?? false,
+    comprobante_avance_url: row.comprobanteAvanceUrl ?? null,
+    // ================================
   }
 }
 
@@ -326,7 +332,6 @@ export default class CaptacionDateosController {
     const reserva = buildReserva(item)
     return { ...toSnake(out), reserva, turnoInfo }
   }
-
   /**
    * POST /captacion-dateos
    */
@@ -408,6 +413,37 @@ export default class CaptacionDateosController {
       }
       descuentoId = descuentoIdRaw
     }
+
+    // ========== 🆕 AVANCE ==========
+    /**
+     * es_avance:
+     *   - Si es ASESOR_CONVENIO quien datéa → comprobante no es obligatorio (él mismo pide el avance)
+     *   - Si es ASESOR_COMERCIAL quien datéa → comprobante_avance_url ES OBLIGATORIO
+     */
+    const esAvance = Boolean(
+      request.input('es_avance') === true ||
+        request.input('es_avance') === 'true' ||
+        request.input('esAvance') === true ||
+        request.input('esAvance') === 'true'
+    )
+
+    let comprobanteAvanceUrl: string | null =
+      (request.input('comprobante_avance_url') as string | undefined) ?? null
+
+    if (esAvance && canal === 'ASESOR_COMERCIAL' && !comprobanteAvanceUrl) {
+      return response.badRequest({
+        message:
+          'comprobante_avance_url es obligatorio cuando el asesor comercial solicita un avance en nombre del convenio.',
+      })
+    }
+
+    // Si el canal no es de asesor, avance no aplica
+    if (esAvance && canal !== 'ASESOR_COMERCIAL' && canal !== 'ASESOR_CONVENIO') {
+      return response.badRequest({
+        message: 'es_avance solo aplica para canal ASESOR_COMERCIAL o ASESOR_CONVENIO.',
+      })
+    }
+    // ========== FIN AVANCE ==========
 
     if (!ORIGENES.includes(origen)) {
       return response.badRequest({ message: 'origen inválido (UI | WHATSAPP | IMPORT)' })
@@ -593,6 +629,10 @@ export default class CaptacionDateosController {
       imagenOrigenId: imagenOrigenId === null ? null : String(imagenOrigenId),
       imagenSubidaPor,
       descuentoId, // 🆕
+      // ========== 🆕 AVANCE ==========
+      esAvance,
+      comprobanteAvanceUrl: esAvance ? comprobanteAvanceUrl : null,
+      // ================================
     })
 
     if (placa) {
@@ -668,6 +708,40 @@ export default class CaptacionDateosController {
         }
       }
     }
+
+    // ========== 🆕 AVANCE: actualizar es_avance y comprobante ==========
+    const esAvanceInput = request.input('es_avance') ?? request.input('esAvance')
+    if (esAvanceInput !== undefined) {
+      const nuevoEsAvance =
+        esAvanceInput === true || esAvanceInput === 'true' || esAvanceInput === 1
+
+      // Si se está activando el avance en un dateo de comercial, requiere comprobante
+      if (nuevoEsAvance && !item.esAvance && item.canal === 'ASESOR_COMERCIAL') {
+        const comprobanteInput =
+          (request.input('comprobante_avance_url') as string | undefined) ??
+          item.comprobanteAvanceUrl
+
+        if (!comprobanteInput) {
+          return response.badRequest({
+            message:
+              'comprobante_avance_url es obligatorio al activar avance para canal ASESOR_COMERCIAL.',
+          })
+        }
+      }
+
+      item.esAvance = nuevoEsAvance
+
+      // Si se desactiva el avance, limpiar comprobante
+      if (!nuevoEsAvance) {
+        item.comprobanteAvanceUrl = null
+      }
+    }
+
+    const comprobanteAvanceUrlInput = request.input('comprobante_avance_url') as string | undefined
+    if (comprobanteAvanceUrlInput !== undefined) {
+      item.comprobanteAvanceUrl = comprobanteAvanceUrlInput || null
+    }
+    // ========== FIN AVANCE ==========
 
     if (placa !== undefined) {
       item.placa = normalizePlaca(placa)
@@ -753,7 +827,6 @@ export default class CaptacionDateosController {
     const reserva = buildReserva(item)
     return { ...toSnake(out), reserva, turnoInfo }
   }
-
   /** DELETE /captacion-dateos/:id */
   public async destroy({ params, response }: HttpContext) {
     const item = await CaptacionDateo.find(params.id)
@@ -761,4 +834,146 @@ export default class CaptacionDateosController {
     await item.delete()
     return response.noContent()
   }
+
+  // ========== 🆕 AVANCE ==========
+
+  /**
+   * PATCH /captacion-dateos/:id/avance
+   *
+   * 🎯 PROPÓSITO:
+   * Activa o desactiva el flag es_avance en un dateo existente.
+   *
+   * BODY:
+   *   es_avance: boolean                    (requerido)
+   *   comprobante_avance_url?: string        (obligatorio si es_avance=true y canal=ASESOR_COMERCIAL)
+   *
+   * REGLAS:
+   *   - Solo se puede activar avance si el dateo aún NO fue consumido (sin turno asignado).
+   *   - Si canal=ASESOR_COMERCIAL y se activa → comprobante obligatorio.
+   *   - Si canal=ASESOR_CONVENIO → comprobante no requerido.
+   *   - Al desactivar → se limpia comprobante_avance_url.
+   */
+  public async toggleAvance({ params, request, response }: HttpContext) {
+    const item = await CaptacionDateo.find(params.id)
+    if (!item) return response.notFound({ message: 'Dateo no encontrado' })
+
+    // Solo se puede modificar avance si el dateo aún no fue consumido por un turno
+    if (item.consumidoTurnoId) {
+      return response.badRequest({
+        message:
+          'No se puede modificar es_avance en un dateo que ya fue consumido por un turno. El turno ya heredó el valor original.',
+      })
+    }
+
+    const esAvanceInput = request.input('es_avance') ?? request.input('esAvance')
+    if (esAvanceInput === undefined || esAvanceInput === null) {
+      return response.badRequest({ message: 'El campo es_avance es obligatorio.' })
+    }
+
+    const nuevoEsAvance = esAvanceInput === true || esAvanceInput === 'true' || esAvanceInput === 1
+
+    // Avance solo aplica para canales de asesor
+    if (nuevoEsAvance && item.canal !== 'ASESOR_COMERCIAL' && item.canal !== 'ASESOR_CONVENIO') {
+      return response.badRequest({
+        message: 'es_avance solo aplica para canal ASESOR_COMERCIAL o ASESOR_CONVENIO.',
+      })
+    }
+
+    const comprobanteInput = (request.input('comprobante_avance_url') as string | undefined) ?? null
+
+    // Si se activa el avance y el canal es comercial → comprobante obligatorio
+    if (nuevoEsAvance && item.canal === 'ASESOR_COMERCIAL') {
+      const comprobanteEfectivo = comprobanteInput ?? item.comprobanteAvanceUrl
+      if (!comprobanteEfectivo) {
+        return response.badRequest({
+          message:
+            'comprobante_avance_url es obligatorio al activar avance para canal ASESOR_COMERCIAL.',
+        })
+      }
+    }
+
+    item.esAvance = nuevoEsAvance
+
+    if (nuevoEsAvance) {
+      // Actualizar comprobante solo si se envió en este request
+      if (comprobanteInput !== null) {
+        item.comprobanteAvanceUrl = comprobanteInput
+      }
+    } else {
+      // Al desactivar avance → limpiar comprobante
+      item.comprobanteAvanceUrl = null
+    }
+
+    await item.save()
+
+    console.log(`🆕 toggleAvance dateo ${item.id}: esAvance=${item.esAvance}`)
+
+    const out = item.serialize() as any
+    out.canal = (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const).includes(out.canal)
+      ? 'ASESOR'
+      : out.canal
+
+    return response.ok(toSnake(out))
+  }
+
+  /**
+   * GET /captacion-dateos/:id/comprobante-avance
+   *
+   * 🎯 PROPÓSITO:
+   * Sirve el archivo de comprobante de avance (screenshot WhatsApp).
+   *
+   * COMPORTAMIENTO:
+   *   - Si comprobanteAvanceUrl es una URL externa (http/https) → redirect 302.
+   *   - Si es una ruta local de disco → stream del archivo.
+   *   - Si no tiene comprobante → 404.
+   */
+  public async servirComprobanteAvance({ params, response }: HttpContext) {
+    const item = await CaptacionDateo.query()
+      .where('id', params.id)
+      .select(['id', 'es_avance', 'comprobante_avance_url'])
+      .first()
+
+    if (!item) return response.notFound({ message: 'Dateo no encontrado' })
+
+    if (!item.esAvance) {
+      return response.badRequest({ message: 'Este dateo no tiene avance activado.' })
+    }
+
+    if (!item.comprobanteAvanceUrl) {
+      return response.notFound({ message: 'Este dateo no tiene comprobante de avance.' })
+    }
+
+    const url = item.comprobanteAvanceUrl
+
+    // Si es URL externa → redirect
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return response.redirect(url)
+    }
+
+    // Si es ruta local → stream
+    const rutaAbsoluta = app.makePath('storage', url)
+
+    try {
+      await fs.access(rutaAbsoluta)
+    } catch {
+      return response.notFound({ message: 'Archivo de comprobante no encontrado en disco.' })
+    }
+
+    // Detectar mime básico por extensión
+    const ext = url.split('.').pop()?.toLowerCase() ?? ''
+    const mimeMap: Record<string, string> = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+      gif: 'image/gif',
+      pdf: 'application/pdf',
+    }
+    const contentType = mimeMap[ext] ?? 'application/octet-stream'
+
+    response.header('Content-Type', contentType)
+    return response.download(rutaAbsoluta)
+  }
+
+  // ========== FIN AVANCE ==========
 }

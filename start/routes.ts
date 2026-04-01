@@ -849,6 +849,33 @@ router
         return new CaptacionUtilController().crearAutoPorConvenio(ctx)
       })
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+    router
+      .patch('/captacion-dateos/:id/avance', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().toggleAvance(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
+      ])
+
+    router
+      .get('/captacion-dateos/:id/comprobante-avance', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().servirComprobanteAvance(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
     /* =============================== PROSPECTOS ======================== */
 
     router
@@ -1474,6 +1501,35 @@ router
         }),
       ])
 
+    // 🆕 Documentos verificación INFORMATIVO_POLICIA
+    router
+      .post('/facturacion/tickets/:id/documentos-policia', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().subirDocumentoPolicia(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'],
+        }),
+      ])
+
+    router
+      .get('/facturacion/tickets/:id/documentos-policia/:tipo', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().servirDocumentoPolicia(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
+
+    /* ============================ CERTIFICACIONES ====================== */
+
     /* ============================ CERTIFICACIONES ====================== */
 
     router
@@ -1511,6 +1567,71 @@ router
       const { default: OcrController } = await import('#controllers/ocr_controller')
       return new OcrController().parseTicket(ctx)
     })
+
+    /* ======================== COMPROBANTES DE PAGO ===================== */
+
+    router
+      .get('/comprobantes-pago', async (ctx) => {
+        const { default: ComprobantesPagoController } = await import(
+          '#controllers/comprobantes_pagos_controller'
+        )
+        return new ComprobantesPagoController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
+
+    router
+      .post('/comprobantes-pago', async (ctx) => {
+        const { default: ComprobantesPagoController } = await import(
+          '#controllers/comprobantes_pagos_controller'
+        )
+        return new ComprobantesPagoController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
+
+    router
+      .get('/comprobantes-pago/:id', async (ctx) => {
+        const { default: ComprobantesPagoController } = await import(
+          '#controllers/comprobantes_pagos_controller'
+        )
+        return new ComprobantesPagoController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
+
+    router
+      .patch('/comprobantes-pago/:id/evidencia', async (ctx) => {
+        const { default: ComprobantesPagoController } = await import(
+          '#controllers/comprobantes_pagos_controller'
+        )
+        return new ComprobantesPagoController().subirEvidencia(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
+
+    router
+      .delete('/comprobantes-pago/:id/evidencia', async (ctx) => {
+        const { default: ComprobantesPagoController } = await import(
+          '#controllers/comprobantes_pagos_controller'
+        )
+        return new ComprobantesPagoController().eliminarEvidencia(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
 
     /* ================================ UPLOADS ========================== */
 

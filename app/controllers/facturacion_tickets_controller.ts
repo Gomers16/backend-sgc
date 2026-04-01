@@ -1,4 +1,4 @@
-// app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 1/4
+// app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 1/3
 import type { HttpContext } from '@adonisjs/core/http'
 import { cuid } from '@adonisjs/core/helpers'
 import app from '@adonisjs/core/services/app'
@@ -190,6 +190,24 @@ interface TicketDTO {
 /* ============================== Controlador ============================== */
 
 export default class FacturacionTicketsController {
+  /**
+   * GET /facturacion/tickets/:id/imagen
+   */
+  public async servirImagen({ params, response }: HttpContext) {
+    const ticket = await FacturacionTicket.find(params.id)
+    if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
+    if (!ticket.filePath)
+      return response.notFound({ message: 'El ticket no tiene imagen asociada' })
+
+    try {
+      const absolutePath = app.makePath(ticket.filePath)
+      await fs.access(absolutePath)
+      return response.header('Content-Type', ticket.fileMime || 'image/jpeg').download(absolutePath)
+    } catch (err) {
+      console.error('Error sirviendo imagen del ticket:', err)
+      return response.notFound({ message: 'No se pudo cargar la imagen del ticket' })
+    }
+  }
   /** GET /facturacion/tickets */
   public async index({ request }: HttpContext) {
     const q = FacturacionTicket.query().orderBy('created_at', 'desc')
@@ -444,7 +462,6 @@ export default class FacturacionTicketsController {
     await ticket.save()
     return ticket
   }
-  // app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 2/4
 
   /** PATCH /facturacion/tickets/:id */
   public async update({ params, request, response }: HttpContext) {
@@ -556,6 +573,16 @@ export default class FacturacionTicketsController {
         if (!descuentoExiste) {
           return response.badRequest({ message: 'descuento_id no existe o está inactivo' })
         }
+        // Validación especial INFORMATIVO_POLICIA: requiere las 3 fotos
+        if (descuentoExiste.codigo === 'INFORMATIVO_POLICIA') {
+          if (!ticket.documentosPoliciaCargados) {
+            return response.badRequest({
+              message:
+                'Para aplicar el descuento INFORMATIVO_POLICIA se deben subir los 3 documentos',
+              documentos_faltantes: ticket.documentosPoliciaFaltantes,
+            })
+          }
+        }
         ticket.descuentoId = dId
       }
     }
@@ -657,7 +684,6 @@ export default class FacturacionTicketsController {
     await ticket.save()
     return ticket
   }
-
   /**
    * POST /facturacion/tickets/:id/confirmar
    *
@@ -675,6 +701,8 @@ export default class FacturacionTicketsController {
    * CON CONVENIO — Asesor CONVENIO datea él mismo
    * ══════════════════════════════════════════════════════════
    *   🆕 Nuevo       → incentivo ($14.000)
+   *   🆕 Nuevo + INFORMATIVO_POLICIA (caja) → convenio $0
+   *   🆕 Nuevo + INFORMATIVO_EMPLEADO (caja) → convenio $0
    *   🔄 Recurrente  + dató la última visita → incentivo
    *   🔄 Recurrente  + NO dató la última visita → valor_dateo_recurrencia
    *   💛 Recuperación → valor_dateo_recuperacion
@@ -683,8 +711,17 @@ export default class FacturacionTicketsController {
    * CON CONVENIO — COMERCIAL datea
    * ══════════════════════════════════════════════════════════
    *   🆕 Nuevo       → comercial: valor_dateo ($8.600) + convenio: incentivo ($14.000)
+   *   🆕 Nuevo + INFORMATIVO_POLICIA (caja) → comercial: $4.300 | convenio: $0
+   *   🆕 Nuevo + INFORMATIVO_EMPLEADO (caja) → comercial: $4.300 | convenio: $0
    *   🔄 Recurrente  → comercial: valor_dateo_recurrencia SOLO (sin incentivo)
    *   💛 Recuperación → comercial: valor_dateo_recuperacion SOLO (sin incentivo)
+   *
+   * ══════════════════════════════════════════════════════════
+   * 🆕 AVANCE (cualquier caso con convenio)
+   * ══════════════════════════════════════════════════════════
+   *   → montoConvenio = '0' (incentivo ya se aplicó como descuento en factura)
+   *   → montoAsesor   = intacto (el comercial sí cobra su dateo)
+   *   → esAvance = true en la comisión (trazabilidad contable)
    */
   public async confirmar({ params, request, response, auth }: HttpContext) {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -842,8 +879,6 @@ export default class FacturacionTicketsController {
     const dto = await this.getTicketDTOById(ticket.id)
     return dto
   }
-  // app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 3/4
-
   // ========================== Hook principal de comisiones ==========================
 
   private async applyCommissionHook(ticket: FacturacionTicket) {
@@ -854,7 +889,10 @@ export default class FacturacionTicketsController {
     console.log('ticket.servicioNombre:', ticket.servicioNombre)
     console.log('ticket.dateoId:', ticket.dateoId)
     console.log('ticket.turnoId:', ticket.turnoId)
-    console.log('ticket.descuentoId:', ticket.descuentoId) // 🆕
+    console.log('ticket.descuentoId:', ticket.descuentoId)
+    // 🔍 LOGS DIAGNÓSTICO AVANCE
+    console.log('ticket.descuentoMontoAplicado:', ticket.descuentoMontoAplicado)
+    console.log('ticket.tipoVehiculoSnapshot:', (ticket as any).tipoVehiculoSnapshot)
 
     if (ticket.estado !== 'CONFIRMADA') {
       console.log('❌ SALIDA: no es CONFIRMADA')
@@ -896,6 +934,14 @@ export default class FacturacionTicketsController {
 
     if (!dateo) return
 
+    // 🔍 LOG DIAGNÓSTICO AVANCE — leer flag esAvance del dateo
+    console.log(
+      'dateo.esAvance:',
+      (dateo as any).esAvance,
+      '| dateo.es_avance:',
+      (dateo as any).es_avance
+    )
+
     // Tipo de vehículo
     if (!turnoActual && ticket.turnoId) turnoActual = await TurnoRtm.find(ticket.turnoId)
     let turnoTipoVehiculo: string | null = null
@@ -936,19 +982,68 @@ export default class FacturacionTicketsController {
     // 🆕 ── Detectar si hay descuento informativo ──
     // Prioridad: ticket (aplicado en caja) > dateo (pre-marcado por el comercial)
     const descuentoIdActivo = ticket.descuentoId ?? (dateo as any).descuentoId ?? null
+    // Distinguir origen: caja (ticket.descuentoId) vs dateo pre-marcado
+    const descuentoOrigenCaja = !!ticket.descuentoId && !(dateo as any).descuentoId
     let tieneInformativo = false
+    let esInformativoPolicia = false
+    let esInformativoEmpleado = false // 🆕
+    let esAvancePropietario = false // 🆕 CAMBIO 1
+    let esObsequio = false // 🆕 CAMBIO NUEVO
+    let esInformativoSoatRtm = false // 🆕
     if (descuentoIdActivo) {
       const descuentoInfo = await Descuento.query()
         .where('id', descuentoIdActivo)
         .where('activo', true)
         .first()
       tieneInformativo = descuentoInfo !== null
+      esInformativoPolicia = descuentoInfo?.codigo === 'INFORMATIVO_POLICIA'
+      esInformativoEmpleado = descuentoInfo?.codigo === 'INFORMATIVO_EMPLEADO' // 🆕
+      esAvancePropietario = descuentoInfo?.codigo === 'AVANCE_PROPIETARIO' // 🆕 CAMBIO 2
+      esObsequio = descuentoInfo?.codigo === 'INFORMATIVO_OBSEQUIO' // 🆕 CAMBIO NUEVO
+      esInformativoSoatRtm = descuentoInfo?.codigo === 'INFORMATIVO_SOAT_RTM' // 🆕
       console.log(
-        `🏷️ Descuento informativo: ${tieneInformativo ? `${descuentoInfo!.nombre} (ID ${descuentoIdActivo})` : 'NO'}`
+        `🏷️ Descuento informativo: ${tieneInformativo ? `${descuentoInfo!.nombre} (ID ${descuentoIdActivo})` : 'NO'} | esPolicia: ${esInformativoPolicia} | esEmpleado: ${esInformativoEmpleado} | esAvancePropietario: ${esAvancePropietario} | esObsequio: ${esObsequio} | origenCaja: ${descuentoOrigenCaja}`
       )
     } else {
       console.log('🏷️ Descuento informativo: NO')
     }
+
+    // ══════════════════════════════════════════════════════════
+    // 🆕 AVANCE — detectar y resolver monto según tipo vehículo
+    // ══════════════════════════════════════════════════════════
+    const esAvance = Boolean((dateo as any).esAvance ?? (dateo as any).es_avance ?? false)
+
+    // Monto real del AVANCE:
+    // 1. Si la cajera ingresó un monto explícito (descuentoMontoAplicado > 0) → usar ese
+    // 2. Si no → auto-resolver desde tabla descuentos según tipo de vehículo
+    //    MOTO    → descuento.valorMoto
+    //    VEHICULO → descuento.valorCarro
+    let montoAvance = 0
+    if (esAvance && descuentoIdActivo) {
+      const montoExplicito = Number(ticket.descuentoMontoAplicado ?? 0)
+      if (montoExplicito > 0) {
+        montoAvance = montoExplicito
+        console.log(`🆕 AVANCE monto explícito (cajera): $${montoAvance}`)
+      } else {
+        // Auto-resolver desde la tabla descuentos por tipo de vehículo
+        const descuentoRow = await Descuento.query()
+          .where('id', descuentoIdActivo)
+          .where('activo', true)
+          .first()
+        if (descuentoRow) {
+          const esMoto = tipoVehiculoComision === 'MOTO'
+          montoAvance = esMoto
+            ? Number((descuentoRow as any).valorMoto ?? (descuentoRow as any).valor_moto ?? 0)
+            : Number((descuentoRow as any).valorCarro ?? (descuentoRow as any).valor_carro ?? 0)
+          console.log(
+            `🆕 AVANCE auto-resuelto desde descuento "${descuentoRow.nombre}" | tipo: ${tipoVehiculoComision ?? 'desconocido'} | monto: $${montoAvance}`
+          )
+        }
+      }
+    }
+
+    console.log(`🆕 esAvance: ${esAvance} | montoAvance: $${montoAvance}`)
+    // ══════════════════════════════════════════════════════════
 
     console.log(
       `💰 Cliente: ${esClienteNuevo ? '🆕 NUEVO' : esClienteRecurrente ? '🔄 RECURRENTE' : '💛 RECUPERACIÓN'}`
@@ -1004,11 +1099,12 @@ export default class FacturacionTicketsController {
         c.asesorSecundarioId = null
         c.base = '0'
         c.montoConvenio = '0'
+        c.esAvance = false // Sin convenio: avance no aplica
         if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
 
         if (esClienteNuevo) {
           if (tieneInformativo) {
-            // 🆕 Nuevo + INFORMATIVO → baja de $17.200 a valor recurrente ($4.300)
+            // 🆕 Nuevo + INFORMATIVO → baja de valorNuevoDirecto a valorRecurrente
             c.monto = String(recValues.valorRecurrente)
             c.montoAsesor = String(recValues.valorRecurrente)
             c.valorNuevoDirecto = '0'
@@ -1040,8 +1136,8 @@ export default class FacturacionTicketsController {
         //  CASO 2: CON CONVENIO — el mismo asesor convenio datea
         // ════════════════════════════════════════════════════
       } else if (
-        dateo.agenteId &&
-        asesorConvenioIdReal &&
+        !dateo.agenteId ||
+        !asesorConvenioIdReal ||
         dateo.agenteId === asesorConvenioIdReal
       ) {
         const c = new Comision()
@@ -1055,23 +1151,68 @@ export default class FacturacionTicketsController {
         c.porcentaje = '0'
         c.asesorSecundarioId = null
         c.valorNuevoDirecto = '0'
+        c.esAvance = esAvance
         if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
 
         if (esClienteNuevo) {
           c.base = String(cfgValues.valorIncentivoPorTipo)
-          c.monto = '0'
-          c.montoAsesor = '0'
-          c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
-          console.log(`✅ Convenio datea 🆕 NUEVO → incentivo $${cfgValues.valorIncentivoPorTipo}`)
-        } else if (esClienteRecurrente) {
-          if (tuvoContinuidad) {
-            c.base = String(cfgValues.valorIncentivoPorTipo)
+          if (
+            (esInformativoPolicia ||
+              esInformativoEmpleado ||
+              esAvancePropietario ||
+              esObsequio ||
+              esInformativoSoatRtm) &&
+            descuentoOrigenCaja
+          ) {
+            // 🆕 CAMBIO 3
+            // 🆕 INFORMATIVO_POLICIA / INFORMATIVO_EMPLEADO / AVANCE_PROPIETARIO / INFORMATIVO_OBSEQUIO aplicado en caja: convenio queda en $0
+            c.monto = '0'
+            c.montoAsesor = '0'
+            c.montoConvenio = '0'
+            console.log(
+              `✅ Convenio datea 🆕 NUEVO + INFORMATIVO_POLICIA/EMPLEADO/AVANCE_PROPIETARIO/OBSEQUIO (caja) → convenio $0`
+            )
+          } else if (esAvance) {
+            // 🆕 AVANCE: montoConvenio = max(0, incentivo - montoAvance por tipo vehículo)
+            const montoConvenioFinal = Math.max(0, cfgValues.valorIncentivoPorTipo - montoAvance)
+            c.monto = String(montoConvenioFinal)
+            c.montoAsesor = '0'
+            c.montoConvenio = String(montoConvenioFinal)
+            c.descuentoMontoAplicado = montoAvance // 🆕
+            console.log(
+              `✅ Convenio datea 🆕 NUEVO + AVANCE → incentivo $${cfgValues.valorIncentivoPorTipo} - avance $${montoAvance} = montoConvenio $${montoConvenioFinal}`
+            )
+          } else {
             c.monto = '0'
             c.montoAsesor = '0'
             c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
             console.log(
-              `✅ Convenio datea 🔄 RECURRENTE + continuidad → incentivo $${cfgValues.valorIncentivoPorTipo}`
+              `✅ Convenio datea 🆕 NUEVO → incentivo $${cfgValues.valorIncentivoPorTipo}`
             )
+          }
+        } else if (esClienteRecurrente) {
+          if (tuvoContinuidad) {
+            c.base = String(cfgValues.valorIncentivoPorTipo)
+            if (esAvance) {
+              // 🆕 AVANCE: misma lógica de reducción parcial
+              const montoConvenioFinalRec = Math.max(
+                0,
+                cfgValues.valorIncentivoPorTipo - montoAvance
+              )
+              c.monto = String(montoConvenioFinalRec)
+              c.montoAsesor = '0'
+              c.montoConvenio = String(montoConvenioFinalRec)
+              console.log(
+                `✅ Convenio datea 🔄 RECURRENTE + continuidad + AVANCE → incentivo $${cfgValues.valorIncentivoPorTipo} - avance $${montoAvance} = montoConvenio $${montoConvenioFinalRec}`
+              )
+            } else {
+              c.monto = '0'
+              c.montoAsesor = '0'
+              c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+              console.log(
+                `✅ Convenio datea 🔄 RECURRENTE + continuidad → incentivo $${cfgValues.valorIncentivoPorTipo}`
+              )
+            }
           } else {
             c.base = '0'
             c.monto = String(recValues.valorRecurrente)
@@ -1112,23 +1253,53 @@ export default class FacturacionTicketsController {
         c.porcentaje = '0'
         c.asesorSecundarioId = asesorConvenioIdReal
         c.valorNuevoDirecto = '0'
+        c.esAvance = esAvance
         if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
 
         if (esClienteNuevo) {
-          c.monto = String(cfgValues.valorDateoNuevo)
-          c.montoAsesor = String(cfgValues.valorDateoNuevo)
           c.base = String(cfgValues.valorIncentivoPorTipo)
-          c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
-          console.log(
-            `✅ Comercial con convenio 🆕 NUEVO → dateo $${cfgValues.valorDateoNuevo} + incentivo $${cfgValues.valorIncentivoPorTipo}`
-          )
+          if (
+            (esInformativoPolicia ||
+              esInformativoEmpleado ||
+              esAvancePropietario ||
+              esObsequio ||
+              esInformativoSoatRtm) &&
+            descuentoOrigenCaja
+          ) {
+            // 🆕 CAMBIO 4
+            // 🆕 INFORMATIVO_POLICIA / INFORMATIVO_EMPLEADO / AVANCE_PROPIETARIO / INFORMATIVO_OBSEQUIO aplicado en caja:
+            // Comercial baja a valor dateo ($4.300), convenio queda en $0
+            c.monto = String(recValues.valorRecurrente)
+            c.montoAsesor = String(recValues.valorRecurrente)
+            c.montoConvenio = '0'
+            console.log(
+              `✅ Comercial con convenio 🆕 NUEVO + INFORMATIVO_POLICIA/EMPLEADO/AVANCE_PROPIETARIO/OBSEQUIO (caja) → dateo $${recValues.valorRecurrente} | convenio $0`
+            )
+          } else if (esAvance) {
+            // 🆕 AVANCE: montoConvenio = max(0, incentivo - montoAvance por tipo vehículo)
+            c.monto = String(cfgValues.valorDateoNuevo)
+            c.montoAsesor = String(cfgValues.valorDateoNuevo)
+            const montoConvenioFinal = Math.max(0, cfgValues.valorIncentivoPorTipo - montoAvance)
+            c.montoConvenio = String(montoConvenioFinal)
+            c.descuentoMontoAplicado = montoAvance // 🆕
+            console.log(
+              `✅ Comercial con convenio 🆕 NUEVO + AVANCE → dateo $${cfgValues.valorDateoNuevo} + convenio $${montoConvenioFinal} (incentivo $${cfgValues.valorIncentivoPorTipo} - avance $${montoAvance})`
+            )
+          } else {
+            c.monto = String(cfgValues.valorDateoNuevo)
+            c.montoAsesor = String(cfgValues.valorDateoNuevo)
+            c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+            console.log(
+              `✅ Comercial con convenio 🆕 NUEVO → dateo $${cfgValues.valorDateoNuevo} + incentivo $${cfgValues.valorIncentivoPorTipo}`
+            )
+          }
         } else if (esClienteRecurrente) {
           c.monto = String(recValues.valorRecurrente)
           c.montoAsesor = String(recValues.valorRecurrente)
           c.base = '0'
           c.montoConvenio = '0'
           console.log(
-            `✅ Comercial con convenio 🔄 RECURRENTE → dateo $${recValues.valorRecurrente} (sin incentivo)`
+            `✅ Comercial con convenio 🔄 RECURRENTE${esAvance ? ' + AVANCE' : ''} → dateo $${recValues.valorRecurrente} (sin incentivo)`
           )
         } else {
           c.monto = String(recValues.valorRecuperacion)
@@ -1136,7 +1307,7 @@ export default class FacturacionTicketsController {
           c.base = '0'
           c.montoConvenio = '0'
           console.log(
-            `✅ Comercial con convenio 💛 RECUPERACIÓN → dateo $${recValues.valorRecuperacion} (sin incentivo)`
+            `✅ Comercial con convenio 💛 RECUPERACIÓN${esAvance ? ' + AVANCE' : ''} → dateo $${recValues.valorRecuperacion} (sin incentivo)`
           )
         }
 
@@ -1155,7 +1326,6 @@ export default class FacturacionTicketsController {
       throw err
     }
   }
-
   // ========================== Helpers privados ==========================
 
   private async fillSnapshotsFromTurno(ticket: FacturacionTicket, turno: TurnoRtm) {
@@ -1205,7 +1375,7 @@ export default class FacturacionTicketsController {
       )
       .preload('descuento')
       .preload('autorizadoPor')
-      .preload('confirmedBy') // ← esta línea falta
+      .preload('confirmedBy')
       .firstOrFail()
 
     const dto = buildTicketDTO(t)
@@ -1268,26 +1438,114 @@ export default class FacturacionTicketsController {
   }
 
   /**
-   * GET /facturacion/tickets/:id/imagen
+   * POST /facturacion/tickets/:id/documentos-policia
+   * Body: archivo (jpg/jpeg/png, máx 8mb) + tipo (carnet|tarjeta_propiedad|cedula)
    */
-  public async servirImagen({ params, response }: HttpContext) {
+  public async subirDocumentoPolicia({ params, request, response }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
-    if (!ticket.filePath)
-      return response.notFound({ message: 'El ticket no tiene imagen asociada' })
+
+    if (ticket.estado === 'REVERTIDA') {
+      return response.badRequest({
+        message: 'No se pueden agregar documentos a un ticket revertido',
+      })
+    }
+
+    const tipo = request.input('tipo') as string | undefined
+    const tiposValidos = ['carnet', 'tarjeta_propiedad', 'cedula'] as const
+    type TipoDoc = (typeof tiposValidos)[number]
+
+    if (!tipo || !tiposValidos.includes(tipo as TipoDoc)) {
+      return response.badRequest({
+        message: `tipo inválido. Debe ser uno de: ${tiposValidos.join(', ')}`,
+      })
+    }
+
+    const file = request.file('archivo', { size: '8mb', extnames: ['jpg', 'jpeg', 'png'] })
+    if (!file) return response.badRequest({ message: 'archivo (image/*) requerido' })
+    if (!file.isValid) return response.badRequest({ message: file.errors })
+
+    const now = DateTime.now()
+    const outDir = path.join(
+      UPLOAD_BASE_DIR,
+      'policia',
+      String(now.year),
+      String(now.month).padStart(2, '0')
+    )
+    await fs.mkdir(outDir, { recursive: true })
+
+    const filename = `${cuid()}.${file.extname}`
+    const filePath = path.join(outDir, filename)
+    await fs.copyFile(file.tmpPath!, filePath)
+    const relativePath = filePath.replace(app.makePath(), '')
+
+    const campoMap: Record<TipoDoc, keyof FacturacionTicket> = {
+      carnet: 'docCarnetPath',
+      tarjeta_propiedad: 'docTarjetaPropiedadPath',
+      cedula: 'docCedulaPath',
+    }
+
+    const campo = campoMap[tipo as TipoDoc]
+    const pathAnterior = ticket[campo] as string | null
+
+    if (pathAnterior) {
+      try {
+        await fs.unlink(app.makePath(pathAnterior))
+      } catch {
+        // Si no existe el archivo anterior no importa
+      }
+    }
+
+    ;(ticket as any)[campo] = relativePath
+    await ticket.save()
+
+    return response.ok({
+      success: true,
+      message: `Documento '${tipo}' subido correctamente`,
+      tipo,
+      path: relativePath,
+      documentos_completos: ticket.documentosPoliciaCargados,
+      documentos_faltantes: ticket.documentosPoliciaFaltantes,
+    })
+  }
+
+  /**
+   * GET /facturacion/tickets/:id/documentos-policia/:tipo
+   * tipo → carnet | tarjeta_propiedad | cedula
+   */
+  public async servirDocumentoPolicia({ params, response }: HttpContext) {
+    const ticket = await FacturacionTicket.find(params.id)
+    if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
+
+    const campoMap: Record<string, keyof FacturacionTicket> = {
+      carnet: 'docCarnetPath',
+      tarjeta_propiedad: 'docTarjetaPropiedadPath',
+      cedula: 'docCedulaPath',
+    }
+
+    const campo = campoMap[params.tipo]
+    if (!campo) {
+      return response.badRequest({
+        message: 'tipo inválido. Debe ser: carnet, tarjeta_propiedad o cedula',
+      })
+    }
+
+    const filePath = ticket[campo] as string | null
+    if (!filePath) {
+      return response.notFound({ message: `Documento '${params.tipo}' no encontrado` })
+    }
 
     try {
-      const absolutePath = app.makePath(ticket.filePath)
+      const absolutePath = app.makePath(filePath)
       await fs.access(absolutePath)
-      return response.header('Content-Type', ticket.fileMime || 'image/jpeg').download(absolutePath)
-    } catch (err) {
-      console.error('Error sirviendo imagen del ticket:', err)
-      return response.notFound({ message: 'No se pudo cargar la imagen del ticket' })
+      return response.header('Content-Type', 'image/jpeg').download(absolutePath)
+    } catch {
+      return response.notFound({ message: `No se pudo cargar el documento '${params.tipo}'` })
     }
   }
 }
-// app/controllers/facturacion_tickets_controller.ts — FRAGMENTO 4/4
-/* ============================== Utils ============================== */
+
+// ============================== Utils ==============================
 
 function isRTM(codigo?: string | null, nombre?: string | null): boolean {
   const c = (codigo || '').toUpperCase().trim()
@@ -1565,11 +1823,6 @@ function inferTipoVehiculoComision(opts: {
   return 'VEHICULO'
 }
 
-/**
- * Resuelve los 3 valores de comisión (incentivo, dateoNuevo, nuevoDirecto)
- * buscando primero config específica del asesor, luego config del asesor convenio,
- * luego config global.
- */
 async function resolveConfigComision(params: {
   asesorId: number | null
   asesorConvenioId: number | null
@@ -1639,10 +1892,6 @@ async function resolveConfigComision(params: {
   }
 }
 
-/**
- * Resuelve los valores de recurrencia (recurrente y recuperación)
- * buscando config por asesor primero, luego global.
- */
 async function resolveConfigRecurrencia(
   asesorId: number | null,
   tipoVehiculo: TipoVehiculoComision | null = null
@@ -1694,9 +1943,6 @@ async function resolveConfigRecurrencia(
   return { valorRecurrente, valorRecuperacion }
 }
 
-/**
- * Verifica si el asesor convenio dató este vehículo LA ÚLTIMA VEZ que vino.
- */
 async function verificarContinuidad(params: {
   ultimoTurnoId: number | null
   asesorConvenioIdActual: number | null

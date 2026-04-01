@@ -16,6 +16,8 @@ export default class ConveniosController {
    *  - q=texto
    *  - activo=true|false|1|0
    *  - tipo=TALLER|PERSONA
+   *  - estado=ACTIVO|INACTIVO|PROSPECTO
+   *  - ruta=1|CDA|INT
    *  - sortBy=id|nombre|docNumero|activo|createdAt|fechaApertura
    *  - order=asc|desc
    */
@@ -26,6 +28,8 @@ export default class ConveniosController {
     const q = String(request.input('q') || '').trim()
     const activoParam = request.input('activo')
     const tipo = request.input('tipo') // 'TALLER' | 'PERSONA' | undefined
+    const estadoParam = request.input('estado') as string | undefined
+    const rutaParam = request.input('ruta') as string | undefined
 
     const sortByRaw = String(request.input('sortBy', 'id'))
     const orderRaw = String(request.input('order', 'desc')).toLowerCase()
@@ -63,6 +67,16 @@ export default class ConveniosController {
       const bool =
         activoParam === true || String(activoParam) === 'true' || String(activoParam) === '1'
       query.where('activo', bool)
+    }
+
+    // Filtro por estado detallado (ACTIVO | INACTIVO | PROSPECTO)
+    if (estadoParam) {
+      query.where('estado', String(estadoParam).toUpperCase())
+    }
+
+    // Filtro por ruta
+    if (rutaParam) {
+      query.where('ruta', String(rutaParam).toUpperCase())
     }
 
     // Paginación real
@@ -126,6 +140,7 @@ export default class ConveniosController {
       nombre: convenio.nombre,
     })
   }
+
   /** POST /convenios */
   public async store({ request, response }: HttpContext) {
     const {
@@ -144,6 +159,12 @@ export default class ConveniosController {
       metodo_pago: metodoPago,
       numero_metodo_pago: numeroMetodoPago,
       fecha_apertura: fechaApertura,
+      // ✅ NUEVOS CAMPOS
+      ruta,
+      sub_ruta: subRuta,
+      periodicidad,
+      reporta,
+      estado,
     } = request.only([
       'nombre',
       'tipo',
@@ -160,6 +181,11 @@ export default class ConveniosController {
       'metodo_pago',
       'numero_metodo_pago',
       'fecha_apertura',
+      'ruta',
+      'sub_ruta',
+      'periodicidad',
+      'reporta',
+      'estado',
     ])
 
     if (!nombre) return response.badRequest({ message: 'nombre es requerido' })
@@ -180,6 +206,22 @@ export default class ConveniosController {
       })
     }
 
+    // Validación de periodicidad si viene
+    const PERIODICIDADES_VALIDAS = ['DIARIA', 'SEMANAL', 'QUINCENAL', 'MENSUAL']
+    if (periodicidad && !PERIODICIDADES_VALIDAS.includes(String(periodicidad).toUpperCase())) {
+      return response.badRequest({
+        message: `periodicidad inválida. Debe ser: ${PERIODICIDADES_VALIDAS.join(', ')}`,
+      })
+    }
+
+    // Validación de estado si viene
+    const ESTADOS_VALIDOS = ['ACTIVO', 'INACTIVO', 'PROSPECTO']
+    if (estado && !ESTADOS_VALIDOS.includes(String(estado).toUpperCase())) {
+      return response.badRequest({
+        message: `estado inválido. Debe ser: ${ESTADOS_VALIDOS.join(', ')}`,
+      })
+    }
+
     const conv = await Convenio.create({
       nombre,
       tipo,
@@ -196,6 +238,12 @@ export default class ConveniosController {
       metodoPago: metodoPago ?? null,
       numeroMetodoPago: numeroMetodoPago ?? null,
       fechaApertura: fechaApertura ? DateTime.fromISO(fechaApertura) : null,
+      // ✅ NUEVOS CAMPOS
+      ruta: ruta ? String(ruta).trim() : null,
+      subRuta: subRuta ? String(subRuta).trim() : null,
+      periodicidad: periodicidad ? String(periodicidad).toUpperCase() : null,
+      reporta: reporta ? String(reporta).trim() : null,
+      estado: estado ? String(estado).toUpperCase() : null,
     } as any)
 
     return response.created(conv)
@@ -222,6 +270,12 @@ export default class ConveniosController {
       'metodo_pago',
       'numero_metodo_pago',
       'fecha_apertura',
+      // ✅ NUEVOS CAMPOS
+      'ruta',
+      'sub_ruta',
+      'periodicidad',
+      'reporta',
+      'estado',
     ])
 
     if (payload.doc_tipo !== undefined || payload.doc_numero !== undefined) {
@@ -268,6 +322,40 @@ export default class ConveniosController {
     // ✅ NUEVO: Manejo de fecha_apertura
     if (payload.fecha_apertura !== undefined) {
       c.fechaApertura = payload.fecha_apertura ? DateTime.fromISO(payload.fecha_apertura) : null
+    }
+
+    // ✅ NUEVOS CAMPOS
+    if (payload.ruta !== undefined) c.ruta = payload.ruta ? String(payload.ruta).trim() : null
+    if (payload.sub_ruta !== undefined)
+      c.subRuta = payload.sub_ruta ? String(payload.sub_ruta).trim() : null
+    if (payload.periodicidad !== undefined) {
+      const PERIODICIDADES_VALIDAS = ['DIARIA', 'SEMANAL', 'QUINCENAL', 'MENSUAL']
+      if (
+        payload.periodicidad &&
+        !PERIODICIDADES_VALIDAS.includes(String(payload.periodicidad).toUpperCase())
+      ) {
+        return response.badRequest({
+          message: `periodicidad inválida. Debe ser: ${PERIODICIDADES_VALIDAS.join(', ')}`,
+        })
+      }
+      c.periodicidad = payload.periodicidad
+        ? (String(
+            payload.periodicidad
+          ).toUpperCase() as import('#models/convenio').ConvenioPeriodicidad)
+        : null
+    }
+    if (payload.reporta !== undefined)
+      c.reporta = payload.reporta ? String(payload.reporta).trim() : null
+    if (payload.estado !== undefined) {
+      const ESTADOS_VALIDOS = ['ACTIVO', 'INACTIVO', 'PROSPECTO']
+      if (payload.estado && !ESTADOS_VALIDOS.includes(String(payload.estado).toUpperCase())) {
+        return response.badRequest({
+          message: `estado inválido. Debe ser: ${ESTADOS_VALIDOS.join(', ')}`,
+        })
+      }
+      c.estado = payload.estado
+        ? (String(payload.estado).toUpperCase() as import('#models/convenio').ConvenioEstado)
+        : null
     }
 
     await c.save()

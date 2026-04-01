@@ -151,6 +151,12 @@ export default class TurnosRtms extends BaseSchema {
       table.date('fecha_ultima_visita').nullable()
       // ===========================================================
 
+      // ========== 🆕 AVANCE ==========
+      // es_avance: heredado del dateo. true → caja debe aplicar descuento AVANCE
+      // al ticket; monto_convenio de la comisión queda en $0.
+      table.boolean('es_avance').notNullable().defaultTo(false)
+      // ========== FIN AVANCE ==========
+
       // Únicos
       table.unique(['sede_id', 'fecha', 'turno_numero'], 'uq_turno_por_dia_y_sede')
       table.unique(
@@ -175,6 +181,7 @@ export default class TurnosRtms extends BaseSchema {
       table.index(['conductor_id', 'fecha', 'estado'], 'idx_turnos_recurrencia_conductor')
       table.index(['es_recurrente'], 'idx_turnos_es_recurrente')
       table.index(['es_recuperacion'], 'idx_turnos_es_recuperacion') // 🆕
+      table.index(['es_avance'], 'idx_turnos_es_avance') // 🆕
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

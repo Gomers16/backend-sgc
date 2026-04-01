@@ -54,10 +54,34 @@ export default class CreateConveniosTable extends BaseSchema {
         .inTable('agentes_captacions')
         .onDelete('SET NULL')
 
+      // ✅ NUEVOS CAMPOS DESDE EXCEL BASE DE DATOS
+      // Ruta del asesor (ej: '1', '2', 'CDA', 'INT', 'RICAURTE', 'SALADO')
+      table.string('ruta', 50).nullable()
+
+      // Sub-ruta dentro de la ruta principal (ej: '1 . 2', '1 . 20', '1.15')
+      table.string('sub_ruta', 50).nullable()
+
+      // Frecuencia de visita al convenio
+      table
+        .enu('periodicidad', ['DIARIA', 'SEMANAL', 'QUINCENAL', 'MENSUAL'], {
+          useNative: true,
+          enumName: 'convenio_periodicidad_enum',
+        })
+        .nullable()
+
+      // Asesor o persona que reporta / gestiona el convenio (iniciales o nombre)
+      table.string('reporta', 200).nullable()
+
+      // Estado detallado del convenio (complementa el boolean activo)
+      // ACTIVO | INACTIVO | PROSPECTO
+      table.string('estado', 20).nullable()
+
       table.unique(['doc_tipo', 'doc_numero'])
       table.index(['activo', 'tipo'])
       table.index(['codigo'], 'idx_convenios_codigo')
       table.index(['establecimiento'], 'idx_convenios_establecimiento')
+      table.index(['ruta'], 'idx_convenios_ruta')
+      table.index(['estado'], 'idx_convenios_estado')
 
       table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(this.now())
       table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(this.now())

@@ -9,6 +9,8 @@ import AgenteCaptacion from '#models/agente_captacion'
 
 export type ConvenioTipo = 'PERSONA' | 'TALLER' | 'PARQUEADERO' | 'LAVADERO'
 export type MetodoPago = 'EFECTIVO' | 'TRANSFERENCIA' | 'TARJETA' | 'CHEQUE'
+export type ConvenioEstado = 'ACTIVO' | 'INACTIVO' | 'PROSPECTO'
+export type ConvenioPeriodicidad = 'DIARIA' | 'SEMANAL' | 'QUINCENAL' | 'MENSUAL'
 
 export default class Convenio extends BaseModel {
   public static table = 'convenios'
@@ -68,6 +70,29 @@ export default class Convenio extends BaseModel {
 
   @column({ columnName: 'asesor_convenio_id' })
   declare asesorConvenioId: number | null
+
+  // ✅ NUEVOS CAMPOS DESDE EXCEL BASE DE DATOS
+
+  // Ruta del asesor (ej: '1', '2', 'CDA', 'INT', 'RICAURTE', 'SALADO')
+  @column()
+  declare ruta: string | null
+
+  // Sub-ruta dentro de la ruta principal (ej: '1 . 2', '1 . 20', '1.15')
+  @column({ columnName: 'sub_ruta' })
+  declare subRuta: string | null
+
+  // Frecuencia de visita al convenio
+  @column()
+  declare periodicidad: ConvenioPeriodicidad | null
+
+  // Asesor o persona que reporta / gestiona el convenio
+  @column()
+  declare reporta: string | null
+
+  // Estado detallado del convenio (complementa el boolean activo)
+  // ACTIVO | INACTIVO | PROSPECTO
+  @column()
+  declare estado: ConvenioEstado | null
 
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })
   declare createdAt: DateTime
