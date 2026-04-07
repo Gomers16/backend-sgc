@@ -39,15 +39,19 @@ export default class ClientesController {
       if (q) {
         const searchTerm = q
 
-        // 1️⃣ Buscar vehículos con esa placa
+        // 🔥 Normalizar texto de búsqueda (placa)
+        const cleanSearch = searchTerm.toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+        // 1️⃣ Buscar vehículos con esa placa (NORMALIZADA)
         const vehiculosConPlaca = await Vehiculo.query()
-          .whereRaw('UPPER(placa) LIKE ?', [`%${searchTerm.toUpperCase()}%`])
+          .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') LIKE ?", [`%${cleanSearch}%`])
           .select('cliente_id')
           .whereNotNull('cliente_id')
 
+        // 🔥 Soportar cliente_id y clienteId
         const clienteIdsConPlaca = vehiculosConPlaca
-          .map((v) => v.clienteId)
-          .filter((id) => id !== null) as number[]
+          .map((v) => v.clienteId ?? (v as any).cliente_id)
+          .filter((id) => id !== null && id !== undefined) as number[]
 
         // 2️⃣ Búsqueda combinada
         query.where((builder) => {

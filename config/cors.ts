@@ -8,7 +8,7 @@ const corsConfig = defineConfig({
     // 🔥 IMPORTANTE: requestOrigin puede ser undefined
     if (!requestOrigin) {
       console.log('⚠️ CORS - Sin origen (probablemente petición desde mismo servidor)')
-      return true // O false según tu caso
+      return true
     }
 
     // 1️⃣ Leer orígenes desde variable de entorno
@@ -17,17 +17,14 @@ const corsConfig = defineConfig({
     if (envOrigins) {
       const allowedOrigins = envOrigins.split(',').map((o) => o.trim())
 
-      // Log para debugging
       console.log('🔐 CORS - Origen de petición:', requestOrigin)
       console.log('🔐 CORS - Orígenes permitidos:', allowedOrigins)
 
-      // Verificar si el origen está en la lista
       if (allowedOrigins.includes(requestOrigin)) {
         console.log('✅ CORS - Origen permitido')
         return true
       }
 
-      // Verificar si es un túnel de Cloudflare (*.trycloudflare.com)
       if (requestOrigin.match(/https:\/\/.*\.trycloudflare\.com$/)) {
         console.log('✅ CORS - Túnel de Cloudflare aceptado')
         return true
@@ -42,6 +39,7 @@ const corsConfig = defineConfig({
       case 'development':
         if (
           requestOrigin.startsWith('http://localhost') ||
+          requestOrigin.startsWith('capacitor://localhost') ||
           requestOrigin.match(/https:\/\/.*\.trycloudflare\.com$/)
         ) {
           console.log('✅ CORS - Desarrollo: origen aceptado')
@@ -54,11 +52,19 @@ const corsConfig = defineConfig({
         return true
 
       case 'production':
-        const prodOrigins = ['https://mi-dominio.com', 'https://www.mi-dominio.com']
+        const prodOrigins = [
+          'https://activautossgc.org',
+          'https://www.activautossgc.org',
+          'capacitor://localhost', // ← APK Android
+          'http://localhost', // ← APK Android alternativo
+        ]
         return prodOrigins.includes(requestOrigin)
 
       default:
-        return requestOrigin.startsWith('http://localhost')
+        return (
+          requestOrigin.startsWith('http://localhost') ||
+          requestOrigin.startsWith('capacitor://localhost')
+        )
     }
   },
 

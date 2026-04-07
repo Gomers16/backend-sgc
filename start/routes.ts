@@ -1647,5 +1647,24 @@ router
       const { default: UploadsController } = await import('#controllers/uploads_controller')
       return new UploadsController().remove(ctx)
     })
+    /* ======================== HISTÓRICO RTM =========================== */
+
+    router
+      .post('/historico-rtm/preview', async (ctx) => {
+        const { default: HistoricoDateoRtmController } = await import(
+          '#controllers/historico_dateo_rtm_controller'
+        )
+        return new HistoricoDateoRtmController().preview(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .post('/historico-rtm/importar', async (ctx) => {
+        const { default: HistoricoDateoRtmController } = await import(
+          '#controllers/historico_dateo_rtm_controller'
+        )
+        return new HistoricoDateoRtmController().importar(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
   })
   .prefix('/api')
