@@ -14,14 +14,6 @@ import Comision from '#models/comision'
 
 type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 
-/**
- * Resultado de la detección de recurrencia/recuperación
- *
- * 3 estados posibles:
- * - 🆕 NUEVO:        sin visita previa en la DB
- * - 🔄 RECURRENTE:   vino hace MENOS de mesesMinimos (ej. < 24 meses) → comisión reducida
- * - 💛 RECUPERACIÓN: vino hace MÁS de mesesMinimos (ej. >= 24 meses) → comisión intermedia
- */
 interface RecurrenciaResult {
   esRecurrente: boolean
   esRecuperacion: boolean
@@ -30,22 +22,6 @@ interface RecurrenciaResult {
   fechaUltimaVisita: string | null
 }
 
-/**
- * Controlador para importar archivos:
- * - RepGeneral (CSV): Clasifica TODAS las filas + empalma turnos dateados
- * - TECNOBASE (Excel): Solo carga histórico limpio, SIN detectar recurrencias
- *
- * 🔥 DETECCIÓN AUTOMÁTICA:
- * - Si es .csv → RepGeneral
- * - Si es .xlsx Y se llama "TECNOBASE" → TECNOBASE
- * - Si es .xlsx Y tiene más de 1000 filas → TECNOBASE
- *
- * 📌 LÓGICA DE RECURRENCIA (solo RepGeneral):
- * - Se clasifica CADA fila del CSV contra el histórico en DB (TECNOBASE)
- * - Si tiene turno dateado → se actualiza el turno + afecta comisiones
- * - Si NO tiene turno dateado → igual se cuenta en el resumen
- * - La recurrencia se basa en la PERSONA (cédula), NO en la placa
- */
 export default class RepGeneralImportController {
   // ==================== ÍNDICES DE COLUMNAS ====================
 
@@ -166,14 +142,12 @@ export default class RepGeneralImportController {
         sedeIdValido = sedeDefault.id
       }
 
-      // Leer config de recurrencia (solo la usa RepGeneral)
       const configGlobal = await db
         .from('configuracion_recurrencia_global')
         .orderBy('id', 'asc')
         .first()
       const mesesMinimos: number = configGlobal?.meses_minimos ?? this.MESES_MINIMOS_DEFAULT
 
-      // 📈 Contadores
       let clientesCreados = 0
       let clientesActualizados = 0
       let vehiculosCreados = 0
@@ -249,7 +223,6 @@ export default class RepGeneralImportController {
 
           // 4️⃣ TECNOBASE vs RepGeneral
           if (esTECNOBASE) {
-            // 🆕 SOLO insertar histórico limpio, SIN detectar recurrencia
             const result = await this.crearTurnoHistorico(
               row,
               cliente ?? null,
@@ -261,7 +234,6 @@ export default class RepGeneralImportController {
             turnosCreados += result.creados
             turnosActualizados += result.actualizados
           } else {
-            // 🆕 RepGeneral: clasificar TODAS las filas + empalmar si hay turno dateado
             const result = await this.empalmarTurnosDesdeFila(
               row,
               cliente ?? null,
@@ -281,7 +253,6 @@ export default class RepGeneralImportController {
           const nombreCliente = this.normText(row[this.IDX_DUENO_NOMBRE]) ?? 'Sin nombre'
           const docCliente = this.normText(row[this.IDX_DUENO_DOC_NUM]) ?? 'Sin cédula'
 
-          // Mensaje legible según tipo de error
           let mensajeAmigable: string
           if (msgError.includes("telefono' cannot be null") || msgError.includes('telefono')) {
             mensajeAmigable = `Cliente "${nombreCliente}" (CC: ${docCliente}, placa: ${placa}) no tiene número de teléfono`
@@ -297,7 +268,6 @@ export default class RepGeneralImportController {
           }
 
           erroresDetalle.push(mensajeAmigable)
-
           logger.warn({ error: msgError, fila: i + 1, placa }, '⚠️ Error procesando fila')
         }
       }
@@ -338,8 +308,8 @@ export default class RepGeneralImportController {
           turnosRecuperacion,
           turnosNuevos,
           errores,
-          erroresDetalle, // 🆕 array con mensajes legibles
-          primerError: erroresDetalle[0] ?? null, // compatibilidad
+          erroresDetalle,
+          primerError: erroresDetalle[0] ?? null,
         },
       })
     } catch (error) {
@@ -351,6 +321,7 @@ export default class RepGeneralImportController {
       })
     }
   }
+
   // ==================== DETECCIÓN DE TIPO DE ARCHIVO ====================
 
   private detectarTipoArchivo(
@@ -429,7 +400,6 @@ export default class RepGeneralImportController {
     }
 
     const mesesTranscurridos = Math.floor(fechaActual.diff(fechaAnterior, 'months').months)
-
     const esRecurrente = mesesTranscurridos < mesesMinimos
     const esRecuperacion = mesesTranscurridos >= mesesMinimos
 
@@ -584,6 +554,16 @@ export default class RepGeneralImportController {
 
   // ==================== UPSERT ENTIDADES ====================
 
+  /**
+   * Busca o crea un cliente con prioridad:
+   *  1° DOCUMENTO  → más confiable, identifica a la persona sin ambigüedad
+   *  2° TELÉFONO   → segundo identificador único
+   *  3° EMAIL      → solo si no está en uso por OTRO cliente
+   *  4° CREAR NUEVO → email queda null si ya lo tiene otro cliente
+   *
+   * Esto evita que dos personas que comparten email (ej. David Parra / Hannier)
+   * queden fusionadas en el mismo cliente.
+   */
   private async upsertClienteDesdeFila(
     row: string[]
   ): Promise<{ cliente: Cliente | null; creado: boolean }> {
@@ -591,29 +571,70 @@ export default class RepGeneralImportController {
     const docNumero = this.normText(row[this.IDX_DUENO_DOC_NUM])
     const nombre = this.normText(row[this.IDX_DUENO_NOMBRE])
     const telefono = this.normalizeTelefono(row[this.IDX_DUENO_TELEFONO])
-    const email = this.normText(row[this.IDX_DUENO_EMAIL])
+    const emailRaw = this.normText(row[this.IDX_DUENO_EMAIL])?.toLowerCase() || null
 
-    if (!docNumero && !nombre && !telefono && !email) {
+    if (!docNumero && !nombre && !telefono && !emailRaw) {
       return { cliente: null, creado: false }
     }
 
     let cliente: Cliente | null = null
 
-    if (docNumero) cliente = await Cliente.query().where('doc_numero', docNumero).first()
-    if (!cliente && telefono) cliente = await Cliente.query().where('telefono', telefono).first()
+    // ── 1° PRIORIDAD: DOCUMENTO ──────────────────────────────────────────────
+    if (docNumero) {
+      cliente = await Cliente.query().where('doc_numero', docNumero).first()
+    }
 
+    // ── 2° PRIORIDAD: TELÉFONO ───────────────────────────────────────────────
+    // ⚠️ Solo usar si el documento coincide O si la persona encontrada no tiene documento.
+    // Si el teléfono está en otro cliente con diferente cédula (teléfono falso/compartido),
+    // NO se usa — se crea un cliente nuevo para evitar fusionar personas distintas.
+    if (!cliente && telefono) {
+      const porTelefono = await Cliente.query().where('telefono', telefono).first()
+      if (porTelefono) {
+        const docCoincide =
+          !docNumero || // la fila no trae doc → aceptar
+          !porTelefono.docNumero || // el cliente no tiene doc → aceptar
+          porTelefono.docNumero === docNumero // los docs coinciden → aceptar
+        if (docCoincide) {
+          cliente = porTelefono
+        } else {
+          logger.warn(
+            { telefono, docFila: docNumero, docEncontrado: porTelefono.docNumero, nombre },
+            '⚠️ Teléfono compartido con otro cliente (cédula diferente), se creará cliente nuevo'
+          )
+        }
+      }
+    }
+
+    // ── 3° CREAR CLIENTE NUEVO ───────────────────────────────────────────────
     if (!cliente) {
+      // Verificar si el email ya pertenece a alguien más → si es así, no lo asignamos
+      let emailFinal: string | null = emailRaw
+      if (emailRaw) {
+        const emailEnUso = await Cliente.query().whereRaw('LOWER(email) = ?', [emailRaw]).first()
+        if (emailEnUso) {
+          logger.warn(
+            { email: emailRaw, clienteExistente: emailEnUso.id, nombre },
+            '⚠️ Email ya pertenece a otro cliente, se crea el nuevo sin email'
+          )
+          emailFinal = null
+        }
+      }
+
       cliente = await Cliente.create({
         docTipo: docTipo || (docNumero ? 'CC' : null),
         docNumero,
         nombre,
-        telefono: telefono || null,
-        email,
+        telefono: telefono ?? '',
+        email: emailFinal,
       } as any)
+
       return { cliente, creado: true }
     }
 
+    // ── ACTUALIZAR CAMPOS VACÍOS (sin pisar datos existentes) ────────────────
     let debeGuardar = false
+
     if (!cliente.docNumero && docNumero) {
       cliente.docNumero = docNumero
       cliente.docTipo = docTipo || 'CC'
@@ -627,9 +648,24 @@ export default class RepGeneralImportController {
       cliente.telefono = telefono
       debeGuardar = true
     }
-    if (!cliente.email && email) {
-      cliente.email = email
-      debeGuardar = true
+
+    // Email: solo asignar si el cliente no tiene uno YA
+    // y si el email no está siendo usado por otro cliente distinto
+    if (!cliente.email && emailRaw) {
+      const emailEnUso = await Cliente.query()
+        .whereRaw('LOWER(email) = ?', [emailRaw])
+        .whereNot('id', cliente.id)
+        .first()
+
+      if (!emailEnUso) {
+        cliente.email = emailRaw
+        debeGuardar = true
+      } else {
+        logger.warn(
+          { email: emailRaw, clienteConEmail: emailEnUso.id, clienteActual: cliente.id },
+          '⚠️ Email ya está en otro cliente, no se asigna'
+        )
+      }
     }
 
     if (debeGuardar) await cliente.save()
@@ -779,8 +815,8 @@ export default class RepGeneralImportController {
     if (debeGuardar) await conductor.save()
     return { conductor, creado: false }
   }
+
   // ==================== CREAR TURNO HISTÓRICO (TECNOBASE) ====================
-  // 🆕 SOLO inserta el histórico limpio, SIN detectar recurrencia
 
   private async crearTurnoHistorico(
     row: string[],
@@ -809,7 +845,6 @@ export default class RepGeneralImportController {
     const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? 1
     const conductorIdFinal = conductor?.id ?? null
 
-    // Si ya existe ese turno (misma placa + fecha), solo actualizar datos faltantes
     const turnoExistente = await TurnoRtm.query()
       .where('placa', placa)
       .where('fecha', fechaISO)
@@ -842,7 +877,6 @@ export default class RepGeneralImportController {
       return { creados: 0, actualizados: changed ? 1 : 0 }
     }
 
-    // Crear turno histórico limpio SIN clasificación de recurrencia
     const maxTurnoNumero = await TurnoRtm.query()
       .where('sede_id', sedeId)
       .where('fecha', fechaISO)
@@ -882,7 +916,6 @@ export default class RepGeneralImportController {
       servicioId,
       observaciones: ['Importado desde TECNOBASE', observacion].filter(Boolean).join(' '),
       canalAtribucion: 'FACHADA',
-      // 🆕 Sin clasificación: se dejan en null/false para que RepGeneral los clasifique después
       esRecurrente: false,
       esRecuperacion: false,
       mesesDesdeUltimaVisita: null,
@@ -894,7 +927,6 @@ export default class RepGeneralImportController {
   }
 
   // ==================== EMPALMAR TURNOS (REP GENERAL DIARIO) ====================
-  // Clasifica TODAS las filas del CSV, dateadas o no
 
   private async empalmarTurnosDesdeFila(
     row: string[],
@@ -910,12 +942,9 @@ export default class RepGeneralImportController {
     const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? null
     const conductorIdFinal = conductor?.id ?? null
 
-    // Fecha de la visita del RepGeneral (columna C del CSV)
     const fechaRaw = this.normText(row[this.IDX_FECHA])
     const fechaParseada = fechaRaw ? this.parsearFecha(fechaRaw) : null
     const fechaCSV = fechaParseada?.isValid ? fechaParseada.toISODate()! : null
-
-    // Detectar recurrencia usando la fecha del CSV
     const fechaParaComparar = fechaCSV ?? DateTime.now().toISODate()!
 
     const rec = await this.detectarRecurrencia(
@@ -926,13 +955,11 @@ export default class RepGeneralImportController {
       null
     )
 
-    // Contabilizar en el resumen SIEMPRE (dateado o no)
     let turnosRecurrentes = rec.esRecurrente ? 1 : 0
     let turnosRecuperacion = rec.esRecuperacion ? 1 : 0
     let turnosNuevos = !rec.esRecurrente && !rec.esRecuperacion ? 1 : 0
     let turnosActualizados = 0
 
-    // Buscar turnos dateados de esta placa para actualizar
     const turnos = await TurnoRtm.query()
       .where('placa', placa)
       .whereIn('estado', ['activo', 'finalizado'])
@@ -957,9 +984,6 @@ export default class RepGeneralImportController {
         changed = true
       }
 
-      // 🔧 FIX: Recalcular siempre — no solo cuando es null
-      // Antes solo clasificaba si mesesDesdeUltimaVisita === null,
-      // lo que impedía recalcular tras corregir errores o volver a subir el Rep General
       const necesitaClasificar =
         turno.mesesDesdeUltimaVisita === null || (!turno.esRecurrente && !turno.esRecuperacion)
 
@@ -991,7 +1015,6 @@ export default class RepGeneralImportController {
         await turno.save()
         turnosActualizados++
 
-        // Si el turno tiene dateo y la clasificación cambió → recalcular comisión
         if (turno.captacionDateoId && turno.mesesDesdeUltimaVisita !== null) {
           const recParaComision: RecurrenciaResult = {
             esRecurrente: turno.esRecurrente,
@@ -1040,7 +1063,6 @@ export default class RepGeneralImportController {
       return
     }
 
-    // Detectar si es moto
     const esMoto = tipoVehiculo === 'Motocicleta'
     console.log(`   🚗 tipoVehiculo: ${tipoVehiculo} | esMoto: ${esMoto}`)
 
@@ -1050,7 +1072,6 @@ export default class RepGeneralImportController {
       .orderBy('id', 'asc')
       .first()
 
-    // Leer valores según tipo de vehículo desde config global
     let valorRecurrente: number
     let valorRecuperacion: number
 
@@ -1076,10 +1097,9 @@ export default class RepGeneralImportController {
       )
     }
 
-    // Sobrescribir con config específica del asesor si existe
     if (asesorId) {
       const asesorCfg = await db
-        .from('configuracion_recurrencia_asesores') // 🔧 FIX: nombre correcto de la tabla
+        .from('configuracion_recurrencia_asesores')
         .where('asesor_id', asesorId)
         .where('recurrencia_habilitada', true)
         .first()
@@ -1090,7 +1110,6 @@ export default class RepGeneralImportController {
             valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia_moto)
           else if (asesorCfg.valor_dateo_recurrencia)
             valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
-
           if (asesorCfg.valor_dateo_recuperacion_moto)
             valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion_moto)
           else if (asesorCfg.valor_dateo_recuperacion)

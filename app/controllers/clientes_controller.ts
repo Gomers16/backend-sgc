@@ -25,8 +25,100 @@ function toBogotaDateTime(v: unknown): DateTime | null {
   return dt.isValid ? dt.startOf('day') : null
 }
 
+/**
+ * Busca o crea un cliente usando la siguiente prioridad:
+ *  1° DOCUMENTO  → más confiable, nunca se repite
+ *  2° TELÉFONO   → solo si el documento también coincide (evita teléfonos falsos/compartidos)
+ *  3° CREAR NUEVO → email solo si nadie más lo tiene, si no queda null
+ *
+ * ⛔ EMAIL nunca se usa para buscar — es un dato de contacto, no un identificador único.
+ */
+export async function findOrCreateCliente(data: {
+  docTipo?: string | null
+  docNumero?: string | null
+  telefono?: string | null
+  email?: string | null
+  nombre?: string | null
+  ciudadId?: number | null
+}): Promise<{ cliente: InstanceType<typeof Cliente>; creado: boolean }> {
+  const docTipo = data.docTipo?.trim() || null
+  const docNumero = data.docNumero?.trim() || null
+  const telefono = normalizePhone(data.telefono || '') || undefined
+  const emailRaw = data.email?.trim().toLowerCase() || null
+  const nombre = data.nombre?.trim() || null
+
+  let cliente: InstanceType<typeof Cliente> | null = null
+
+  // ── 1° PRIORIDAD: DOCUMENTO ──────────────────────────────────────────────
+  if (docTipo && docNumero) {
+    cliente = await Cliente.query()
+      .where('doc_tipo', docTipo)
+      .andWhere('doc_numero', docNumero)
+      .first()
+
+    if (cliente) {
+      if (!cliente.nombre && nombre) cliente.nombre = nombre
+      if (!cliente.telefono && telefono) cliente.telefono = telefono
+      if (!cliente.email && emailRaw) {
+        const emailEnUso = await Cliente.query()
+          .whereRaw('LOWER(email) = ?', [emailRaw])
+          .whereNot('id', cliente.id)
+          .first()
+        if (!emailEnUso) cliente.email = emailRaw
+      }
+      await cliente.save()
+      return { cliente, creado: false }
+    }
+  }
+
+  // ── 2° PRIORIDAD: TELÉFONO ───────────────────────────────────────────────
+  // Solo usar si el documento también coincide. Evita fusionar personas distintas
+  // que comparten teléfono falso (ej: 3333333333) o el teléfono de otra persona.
+  if (!cliente && telefono) {
+    const porTelefono = await Cliente.findBy('telefono', telefono)
+    if (porTelefono) {
+      const docCoincide =
+        !docNumero || !porTelefono.docNumero || porTelefono.docNumero === docNumero
+      if (docCoincide) {
+        cliente = porTelefono
+        if (!cliente.nombre && nombre) cliente.nombre = nombre
+        if (!cliente.docTipo && docTipo) cliente.docTipo = docTipo
+        if (!cliente.docNumero && docNumero) cliente.docNumero = docNumero
+        if (!cliente.email && emailRaw) {
+          const emailEnUso = await Cliente.query()
+            .whereRaw('LOWER(email) = ?', [emailRaw])
+            .whereNot('id', cliente.id)
+            .first()
+          if (!emailEnUso) cliente.email = emailRaw
+        }
+        await cliente.save()
+        return { cliente, creado: false }
+      }
+    }
+  }
+
+  // ── 3° CREAR CLIENTE NUEVO ───────────────────────────────────────────────
+  // Email solo se asigna si nadie más lo tiene
+  let emailFinal: string | null = emailRaw
+  if (emailRaw) {
+    const emailEnUso = await Cliente.query().whereRaw('LOWER(email) = ?', [emailRaw]).first()
+    if (emailEnUso) emailFinal = null
+  }
+
+  cliente = await Cliente.create({
+    nombre: nombre || null,
+    docTipo: docTipo || null,
+    docNumero: docNumero || null,
+    telefono: telefono ?? '',
+    email: emailFinal,
+    ciudadId: data.ciudadId ?? null,
+  })
+
+  return { cliente, creado: true }
+}
+
 export default class ClientesController {
-  /** 🔥 GET /clientes?page=1&perPage=20&q=... (CON BÚSQUEDA POR PLACA) */
+  /** GET /clientes?page=1&perPage=20&q=... */
   public async index({ request, response }: HttpContext) {
     const page = Number(request.input('page', 1))
     const perPage = Math.min(Number(request.input('perPage', 20)), 100)
@@ -35,34 +127,26 @@ export default class ClientesController {
     try {
       const query = Cliente.query().orderBy('id', 'desc')
 
-      // 🔍 BÚSQUEDA: nombre, teléfono, documento O PLACA
       if (q) {
         const searchTerm = q
-
-        // 🔥 Normalizar texto de búsqueda (placa)
         const cleanSearch = searchTerm.toUpperCase().replace(/[^A-Z0-9]/g, '')
 
-        // 1️⃣ Buscar vehículos con esa placa (NORMALIZADA)
         const vehiculosConPlaca = await Vehiculo.query()
           .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') LIKE ?", [`%${cleanSearch}%`])
           .select('cliente_id')
           .whereNotNull('cliente_id')
 
-        // 🔥 Soportar cliente_id y clienteId
         const clienteIdsConPlaca = vehiculosConPlaca
           .map((v) => v.clienteId ?? (v as any).cliente_id)
           .filter((id) => id !== null && id !== undefined) as number[]
 
-        // 2️⃣ Búsqueda combinada
         query.where((builder) => {
-          // Buscar por nombre, teléfono o documento
           builder
             .whereRaw('LOWER(nombre) LIKE ?', [`%${searchTerm.toLowerCase()}%`])
             .orWhereRaw('telefono LIKE ?', [`%${searchTerm}%`])
             .orWhereRaw('doc_numero LIKE ?', [`%${searchTerm}%`])
             .orWhereRaw('email LIKE ?', [`%${searchTerm.toLowerCase()}%`])
 
-          // O buscar por placa (si encontró vehículos)
           if (clienteIdsConPlaca.length > 0) {
             builder.orWhereIn('id', clienteIdsConPlaca)
           }
@@ -178,7 +262,7 @@ export default class ClientesController {
     return item
   }
 
-  /** DELETE /clientes/:id  (bloquea si hay vehículos asociados) */
+  /** DELETE /clientes/:id */
   public async destroy({ params, response }: HttpContext) {
     const item = await Cliente.find(params.id)
     if (!item) return response.notFound({ message: 'Cliente no encontrado' })
@@ -199,17 +283,13 @@ export default class ClientesController {
 
   // ===================== VISTAS ENRIQUECIDAS =====================
 
-  /** GET /clientes/:id/detalle  → métricas, vehículos, últimas por vehículo y recientes */
+  /** GET /clientes/:id/detalle */
   public async detalle({ params, response }: HttpContext) {
     const id = Number(params.id)
     const cliente = await Cliente.find(id)
     if (!cliente) return response.notFound({ message: 'Cliente no encontrado' })
 
-    // Vehículos del cliente (con clase)
     const vehiculos = await Vehiculo.query().where('cliente_id', id).preload('clase')
-
-    // Base común para conteos
-    // Obtener placas del cliente para búsqueda por placa también
     const placasCliente = vehiculos.map((v) => v.placa).filter(Boolean)
 
     const base = db
@@ -221,7 +301,7 @@ export default class ClientesController {
           qb.orWhereIn('t.placa', placasCliente)
         }
       })
-    // Conteos + última visita global
+
     const [{ total_visitas: totalVisitas, ultima }] = await base
       .clone()
       .count('* as total_visitas')
@@ -234,7 +314,6 @@ export default class ClientesController {
         ? String(Math.max(0, Math.floor(today.diff(last, 'days').days ?? 0)))
         : null
 
-    // Top servicios
     const serviciosTopRaw = await base
       .clone()
       .select('t.servicio_id')
@@ -243,7 +322,6 @@ export default class ClientesController {
       .orderBy('cnt', 'desc')
       .limit(5)
 
-    // 1) Última visita POR CADA VEHÍCULO del cliente
     const ultimasPorVehiculo: Array<{
       vehiculoId: number
       placa: string
@@ -274,7 +352,6 @@ export default class ClientesController {
       })
     }
 
-    // 2) Visitas recientes (mezclando todos los vehículos del cliente)
     const recientes = await base
       .clone()
       .leftJoin('servicios as s', 's.id', 't.servicio_id')
@@ -323,7 +400,7 @@ export default class ClientesController {
     })
   }
 
-  /** GET /clientes/:id/historial ... */
+  /** GET /clientes/:id/historial */
   public async historial({ params, request, response }: HttpContext) {
     const id = Number(params.id)
     const page = Number(request.input('page', 1))

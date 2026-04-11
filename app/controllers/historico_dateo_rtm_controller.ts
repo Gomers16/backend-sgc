@@ -1,698 +1,1174 @@
-// app/controllers/historico_dateo_rtm_controller.ts
-//
-// RUTAS (en start/routes.ts):
-//   router.post('/historico-rtm/preview',  [HistoricoDateoRtmController, 'preview'])
-//   router.post('/historico-rtm/importar', [HistoricoDateoRtmController, 'importar'])
-//
-// BODY (multipart):
-//   archivo        File (.xlsx)
-//   dry_run        'true' | 'false'   (default: false)
-//   hojas          'MAR2025,ABR2025'  (vacío = todas)
-
+// app/controllers/rep_general_import_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
-import ExcelJS from 'exceljs'
+import logger from '@adonisjs/core/services/logger'
+import fs from 'node:fs'
 import { DateTime } from 'luxon'
-import Database from '@adonisjs/lucid/services/db'
+import ExcelJS from 'exceljs'
+import db from '@adonisjs/lucid/services/db'
 
 import Cliente from '#models/cliente'
-import CaptacionDateo from '#models/captacion_dateo'
+import Vehiculo from '#models/vehiculo'
+import Conductor from '#models/conductor'
 import TurnoRtm from '#models/turno_rtm'
-import AgenteCaptacion from '#models/agente_captacion'
-import Servicio from '#models/servicio'
+import Comision from '#models/comision'
 
-// ─── Mapa TITULAR → nombre canónico ──────────────────────────────
+type TipoVehiculoDB = 'Liviano Particular' | 'Liviano Taxi' | 'Liviano Público' | 'Motocicleta'
 
-const TITULAR_CANON: Record<string, string> = {
-  'ESTEFANIA CARDONA': 'ESTEFANIA CARDONA',
-  'ESTANIA CARDONA': 'ESTEFANIA CARDONA',
-  'ESTEFANI CARDONA': 'ESTEFANIA CARDONA',
-  'ESTEFANIS CARDONA': 'ESTEFANIA CARDONA',
-  'ESTEFANUA CARDONA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDO': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDOMA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDONDA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARONA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDONAA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDONA PREVENTIVA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDONA X LLAMADA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDONA POR LLAMADA': 'ESTEFANIA CARDONA',
-  'ESTEFANIA CARDONA CORRIJO PLACA': 'ESTEFANIA CARDONA',
-  'ESTEFA': 'ESTEFANIA CARDONA',
-
-  'ANDRES PAEZ': 'ANDRES PAEZ',
-  'ANDRÉS PAEZ': 'ANDRES PAEZ',
-  'ANDRÉS PÁEZ': 'ANDRES PAEZ',
-  'ANDRES PÁEZ': 'ANDRES PAEZ',
-  'QNDRES PAEZ': 'ANDRES PAEZ',
-  'ANDRES CDA': 'ANDRES PAEZ',
-  'ANDRES PAEZ CDA': 'ANDRES PAEZ',
-
-  'DAGOBERTO SAENZ BENITEZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SÁENZ BENÍTEZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SÁENZ BENITEZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SAENZ BENÍTEZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SÁENZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SÁEN': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SÁENZ B': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SÁENZ BENÍT': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SUAREZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO TALLER  SUAREZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO BRAYAN VALDÉS': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBER SÁENZ BENÍTEZ': 'DAGOBERTO SAENZ BENITEZ',
-  'DAGOBERTO SAENZ': 'DAGOBERTO SAENZ BENITEZ',
-
-  'KAREN PARRA': 'KAREN PARRA',
-  'KAREN  PARRA': 'KAREN PARRA',
-  'KEREN PARRA': 'KAREN PARRA',
-  'PREVENTIVA KAREN PARRA': 'KAREN PARRA',
-
-  'LAURA HERNANDEZ': 'LAURA HERNANDEZ',
-  'LAURA HERNÁNDEZ': 'LAURA HERNANDEZ',
-
-  'CAROLINA BERNAL': 'CAROLINA BERNAL',
-  'CAROLINA  BERNAL': 'CAROLINA BERNAL',
-
-  'ALEJANDRO ESTACIO': 'ALEJANDRO ESTACIO',
-  'ALEJANDRO ESTACIÓN': 'ALEJANDRO ESTACIO',
-
-  'SEBASTIAN MORA': 'SEBASTIAN MORA',
-
-  'MANUEL HERNANDEZ': 'MANUEL HERNANDEZ',
-  'MANUEL HERNÁNDEZ': 'MANUEL HERNANDEZ',
-
-  'DAVID ESTIVEN GARCIA': 'DAVID ESTIVEN GARCIA',
-  'DAVID ESTIVEN GARCÍA': 'DAVID ESTIVEN GARCIA',
-  'DAVID ESTIVEN GSRCIA': 'DAVID ESTIVEN GARCIA',
-
-  'KATHERIN MENESES': 'KATHERIN MENESES',
-  'CATHERIN MENESES': 'KATHERIN MENESES',
-
-  'LIZETH CALDERON': 'LIZETH CALDERON',
-  'LIZETH CALDERÓN': 'LIZETH CALDERON',
-
-  'NICOL RODRÍGUEZ': 'NICOL RODRIGUEZ',
-  'NIKOL RODRÍGUEZ': 'NICOL RODRIGUEZ',
-
-  'MELISA RAMIREZ': 'MELISA RAMIREZ',
-  'LAURA BONILLA': 'LAURA BONILLA',
-  'ERIKA USECHE': 'ERIKA USECHE',
-  'LEONELA BELTRAN': 'LEONELA BELTRAN',
-  'LEONELA BELTRÁN': 'LEONELA BELTRAN',
-  'RUBEN DARIO ECHEVERRY': 'RUBEN DARIO ECHEVERRY',
-  'WILDER EFREN': 'WILDER EFREN',
-  'WILDER EFRÉN': 'WILDER EFREN',
-  'BRAYAN GARCIA': 'BRAYAN GARCIA',
-}
-
-// ─── Mapa tipo vehículo Excel → BD ──────────────────────────────
-
-const TIPO_VEHICULO_MAP: Record<string, string> = {
-  'LIVIANO ORDINARIO': 'Liviano Particular',
-  'LIVIANO + VH SERVICIO PUBLICO': 'Liviano Público',
-  'LIVIANO + TAXIMETRO': 'Liviano Taxi',
-  'MOTO ORDINARIO': 'Motocicleta',
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────
-
-function cellStr(v: ExcelJS.CellValue): string | null {
-  if (v === null || v === undefined) return null
-  if (typeof v === 'string') return v.trim() || null
-  if (typeof v === 'number') return String(v)
-  if (v instanceof Date) return v.toISOString()
-  if (typeof v === 'object' && 'text' in v)
-    return String((v as { text: unknown }).text).trim() || null
-  return null
-}
-
-function cellDate(v: ExcelJS.CellValue): DateTime | null {
-  if (!v) return null
-  if (v instanceof Date) return DateTime.fromJSDate(v).setZone('America/Bogota')
-  if (typeof v === 'string') {
-    const d = DateTime.fromISO(v, { zone: 'America/Bogota' })
-    if (d.isValid) return d
-  }
-  return null
-}
-
-function cellTime(v: ExcelJS.CellValue): string {
-  if (!v) return '08:00:00'
-  if (v instanceof Date) return DateTime.fromJSDate(v).toFormat('HH:mm:ss')
-  const s = String(v).trim()
-  const m = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/)
-  if (m) return `${m[1].padStart(2, '0')}:${m[2]}:${m[3] ?? '00'}`
-  return '08:00:00'
-}
-
-function normalizePlaca(v: unknown): string | null {
-  if (!v) return null
-  const s = String(v)
-    .replace(/[\s\-]/g, '')
-    .toUpperCase()
-    .trim()
-  return s.length >= 5 && s.length <= 7 ? s : null
-}
-
-function normalizePhone(v: unknown): string | null {
-  if (!v) return null
-  const s = String(v).replace(/\D/g, '')
-  return s.length >= 7 ? s : null
-}
-
-function normalizeCedula(v: unknown): string | null {
-  if (!v) return null
-  const s = String(v).replace(/\D/g, '').trim()
-  return s.length >= 5 ? s : null
-}
-
-function normalizarTitular(raw: string | null): string | null {
-  if (!raw) return null
-
-  let s = raw
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, ' ')
-    .replace(
-      /\s+(ME LLAM|YA VIENE|YA VA|SE VENCE|SE LE|SE DIRIGE|VA A HACER|PARA INICI|SERÁ|ESTÁ EN|ES LA|ES UN|ES CLIENT|ES AMIG|LA TRAE|LA LLEV|LLEGA EN|YO MISMO|VIENE DE|VIENE EN|PAGARÁ|SOLICITA|DEMORA|ENVIÓ|ESTABA|ESTOY|TENGO|BIMENSUAL|\(SE EDITÓ|<SE EDITÓ|CORRIJO|ADJUNTO|AVANCE|POR LLAMA|X LLAMA|PREVENTIVA|PARA SOLICI|ME INDICA|ME LLAMÓ|ME HABÍA|ME LA|SEÑOR|CLIENTE ANT|CLIENTE MÍO|TODOS LOS|LA ESPOSA|EL CARRO|EL TAXI|EL DUEÑO|ES UNA|ES UNE|CLIEN).*/,
-      ''
-    )
-    .trim()
-
-  if (TITULAR_CANON[s]) return TITULAR_CANON[s]
-
-  const prefix = s.substring(0, 15)
-  for (const [key, val] of Object.entries(TITULAR_CANON)) {
-    if (key.startsWith(prefix) || prefix.startsWith(key.substring(0, 12))) {
-      return val
-    }
-  }
-
-  return s.length >= 4 ? s : null
-}
-
-function esSucia(v: unknown): boolean {
-  if (!v) return false
-  const s = String(v).trim()
-  return s.startsWith('=') || s === '#N/A' || s === '#REF!' || s === '#VALUE!'
-}
-
-function detectarColumnas(headerRow: unknown[]): Record<string, number> {
-  const cols: Record<string, number> = {}
-  let lastEstado = -1
-  let lastValor = -1
-
-  headerRow.forEach((v, i) => {
-    if (!v) return
-    const s = String(v).trim().toUpperCase()
-
-    if (s === 'PLACA' || s === '-') cols['placa'] = i
-    if (
-      s.startsWith('FECHA') &&
-      !s.includes('REPORTE') &&
-      !s.includes('WHATSAPP') &&
-      !cols['fecha']
-    )
-      cols['fecha'] = i
-    if (s === 'HORA' && !cols['hora']) cols['hora'] = i
-    if (s === 'ESTADO' && i < 6) cols['estado_rtm'] = i
-    if (s === 'TIPO' && !cols['tipo']) cols['tipo'] = i
-    if ((s === 'TITULAR' || s === 'TITULAR ') && !cols['titular']) cols['titular'] = i
-    if (s.includes('CEDULA PROPIETARIO') && !cols['cedula_prop']) cols['cedula_prop'] = i
-    if (s.includes('NOMBRE PROPIETARIO') && !cols['nombre_prop']) cols['nombre_prop'] = i
-    if ((s === 'CEL.' || s === 'CEL') && !cols['celular']) cols['celular'] = i
-    if (s === 'ESTADO PLACA' || (s === 'ESTADO' && i > 10)) lastEstado = i
-    if (s === 'VALOR A PAGAR' && i > 10) lastValor = i
-  })
-
-  if (cols['celular'] === undefined) {
-    headerRow.forEach((v, i) => {
-      if (v && String(v).trim().toUpperCase() === 'CELULAR') cols['celular'] = i
-    })
-  }
-
-  if (lastEstado >= 0) cols['estado_com'] = lastEstado
-  if (lastValor >= 0) cols['valor'] = lastValor
-
-  return cols
-}
-
-// ─── Cache ───────────────────────────────────────────────────────
-
-interface Cache {
-  agentes: Map<string, number>
-  convenios: Map<string, number>
-  clientes: Map<string, number>
-  servicioRtmId: number | null
-  sedeIdDefault: number | null
-  funcionarioIdDefault: number | null
-}
-
-async function buildCache(): Promise<Cache> {
-  const cache: Cache = {
-    agentes: new Map(),
-    convenios: new Map(),
-    clientes: new Map(),
-    servicioRtmId: null,
-    sedeIdDefault: null,
-    funcionarioIdDefault: null,
-  }
-
-  const agentes = await AgenteCaptacion.query()
-    .whereIn('tipo', ['ASESOR_CONVENIO', 'ASESOR_COMERCIAL'])
-    .select(['id', 'nombre'])
-  for (const a of agentes) {
-    cache.agentes.set(a.nombre.trim().toUpperCase(), a.id)
-  }
-
-  const convenios = await Database.from('convenios').select(['id', 'nombre'])
-  for (const c of convenios as Array<{ id: number; nombre: string }>) {
-    cache.convenios.set(String(c.nombre).trim().toUpperCase(), Number(c.id))
-  }
-
-  const clientes = await Database.from('clientes')
-    .whereNotNull('doc_numero')
-    .select(['id', 'doc_numero'])
-  for (const c of clientes as Array<{ id: number; doc_numero: string }>) {
-    if (c.doc_numero) cache.clientes.set(String(c.doc_numero).trim(), Number(c.id))
-  }
-
-  const svc = await Servicio.query().where('codigo_servicio', 'RTM').first()
-  cache.servicioRtmId = svc?.id ?? null
-
-  const sede = await Database.from('sedes').select('id').orderBy('id', 'asc').first()
-  cache.sedeIdDefault = (sede as { id: number } | null)?.id ?? null
-
-  const adminRow = await Database.from('usuarios').select('id').orderBy('id', 'asc').first()
-  cache.funcionarioIdDefault = (adminRow as { id: number } | null)?.id ?? 1
-
-  return cache
-}
-
-// ─── Tipo interno ─────────────────────────────────────────────────
-
-interface FilaParsed {
-  hoja: string
-  rowNum: number
-  placa: string
-  fecha: DateTime
-  hora: string
-  tipoVehiculo: string
-  titularRaw: string | null
-  titularNorm: string | null
-  reportaRaw: string | null
+interface RecurrenciaResult {
   esRecurrente: boolean
-  valor: number
-  cedulaProp: string | null
-  nombreProp: string | null
-  celular: string | null
+  esRecuperacion: boolean
+  mesesDesdeUltimaVisita: number | null
+  ultimoTurnoId: number | null
+  fechaUltimaVisita: string | null
 }
 
-// ─── Controlador ─────────────────────────────────────────────────
+export default class RepGeneralImportController {
+  // ==================== ÍNDICES DE COLUMNAS ====================
 
-export default class HistoricoDateoRtmController {
-  /**
-   * POST /historico-rtm/preview
-   * Lee el Excel y devuelve estadísticas sin guardar nada.
-   */
-  public async preview({ request, response }: HttpContext) {
-    const { filas, erroresParseo } = await this.leerExcel(request)
+  private IDX_PLACA = 10
+  private IDX_MARCA = 12
+  private IDX_LINEA = 13
+  private IDX_MODELO = 14
+  private IDX_COLOR = 20
+  private IDX_MATRICULA = 16
 
-    const porHoja: Record<
-      string,
-      { total: number; aprobado: number; dateo: number; sinAsesor: number }
-    > = {}
+  private IDX_DUENO_DOC_TIPO = 32
+  private IDX_DUENO_DOC_NUM = 33
+  private IDX_DUENO_NOMBRE = 34
+  private IDX_DUENO_TELEFONO = 38
+  private IDX_DUENO_EMAIL = 39
 
-    for (const f of filas) {
-      if (!porHoja[f.hoja]) porHoja[f.hoja] = { total: 0, aprobado: 0, dateo: 0, sinAsesor: 0 }
-      porHoja[f.hoja].total++
-      if (f.esRecurrente) porHoja[f.hoja].dateo++
-      else porHoja[f.hoja].aprobado++
-      if (!f.titularNorm) porHoja[f.hoja].sinAsesor++
-    }
+  private IDX_COND_DOC_TIPO = 40
+  private IDX_COND_DOC_NUM = 41
+  private IDX_COND_NOMBRE = 42
+  private IDX_COND_TELEFONO = 46
 
-    return response.ok({
-      total_filas: filas.length,
-      errores_parseo: erroresParseo.length,
-      por_hoja: porHoja,
-      muestra: filas.slice(0, 5).map((f) => ({
-        hoja: f.hoja,
-        fila: f.rowNum,
-        placa: f.placa,
-        titular: f.titularNorm,
-        cedula_prop: f.cedulaProp,
-        es_recurrente: f.esRecurrente,
-        valor: f.valor,
-      })),
-    })
-  }
+  private IDX_FECHA = 2
+  private IDX_TIPO_SERVICIO = 9
 
-  /**
-   * POST /historico-rtm/importar
-   * Importa el histórico a la BD.
-   */
-  public async importar({ request, response }: HttpContext) {
-    const dryRun = String(request.input('dry_run', 'false')) === 'true'
-    const hojasFilter = String(request.input('hojas', '') || '')
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean)
+  private MESES_MINIMOS_DEFAULT = 24
 
-    const { filas, erroresParseo } = await this.leerExcel(request, hojasFilter)
+  // ==================== MÉTODO PRINCIPAL ====================
 
-    if (!filas.length) {
-      return response.badRequest({ message: 'No se encontraron filas válidas en el archivo' })
-    }
-
-    const cache = await buildCache()
-
-    if (!cache.servicioRtmId) {
-      return response.badRequest({
-        message: 'No existe un servicio con codigo_servicio = "RTM" en la BD.',
+  public async import({ request, response }: HttpContext) {
+    try {
+      const file = request.file('file', {
+        size: '50mb',
+        extnames: ['csv', 'xlsx'],
       })
-    }
 
-    // ── Cargar duplicados existentes (placa + fecha) ──────────────
-    const existentes = await Database.from('turnos_rtms')
-      .where('servicio_id', cache.servicioRtmId)
-      .select(['placa', 'fecha'])
-
-    const dupSet = new Set<string>(
-      (existentes as Array<{ placa: string; fecha: Date | string }>).map((r) => {
-        const fecha =
-          r.fecha instanceof Date
-            ? r.fecha.toISOString().substring(0, 10)
-            : String(r.fecha).substring(0, 10)
-        return `${String(r.placa).toUpperCase()}|${fecha}`
-      })
-    )
-
-    // ── Contadores ────────────────────────────────────────────────
-    let creados = 0
-    let skippedDuplicado = 0
-    let skippedSinAsesor = 0
-    let errores = 0
-    const erroresDetalle: Array<{ hoja: string; fila: number; placa: string; motivo: string }> = []
-
-    // Números negativos para no colisionar con la constraint uq_turno_por_dia_y_sede
-    // Los turnos reales siempre son positivos
-    let contadorHistorico = -1
-
-    for (const fila of filas) {
-      // ── Skip duplicado ──
-      const dupeKey = `${fila.placa}|${fila.fecha.toISODate()}`
-      if (dupSet.has(dupeKey)) {
-        skippedDuplicado++
-        continue
-      }
-
-      // ── Resolver Agente y Convenio ──
-      const agenteId = fila.titularNorm ? this.resolverAgenteId(fila.titularNorm, cache) : null
-      const convenioId = fila.titularNorm ? this.resolverConvenioId(fila.titularNorm, cache) : null
-
-      if (!agenteId || !convenioId) {
-        skippedSinAsesor++
-        erroresDetalle.push({
-          hoja: fila.hoja,
-          fila: fila.rowNum,
-          placa: fila.placa,
-          motivo: `Agente/Convenio no encontrado: "${fila.titularNorm ?? fila.titularRaw}"`,
+      if (!file) {
+        return response.badRequest({
+          ok: false,
+          message: 'No se recibió ningún archivo. Envíe el archivo en el campo "file".',
         })
-        continue
       }
 
-      if (dryRun) {
-        creados++
-        dupSet.add(dupeKey)
-        continue
+      if (!file.isValid) {
+        return response.badRequest({
+          ok: false,
+          message: 'El archivo enviado no es válido.',
+          errors: file.errors,
+        })
       }
 
-      const trx = await Database.transaction()
-      try {
-        // ── Paso 1: Resolver / crear Cliente ──────────────────────
-        let clienteId: number | null = null
-        if (fila.cedulaProp) {
-          clienteId = cache.clientes.get(fila.cedulaProp) ?? null
+      if (!file.tmpPath) {
+        return response.status(500).send({
+          ok: false,
+          message: 'No se pudo acceder al archivo temporal en el servidor.',
+        })
+      }
 
-          if (!clienteId) {
-            const nuevoCliente = await Cliente.create(
-              {
-                nombre: fila.nombreProp ?? null,
-                docTipo: 'CC',
-                docNumero: fila.cedulaProp,
-                telefono: fila.celular ?? fila.cedulaProp,
-              } as any,
-              { client: trx }
-            )
-            clienteId = nuevoCliente.id
-            cache.clientes.set(fila.cedulaProp, clienteId)
-          }
-        }
+      logger.info(
+        { fileName: file.clientName, fileExt: file.extname, fileSize: file.size },
+        '🚀 Iniciando importación'
+      )
 
-        // ── Paso 2: Crear captacion_dateo ─────────────────────────
-        const dateo = await CaptacionDateo.create(
-          {
-            canal: 'ASESOR_CONVENIO',
-            agenteId,
-            convenioId,
-            asesorConvenioId: agenteId,
-            placa: fila.placa,
-            telefono: fila.celular,
-            origen: 'IMPORT',
-            resultado: 'EXITOSO',
-            liberado: true,
-            consumidoAt: fila.fecha,
-            observacion: `[HISTÓRICO ${fila.hoja}] ${fila.esRecurrente ? 'Recurrente' : 'Continuidad'} $${fila.valor} | Reporta: ${fila.reportaRaw ?? '-'}`,
-          } as any,
-          { client: trx }
-        )
+      let rows: string[][] = []
 
-        // ── Paso 3: Crear turno_rtm ───────────────────────────────
-        const turno = await TurnoRtm.create(
-          {
-            funcionarioId: cache.funcionarioIdDefault ?? 1,
-            sedeId: cache.sedeIdDefault,
-            servicioId: cache.servicioRtmId!,
-            placa: fila.placa,
-            fecha: fila.fecha,
-            horaIngreso: fila.hora,
-            horaSalida: null,
-            tiempoServicio: null,
-            estado: 'finalizado',
-            tipoVehiculo: fila.tipoVehiculo as any,
-            clienteId,
-            agenteCaptacionId: agenteId,
-            captacionDateoId: dateo.id,
-            canalAtribucion: 'ASESOR',
-            medioEntero: 'Asesor Comercial',
-            turnoNumero: contadorHistorico,
-            turnoNumeroServicio: contadorHistorico,
-            turnoCodigo: `HIST-${fila.hoja}-${fila.rowNum}`,
-            tieneFacturacion: true,
-            esRecurrente: fila.esRecurrente,
-            esRecuperacion: false,
-            esAvance: false,
-            observaciones: `[HISTÓRICO ${fila.hoja}]`,
-          } as any,
-          { client: trx }
-        )
+      if (file.extname === 'xlsx') {
+        logger.info('📊 Parseando archivo Excel...')
+        rows = await this.parseExcelToArrays(file.tmpPath)
+      } else {
+        logger.info('📄 Parseando archivo CSV...')
+        const raw = fs.readFileSync(file.tmpPath, 'utf-8')
+        rows = this.parseCsvToArrays(raw)
+      }
 
-        // ── Paso 4: Enlazar dateo → turno ─────────────────────────
-        await CaptacionDateo.query({ client: trx })
-          .where('id', dateo.id)
-          .update({ consumido_turno_id: turno.id } as any)
+      if (!rows.length) {
+        return response.badRequest({
+          ok: false,
+          message: 'El archivo no contiene datos (0 filas).',
+        })
+      }
 
-        await trx.commit()
+      const esTECNOBASE = this.detectarTipoArchivo(
+        file.clientName ?? null,
+        file.extname ?? '',
+        rows.length
+      )
 
-        dupSet.add(dupeKey)
-        creados++
-        contadorHistorico--
-      } catch (err: unknown) {
-        await trx.rollback()
-        errores++
-        if (erroresDetalle.length < 50) {
-          erroresDetalle.push({
-            hoja: fila.hoja,
-            fila: fila.rowNum,
-            placa: fila.placa,
-            motivo: err instanceof Error ? err.message : String(err),
+      logger.info(
+        {
+          totalFilas: rows.length,
+          tipoArchivo: esTECNOBASE
+            ? 'TECNOBASE (solo histórico)'
+            : 'RepGeneral (clasificar + empalme)',
+        },
+        '✅ Archivo parseado correctamente'
+      )
+
+      let funcionarioIdValido: number | null = null
+      let sedeIdValido: number | null = null
+
+      if (esTECNOBASE) {
+        const usuarioAdmin = await db.from('usuarios').orderBy('id', 'asc').first()
+        const sedeDefault = await db.from('sedes').orderBy('id', 'asc').first()
+
+        if (!usuarioAdmin) {
+          return response.status(500).send({
+            ok: false,
+            message: 'No existe ningún usuario en la base de datos.',
           })
         }
-      }
-    }
+        if (!sedeDefault) {
+          return response.status(500).send({
+            ok: false,
+            message: 'No existe ninguna sede en la base de datos.',
+          })
+        }
 
-    return response.ok({
-      dry_run: dryRun,
-      resumen: {
-        total_filas: filas.length,
-        creados,
-        skipped_duplicado: skippedDuplicado,
-        skipped_sin_asesor: skippedSinAsesor,
-        errores_proceso: errores,
-        errores_parseo: erroresParseo.length,
-      },
-      errores_detalle: erroresDetalle,
-    })
+        funcionarioIdValido = usuarioAdmin.id
+        sedeIdValido = sedeDefault.id
+      }
+
+      const configGlobal = await db
+        .from('configuracion_recurrencia_global')
+        .orderBy('id', 'asc')
+        .first()
+      const mesesMinimos: number = configGlobal?.meses_minimos ?? this.MESES_MINIMOS_DEFAULT
+
+      let clientesCreados = 0
+      let clientesActualizados = 0
+      let vehiculosCreados = 0
+      let vehiculosActualizados = 0
+      let conductoresCreados = 0
+      let conductoresActualizados = 0
+      let turnosActualizados = 0
+      let turnosCreados = 0
+      let turnosRecurrentes = 0
+      let turnosRecuperacion = 0
+      let turnosNuevos = 0
+      let errores = 0
+      const erroresDetalle: string[] = []
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
+
+        if (i > 0 && i % 1000 === 0) {
+          logger.info(
+            {
+              progreso: `${i}/${rows.length}`,
+              turnosCreados,
+              turnosActualizados,
+              turnosRecurrentes,
+              turnosRecuperacion,
+              turnosNuevos,
+              errores,
+            },
+            '⏳ Procesando...'
+          )
+        }
+
+        try {
+          // 1️⃣ Cliente
+          const { cliente, creado: cliCreado } = await this.upsertClienteDesdeFila(row)
+          if (cliCreado) clientesCreados++
+          else if (cliente) clientesActualizados++
+
+          // 2️⃣ Vehículo
+          const fechaFilaRaw = esTECNOBASE ? this.normText(row[this.IDX_FECHA]) : null
+          const fechaFila = fechaFilaRaw ? this.parsearFecha(fechaFilaRaw) : null
+
+          const { vehiculo, creado: vehCreado } = await this.upsertVehiculoDesdeFila(
+            row,
+            cliente ?? null,
+            fechaFila
+          )
+          if (vehCreado) vehiculosCreados++
+          else if (vehiculo) vehiculosActualizados++
+
+          // 3️⃣ Conductor
+          let { conductor, creado: condCreado } = await this.upsertConductorDesdeFila(row)
+
+          if (!conductor && cliente) {
+            conductor = await Conductor.query()
+              .where('doc_numero', cliente.docNumero ?? '')
+              .orWhere('telefono', cliente.telefono ?? '')
+              .first()
+
+            if (!conductor) {
+              conductor = await Conductor.create({
+                nombre: cliente.nombre,
+                docTipo: cliente.docTipo,
+                docNumero: cliente.docNumero,
+                telefono: cliente.telefono || null,
+              } as any)
+              condCreado = true
+            }
+          }
+
+          if (condCreado) conductoresCreados++
+          else if (conductor) conductoresActualizados++
+
+          // 4️⃣ TECNOBASE vs RepGeneral
+          if (esTECNOBASE) {
+            const result = await this.crearTurnoHistorico(
+              row,
+              cliente ?? null,
+              vehiculo ?? null,
+              conductor ?? null,
+              funcionarioIdValido!,
+              sedeIdValido!
+            )
+            turnosCreados += result.creados
+            turnosActualizados += result.actualizados
+          } else {
+            const result = await this.empalmarTurnosDesdeFila(
+              row,
+              cliente ?? null,
+              vehiculo ?? null,
+              conductor ?? null,
+              mesesMinimos
+            )
+            turnosActualizados += result.actualizados
+            turnosRecurrentes += result.recurrentes
+            turnosRecuperacion += result.recuperacion
+            turnosNuevos += result.nuevos
+          }
+        } catch (filaError) {
+          errores++
+          const msgError = filaError instanceof Error ? filaError.message : String(filaError)
+          const placa = this.normalizePlaca(row[this.IDX_PLACA]) ?? 'SIN_PLACA'
+          const nombreCliente = this.normText(row[this.IDX_DUENO_NOMBRE]) ?? 'Sin nombre'
+          const docCliente = this.normText(row[this.IDX_DUENO_DOC_NUM]) ?? 'Sin cédula'
+
+          let mensajeAmigable: string
+          if (msgError.includes("telefono' cannot be null") || msgError.includes('telefono')) {
+            mensajeAmigable = `Cliente "${nombreCliente}" (CC: ${docCliente}, placa: ${placa}) no tiene número de teléfono`
+          } else if (
+            msgError.includes("doc_numero' cannot be null") ||
+            msgError.includes('doc_numero')
+          ) {
+            mensajeAmigable = `Cliente "${nombreCliente}" (placa: ${placa}) no tiene número de documento`
+          } else if (msgError.includes('placa')) {
+            mensajeAmigable = `Placa "${placa}": ${msgError}`
+          } else {
+            mensajeAmigable = `Fila ${i + 1} (placa: ${placa}): ${msgError}`
+          }
+
+          erroresDetalle.push(mensajeAmigable)
+          logger.warn({ error: msgError, fila: i + 1, placa }, '⚠️ Error procesando fila')
+        }
+      }
+
+      const mensaje = esTECNOBASE
+        ? 'Importación TECNOBASE (histórico) finalizada.'
+        : 'Importación RepGeneral (clasificación + empalme) finalizada.'
+
+      logger.info(
+        {
+          clientesCreados,
+          vehiculosCreados,
+          conductoresCreados,
+          turnosCreados,
+          turnosActualizados,
+          turnosRecurrentes,
+          turnosRecuperacion,
+          turnosNuevos,
+          errores,
+        },
+        '🎉 Importación finalizada'
+      )
+
+      return response.ok({
+        ok: true,
+        message: mensaje,
+        resumen: {
+          mesesMinimos: esTECNOBASE ? null : mesesMinimos,
+          clientesCreados,
+          clientesActualizados,
+          vehiculosCreados,
+          vehiculosActualizados,
+          conductoresCreados,
+          conductoresActualizados,
+          turnosCreados,
+          turnosActualizados,
+          turnosRecurrentes,
+          turnosRecuperacion,
+          turnosNuevos,
+          errores,
+          erroresDetalle,
+          primerError: erroresDetalle[0] ?? null,
+        },
+      })
+    } catch (error) {
+      logger.error(error, 'Error importando archivo')
+      return response.status(500).send({
+        ok: false,
+        message: 'Ocurrió un error al procesar el archivo.',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
-  // ─── Helpers privados ─────────────────────────────────────────
+  // ==================== DETECCIÓN DE TIPO DE ARCHIVO ====================
 
-  private async leerExcel(
-    request: HttpContext['request'],
-    hojasFilter: string[] = []
-  ): Promise<{ filas: FilaParsed[]; erroresParseo: string[] }> {
-    const file = request.file('archivo', { extnames: ['xlsx', 'xls'] })
-    if (!file || !file.isValid) {
-      return { filas: [], erroresParseo: ['Archivo Excel inválido o no enviado'] }
+  private detectarTipoArchivo(
+    nombreArchivo: string | null,
+    extension: string | null,
+    totalFilas: number
+  ): boolean {
+    if (nombreArchivo?.toUpperCase().includes('TECNOBASE')) {
+      logger.info('✅ Detectado por nombre: TECNOBASE')
+      return true
+    }
+    if (extension === 'xlsx' && totalFilas > 1000) {
+      logger.info('✅ Detectado por extensión y tamaño: TECNOBASE')
+      return true
+    }
+    logger.info('✅ Detectado como RepGeneral')
+    return false
+  }
+
+  // ==================== DETECCIÓN DE RECURRENCIA / RECUPERACIÓN ====================
+
+  private async detectarRecurrencia(
+    clienteId: number | null,
+    conductorId: number | null,
+    fechaActualISO: string,
+    mesesMinimos: number,
+    turnoActualId: number | null = null
+  ): Promise<RecurrenciaResult> {
+    const vacio: RecurrenciaResult = {
+      esRecurrente: false,
+      esRecuperacion: false,
+      mesesDesdeUltimaVisita: null,
+      ultimoTurnoId: null,
+      fechaUltimaVisita: null,
     }
 
-    const wb = new ExcelJS.Workbook()
-    await wb.xlsx.readFile(file.tmpPath!)
+    let ultimoTurno: TurnoRtm | null = null
 
-    const filas: FilaParsed[] = []
-    const erroresParseo: string[] = []
+    if (clienteId) {
+      const q = TurnoRtm.query()
+        .where('cliente_id', clienteId)
+        .where('estado', 'finalizado')
+        .where('fecha', '<', fechaActualISO)
+        .orderBy('fecha', 'desc')
+      if (turnoActualId) q.whereNot('id', turnoActualId)
+      ultimoTurno = await q.first()
+    }
 
-    for (const ws of wb.worksheets) {
-      const hojaNombre = ws.name.trim().toUpperCase()
-      if (hojasFilter.length && !hojasFilter.includes(hojaNombre)) continue
+    if (!ultimoTurno && conductorId) {
+      const q = TurnoRtm.query()
+        .where('conductor_id', conductorId)
+        .where('estado', 'finalizado')
+        .where('fecha', '<', fechaActualISO)
+        .orderBy('fecha', 'desc')
+      if (turnoActualId) q.whereNot('id', turnoActualId)
+      ultimoTurno = await q.first()
+    }
 
-      const rowsRaw: unknown[][] = []
-      ws.eachRow({ includeEmpty: false }, (row) => {
-        rowsRaw.push(row.values as unknown[])
+    if (!ultimoTurno) return vacio
+
+    let fechaUltimaVisitaISO: string
+    if (ultimoTurno.fecha instanceof DateTime) {
+      fechaUltimaVisitaISO = ultimoTurno.fecha.toISODate() ?? ''
+    } else {
+      fechaUltimaVisitaISO = String(ultimoTurno.fecha).substring(0, 10)
+    }
+
+    if (!fechaUltimaVisitaISO) return vacio
+
+    const fechaActual = DateTime.fromISO(fechaActualISO, { zone: 'America/Bogota' })
+    const fechaAnterior = DateTime.fromISO(fechaUltimaVisitaISO, { zone: 'America/Bogota' })
+
+    if (!fechaActual.isValid || !fechaAnterior.isValid) {
+      logger.warn({ fechaActualISO, fechaUltimaVisitaISO }, '⚠️ Fechas inválidas en recurrencia')
+      return vacio
+    }
+
+    const mesesTranscurridos = Math.floor(fechaActual.diff(fechaAnterior, 'months').months)
+    const esRecurrente = mesesTranscurridos < mesesMinimos
+    const esRecuperacion = mesesTranscurridos >= mesesMinimos
+
+    if (esRecurrente) {
+      logger.info(
+        { clienteId, conductorId, mesesTranscurridos, mesesMinimos },
+        '🔄 RECURRENTE detectado'
+      )
+    } else {
+      logger.info(
+        { clienteId, conductorId, mesesTranscurridos, mesesMinimos },
+        '💛 RECUPERACIÓN detectada'
+      )
+    }
+
+    return {
+      esRecurrente,
+      esRecuperacion,
+      mesesDesdeUltimaVisita: mesesTranscurridos,
+      ultimoTurnoId: ultimoTurno.id,
+      fechaUltimaVisita: fechaUltimaVisitaISO,
+    }
+  }
+
+  // ==================== DETECCIÓN DE SERVICIO Y TIPO VEHÍCULO ====================
+
+  private detectarServicioId(row: string[]): {
+    servicioId: number | null
+    observacion: string | null
+  } {
+    const tipoServicio = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
+    const match = tipoServicio.match(/\(\s*([^)]+)\s*\)/)
+    const textoParentesis = match ? match[1].trim() : null
+
+    if (tipoServicio.includes('PREVENTIVA') || tipoServicio.includes('PREVENTIVO')) {
+      return { servicioId: 2, observacion: textoParentesis ? `(${textoParentesis})` : null }
+    }
+    if (
+      tipoServicio.includes('ORDINARIO') ||
+      tipoServicio.includes('TAXI') ||
+      tipoServicio.includes('PUBLICO') ||
+      tipoServicio.includes('APRENDIZAJE') ||
+      tipoServicio.includes('LEY 769')
+    ) {
+      return { servicioId: 1, observacion: textoParentesis ? `(${textoParentesis})` : null }
+    }
+
+    logger.warn({ tipoServicio }, '⚠️ Tipo de servicio no reconocido, asignando RTM por defecto')
+    return { servicioId: 1, observacion: tipoServicio ? `(${tipoServicio})` : null }
+  }
+
+  private detectarTipoVehiculo(row: string[]): TipoVehiculoDB {
+    const t = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
+    if (t.includes('MOTO')) return 'Motocicleta'
+    if (t.includes('TAXIMETRO') || t.includes('TAXI')) return 'Liviano Taxi'
+    if (t.includes('PUBLICO') || t.includes('SERVICIO PUBLICO')) return 'Liviano Público'
+    return 'Liviano Particular'
+  }
+
+  /**
+   * Detecta el claseVehiculoId según col8 (L1_LIVIANA / L2_MOTOS) o col9 (MOTO / LIVIANO)
+   * IDs según seeder: 1=Liviano Particular, 2=Liviano Taxi, 3=Liviano Público, 4=Motocicleta
+   */
+  private detectarClaseVehiculoId(row: string[]): number {
+    const col8 = this.normText(row[8])?.toUpperCase() || ''
+    const col9 = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
+
+    // Moto detectada por col8 o col9
+    if (col8.includes('L2_MOTO') || col9.includes('MOTO')) return 4
+
+    // Livianos especiales
+    if (col9.includes('TAXIMETRO') || col9.includes('TAXI')) return 2
+    if (col9.includes('PUBLICO')) return 3
+
+    // Default liviano particular
+    return 1
+  }
+
+  // ==================== PARSEO DE ARCHIVOS ====================
+
+  private async parseExcelToArrays(filePath: string): Promise<string[][]> {
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.readFile(filePath)
+
+    const worksheet = workbook.worksheets[0]
+    const rows: string[][] = []
+
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return
+
+      const values: string[] = []
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        const idx = colNumber - 1
+
+        if (cell.type === ExcelJS.ValueType.Date && cell.value instanceof Date) {
+          const dt = DateTime.fromJSDate(cell.value, { zone: 'America/Bogota' })
+          values[idx] = dt.toFormat('dd/MM/yyyy HH:mm:ss')
+        } else if (cell.type === ExcelJS.ValueType.Number && typeof cell.value === 'number') {
+          values[idx] = Number.isInteger(cell.value)
+            ? cell.value.toString()
+            : Math.round(cell.value).toString()
+        } else {
+          values[idx] = cell.value ? String(cell.value).trim() : ''
+        }
       })
+      rows.push(values)
+    })
 
-      // ExcelJS indexa desde 1 → slice(1) para base 0
-      const rows = rowsRaw.map((r) => (r as unknown[]).slice(1))
+    return rows
+  }
 
-      // Detectar fila header
-      let headerIdx = 0
-      for (let i = 0; i < Math.min(3, rows.length); i++) {
-        const c0 = cellStr(rows[i][0] as ExcelJS.CellValue)
-          ?.toUpperCase()
-          .trim()
-        if (c0 === 'PLACA' || c0 === '-') {
-          headerIdx = i
-          break
+  private parseCsvToArrays(raw: string): string[][] {
+    const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== '')
+    if (!lines.length) return []
+
+    const firstLine = lines[0]
+    const semiCount = (firstLine.match(/;/g) || []).length
+    const commaCount = (firstLine.match(/,/g) || []).length
+    const sep = semiCount >= commaCount ? ';' : ','
+
+    const rows: string[][] = []
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const parts = line.split(sep)
+      if (parts.length && parts[0].charCodeAt(0) === 0xfeff) {
+        parts[0] = parts[0].replace(/^\uFEFF/, '')
+      }
+      rows.push(parts)
+    }
+    return rows
+  }
+
+  private parsearFecha(valor: string): DateTime | null {
+    if (!valor) return null
+    const formatos = ['dd/MM/yyyy HH:mm:ss', 'dd/MM/yyyy', 'yyyy-MM-dd HH:mm:ss', 'yyyy-MM-dd']
+    for (const fmt of formatos) {
+      const d = DateTime.fromFormat(valor, fmt, { zone: 'America/Bogota' })
+      if (d.isValid) return d
+    }
+    const iso = DateTime.fromISO(valor, { zone: 'America/Bogota' })
+    return iso.isValid ? iso : null
+  }
+
+  // ==================== NORMALIZACIÓN ====================
+
+  private normalizePlaca(value: string | undefined | null): string | null {
+    if (!value) return null
+    return (
+      value
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .trim() || null
+    )
+  }
+
+  private normalizeTelefono(value: string | undefined | null): string | null {
+    if (!value) return null
+    const digits = value.replace(/\D/g, '')
+    return digits || null
+  }
+
+  private normText(value: string | undefined | null): string | null {
+    if (!value) return null
+    return value.trim() || null
+  }
+
+  private truncateText(value: string | null, maxLength: number): string | null {
+    if (!value) return null
+    return value.length > maxLength ? value.substring(0, maxLength) : value
+  }
+
+  // ==================== UPSERT ENTIDADES ====================
+
+  /**
+   * Busca o crea un cliente con prioridad:
+   *  1° DOCUMENTO  → más confiable, identifica a la persona sin ambigüedad
+   *  2° TELÉFONO   → segundo identificador único
+   *  3° EMAIL      → solo si no está en uso por OTRO cliente
+   *  4° CREAR NUEVO → email queda null si ya lo tiene otro cliente
+   *
+   * Esto evita que dos personas que comparten email (ej. David Parra / Hannier)
+   * queden fusionadas en el mismo cliente.
+   */
+  private async upsertClienteDesdeFila(
+    row: string[]
+  ): Promise<{ cliente: Cliente | null; creado: boolean }> {
+    const docTipo = this.normText(row[this.IDX_DUENO_DOC_TIPO])
+    const docNumero = this.normText(row[this.IDX_DUENO_DOC_NUM])
+    const nombre = this.normText(row[this.IDX_DUENO_NOMBRE])
+    const telefono = this.normalizeTelefono(row[this.IDX_DUENO_TELEFONO])
+    const emailRaw = this.normText(row[this.IDX_DUENO_EMAIL])?.toLowerCase() || null
+
+    if (!docNumero && !nombre && !telefono && !emailRaw) {
+      return { cliente: null, creado: false }
+    }
+
+    let cliente: Cliente | null = null
+
+    // ── 1° PRIORIDAD: DOCUMENTO ──────────────────────────────────────────────
+    if (docNumero) {
+      cliente = await Cliente.query().where('doc_numero', docNumero).first()
+    }
+
+    // ── 2° PRIORIDAD: TELÉFONO ───────────────────────────────────────────────
+    // ⚠️ Solo usar si el documento coincide O si la persona encontrada no tiene documento.
+    // Si el teléfono está en otro cliente con diferente cédula (teléfono falso/compartido),
+    // NO se usa — se crea un cliente nuevo para evitar fusionar personas distintas.
+    if (!cliente && telefono) {
+      const porTelefono = await Cliente.query().where('telefono', telefono).first()
+      if (porTelefono) {
+        const docCoincide =
+          !docNumero || // la fila no trae doc → aceptar
+          !porTelefono.docNumero || // el cliente no tiene doc → aceptar
+          porTelefono.docNumero === docNumero // los docs coinciden → aceptar
+        if (docCoincide) {
+          cliente = porTelefono
+        } else {
+          logger.warn(
+            { telefono, docFila: docNumero, docEncontrado: porTelefono.docNumero, nombre },
+            '⚠️ Teléfono compartido con otro cliente (cédula diferente), se creará cliente nuevo'
+          )
+        }
+      }
+    }
+
+    // ── 3° CREAR CLIENTE NUEVO ───────────────────────────────────────────────
+    if (!cliente) {
+      // Verificar si el email ya pertenece a alguien más → si es así, no lo asignamos
+      let emailFinal: string | null = emailRaw
+      if (emailRaw) {
+        const emailEnUso = await Cliente.query().whereRaw('LOWER(email) = ?', [emailRaw]).first()
+        if (emailEnUso) {
+          logger.warn(
+            { email: emailRaw, clienteExistente: emailEnUso.id, nombre },
+            '⚠️ Email ya pertenece a otro cliente, se crea el nuevo sin email'
+          )
+          emailFinal = null
         }
       }
 
-      const header = rows[headerIdx]
-      if (!header) continue
+      cliente = await Cliente.create({
+        docTipo: docTipo || (docNumero ? 'CC' : null),
+        docNumero,
+        nombre,
+        telefono: telefono ?? '',
+        email: emailFinal,
+      } as any)
 
-      const cols = detectarColumnas(header)
+      return { cliente, creado: true }
+    }
 
-      if (cols['placa'] === undefined || cols['fecha'] === undefined) {
-        erroresParseo.push(`Hoja ${ws.name}: no se encontraron columnas PLACA/FECHA`)
-        continue
+    // ── ACTUALIZAR CAMPOS VACÍOS (sin pisar datos existentes) ────────────────
+    let debeGuardar = false
+
+    if (!cliente.docNumero && docNumero) {
+      cliente.docNumero = docNumero
+      cliente.docTipo = docTipo || 'CC'
+      debeGuardar = true
+    }
+    if (!cliente.nombre && nombre) {
+      cliente.nombre = nombre
+      debeGuardar = true
+    }
+    if (!cliente.telefono && telefono) {
+      cliente.telefono = telefono
+      debeGuardar = true
+    }
+
+    // Email: solo asignar si el cliente no tiene uno YA
+    // y si el email no está siendo usado por otro cliente distinto
+    if (!cliente.email && emailRaw) {
+      const emailEnUso = await Cliente.query()
+        .whereRaw('LOWER(email) = ?', [emailRaw])
+        .whereNot('id', cliente.id)
+        .first()
+
+      if (!emailEnUso) {
+        cliente.email = emailRaw
+        debeGuardar = true
+      } else {
+        logger.warn(
+          { email: emailRaw, clienteConEmail: emailEnUso.id, clienteActual: cliente.id },
+          '⚠️ Email ya está en otro cliente, no se asigna'
+        )
       }
+    }
 
-      for (let i = headerIdx + 1; i < rows.length; i++) {
-        const row = rows[i]
-        const rowNum = i + 1
+    if (debeGuardar) await cliente.save()
+    return { cliente, creado: false }
+  }
 
-        // Placa
-        const placaRaw = row[cols['placa']] as ExcelJS.CellValue
-        if (esSucia(placaRaw)) continue
-        const placa = normalizePlaca(placaRaw)
-        if (!placa) continue
+  private async upsertVehiculoDesdeFila(
+    row: string[],
+    cliente: Cliente | null,
+    fechaFila: DateTime | null = null
+  ): Promise<{ vehiculo: Vehiculo | null; creado: boolean }> {
+    const placa = this.normalizePlaca(row[this.IDX_PLACA])
+    if (!placa) return { vehiculo: null, creado: false }
 
-        // Fecha
-        const fechaRaw = row[cols['fecha']] as ExcelJS.CellValue
-        const fecha = cellDate(fechaRaw)
-        if (!fecha || !fecha.isValid) continue
+    const marca = this.normText(row[this.IDX_MARCA])
+    const linea = this.normText(row[this.IDX_LINEA])
+    const modeloRaw = this.normText(row[this.IDX_MODELO])
+    const color = this.truncateText(this.normText(row[this.IDX_COLOR]), 50)
+    const matricula = this.normText(row[this.IDX_MATRICULA])
 
-        // Hora
-        const hora = cellTime(row[cols['hora']] as ExcelJS.CellValue)
+    let modelo: number | null = null
+    if (modeloRaw) {
+      const n = Number(modeloRaw)
+      modelo = Number.isFinite(n) ? n : null
+    }
 
-        // Tipo vehículo
-        const tipoRaw =
-          cellStr(row[cols['tipo']] as ExcelJS.CellValue)
-            ?.toUpperCase()
-            .trim() ?? ''
-        const tipoVehiculo = TIPO_VEHICULO_MAP[tipoRaw] ?? 'Liviano Particular'
+    let vehiculo = await Vehiculo.query().whereRaw('UPPER(placa) = ?', [placa]).first()
 
-        // Titular
-        const titularRaw = cellStr(row[cols['titular']] as ExcelJS.CellValue)
-        if (!titularRaw || esSucia(titularRaw)) continue
-        const titularNorm = normalizarTitular(titularRaw)
+    const claseVehiculoId = this.detectarClaseVehiculoId(row)
 
-        // REPORTA (solo observación)
-        const reportaRaw =
-          cols['reporta'] !== undefined ? cellStr(row[cols['reporta']] as ExcelJS.CellValue) : null
+    if (!vehiculo) {
+      vehiculo = await Vehiculo.create({
+        placa,
+        marca,
+        linea,
+        modelo,
+        color,
+        matricula,
+        clienteId: cliente?.id ?? null,
+        claseVehiculoId,
+      } as any)
+      return { vehiculo, creado: true }
+    }
 
-        // es_recurrente: DATEO=$4000 → true | APROBADO=$15000 → false
-        let esRecurrente = false
-        if (cols['estado_com'] !== undefined) {
-          const estadoCom = cellStr(row[cols['estado_com']] as ExcelJS.CellValue)
-            ?.toUpperCase()
-            .trim()
-          esRecurrente = estadoCom === 'DATEO'
-        } else if (cols['valor'] !== undefined) {
-          const valor = Number(cellStr(row[cols['valor']] as ExcelJS.CellValue) ?? '0')
-          esRecurrente = valor <= 4000
-        }
+    let debeGuardar = false
 
-        // Valor
-        let valor = 0
-        if (cols['valor'] !== undefined) {
-          const vRaw = row[cols['valor']]
-          if (typeof vRaw === 'number') valor = vRaw
-          else if (typeof vRaw === 'string' && !vRaw.startsWith('=')) {
-            valor = Number(vRaw.replace(/[^\d]/g, '')) || 0
+    // Corregir clase si estaba mal asignada (ej: moto importada como liviano)
+    if ((vehiculo as any).claseVehiculoId !== claseVehiculoId) {
+      ;(vehiculo as any).claseVehiculoId = claseVehiculoId
+      debeGuardar = true
+    }
+
+    if (!vehiculo.marca && marca) {
+      vehiculo.marca = marca
+      debeGuardar = true
+    }
+    if (!vehiculo.linea && linea) {
+      vehiculo.linea = linea
+      debeGuardar = true
+    }
+    if (!vehiculo.modelo && modelo) {
+      vehiculo.modelo = modelo
+      debeGuardar = true
+    }
+    if (!vehiculo.color && color) {
+      vehiculo.color = color
+      debeGuardar = true
+    }
+    if (!vehiculo.matricula && matricula) {
+      vehiculo.matricula = matricula
+      debeGuardar = true
+    }
+
+    if (cliente?.id) {
+      if (!vehiculo.clienteId) {
+        vehiculo.clienteId = cliente.id
+        debeGuardar = true
+      } else if (vehiculo.clienteId !== cliente.id) {
+        if (!fechaFila) {
+          vehiculo.clienteId = cliente.id
+          debeGuardar = true
+        } else {
+          const ultimoTurnoConDuenoActual = await TurnoRtm.query()
+            .where('placa', placa)
+            .where('cliente_id', vehiculo.clienteId)
+            .orderBy('fecha', 'desc')
+            .select('fecha')
+            .first()
+
+          if (!ultimoTurnoConDuenoActual) {
+            vehiculo.clienteId = cliente.id
+            debeGuardar = true
+          } else {
+            const fechaUltimoTurno =
+              ultimoTurnoConDuenoActual.fecha instanceof DateTime
+                ? ultimoTurnoConDuenoActual.fecha
+                : DateTime.fromISO(String(ultimoTurnoConDuenoActual.fecha), {
+                    zone: 'America/Bogota',
+                  })
+
+            if (fechaFila > fechaUltimoTurno) {
+              vehiculo.clienteId = cliente.id
+              debeGuardar = true
+            }
           }
         }
-
-        // Cédula propietario
-        const cedulaProp =
-          cols['cedula_prop'] !== undefined ? normalizeCedula(row[cols['cedula_prop']]) : null
-
-        // Nombre propietario
-        const nombreProp =
-          cols['nombre_prop'] !== undefined
-            ? cellStr(row[cols['nombre_prop']] as ExcelJS.CellValue)
-            : null
-
-        // Celular
-        const celular = cols['celular'] !== undefined ? normalizePhone(row[cols['celular']]) : null
-
-        filas.push({
-          hoja: ws.name,
-          rowNum,
-          placa,
-          fecha,
-          hora,
-          tipoVehiculo,
-          titularRaw,
-          titularNorm,
-          reportaRaw,
-          esRecurrente,
-          valor,
-          cedulaProp,
-          nombreProp,
-          celular,
-        })
       }
     }
 
-    return { filas, erroresParseo }
+    if (debeGuardar) await vehiculo.save()
+    return { vehiculo, creado: false }
   }
 
-  private resolverAgenteId(titularNorm: string, cache: Cache): number | null {
-    const key = titularNorm.toUpperCase()
-    if (cache.agentes.has(key)) return cache.agentes.get(key)!
-    const prefix = key.substring(0, 10)
-    for (const [nombre, id] of cache.agentes.entries()) {
-      if (nombre.startsWith(prefix)) return id
+  private async upsertConductorDesdeFila(
+    row: string[]
+  ): Promise<{ conductor: Conductor | null; creado: boolean }> {
+    const docTipo = this.normText(row[this.IDX_COND_DOC_TIPO])
+    const docNumero = this.normText(row[this.IDX_COND_DOC_NUM])
+    const nombre = this.normText(row[this.IDX_COND_NOMBRE])
+    const telefono = this.normalizeTelefono(row[this.IDX_COND_TELEFONO])
+
+    if (!docNumero && !nombre && !telefono) return { conductor: null, creado: false }
+
+    let conductor: Conductor | null = null
+
+    if (docNumero) conductor = await Conductor.query().where('doc_numero', docNumero).first()
+    if (!conductor && telefono)
+      conductor = await Conductor.query().where('telefono', telefono).first()
+
+    if (!conductor) {
+      conductor = await Conductor.create({
+        nombre,
+        docTipo: docTipo || (docNumero ? 'CC' : null),
+        docNumero,
+        telefono: telefono || null,
+      } as any)
+      return { conductor, creado: true }
     }
-    return null
+
+    let debeGuardar = false
+    if (!conductor.docNumero && docNumero) {
+      conductor.docNumero = docNumero
+      conductor.docTipo = docTipo || 'CC'
+      debeGuardar = true
+    }
+    if (!conductor.nombre && nombre) {
+      conductor.nombre = nombre
+      debeGuardar = true
+    }
+    if (!conductor.telefono && telefono) {
+      conductor.telefono = telefono
+      debeGuardar = true
+    }
+
+    if (debeGuardar) await conductor.save()
+    return { conductor, creado: false }
   }
 
-  private resolverConvenioId(titularNorm: string, cache: Cache): number | null {
-    const key = titularNorm.toUpperCase()
-    if (cache.convenios.has(key)) return cache.convenios.get(key)!
-    const prefix = key.substring(0, 10)
-    for (const [nombre, id] of cache.convenios.entries()) {
-      if (nombre.startsWith(prefix)) return id
+  // ==================== CREAR TURNO HISTÓRICO (TECNOBASE) ====================
+
+  private async crearTurnoHistorico(
+    row: string[],
+    cliente: Cliente | null,
+    vehiculo: Vehiculo | null,
+    conductor: Conductor | null,
+    funcionarioId: number,
+    sedeId: number
+  ): Promise<{ creados: number; actualizados: number }> {
+    if (!vehiculo?.placa) return { creados: 0, actualizados: 0 }
+
+    const placa = vehiculo.placa
+    const fechaRaw = this.normText(row[this.IDX_FECHA])
+    const fecha = fechaRaw ? this.parsearFecha(fechaRaw) : null
+
+    if (!fecha?.isValid) {
+      logger.warn({ placa, fechaRaw }, '⚠️ Fecha inválida, omitiendo fila')
+      return { creados: 0, actualizados: 0 }
     }
-    return null
+
+    const fechaISO = fecha.toISODate()!
+    const { servicioId, observacion } = this.detectarServicioId(row)
+    const tipoVehiculo = this.detectarTipoVehiculo(row)
+
+    const clienteIdFinal = cliente?.id ?? vehiculo.clienteId ?? null
+    const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? 1
+    const conductorIdFinal = conductor?.id ?? null
+
+    const turnoExistente = await TurnoRtm.query()
+      .where('placa', placa)
+      .where('fecha', fechaISO)
+      .first()
+
+    if (turnoExistente) {
+      let changed = false
+      if (!turnoExistente.vehiculoId && vehiculo.id) {
+        turnoExistente.vehiculoId = vehiculo.id
+        changed = true
+      }
+      if (!turnoExistente.clienteId && clienteIdFinal) {
+        turnoExistente.clienteId = clienteIdFinal
+        changed = true
+      }
+      if (!turnoExistente.conductorId && conductorIdFinal) {
+        turnoExistente.conductorId = conductorIdFinal
+        changed = true
+      }
+      if (!(turnoExistente as any).claseVehiculoId && claseVehiculoIdFinal) {
+        ;(turnoExistente as any).claseVehiculoId = claseVehiculoIdFinal
+        changed = true
+      }
+      if (!turnoExistente.servicioId && servicioId) {
+        turnoExistente.servicioId = servicioId
+        changed = true
+      }
+
+      if (changed) await turnoExistente.save()
+      return { creados: 0, actualizados: changed ? 1 : 0 }
+    }
+
+    const maxTurnoNumero = await TurnoRtm.query()
+      .where('sede_id', sedeId)
+      .where('fecha', fechaISO)
+      .max('turno_numero as max')
+      .pojo<{ max: number }>()
+      .first()
+    const turnoNumero = (maxTurnoNumero?.max ?? 0) + 1
+
+    const maxTurnoServicio = await TurnoRtm.query()
+      .where('sede_id', sedeId)
+      .where('fecha', fechaISO)
+      .where('servicio_id', servicioId ?? 1)
+      .max('turno_numero_servicio as max')
+      .pojo<{ max: number }>()
+      .first()
+    const turnoNumeroServicio = (maxTurnoServicio?.max ?? 0) + 1
+
+    const fechaPart = fecha.toFormat('yyyyMMdd')
+    const turnoCodigo = `HIST-${fechaPart}-${sedeId}-${turnoNumero}`
+
+    await TurnoRtm.create({
+      fecha: fechaISO,
+      horaIngreso: '08:00:00',
+      horaSalida: '09:00:00',
+      turnoNumero,
+      turnoNumeroServicio,
+      turnoCodigo,
+      placa,
+      tipoVehiculo,
+      estado: 'finalizado',
+      vehiculoId: vehiculo.id,
+      clienteId: clienteIdFinal,
+      conductorId: conductorIdFinal,
+      claseVehiculoId: claseVehiculoIdFinal,
+      funcionarioId,
+      sedeId,
+      servicioId,
+      observaciones: ['Importado desde TECNOBASE', observacion].filter(Boolean).join(' '),
+      canalAtribucion: 'FACHADA',
+      esRecurrente: false,
+      esRecuperacion: false,
+      mesesDesdeUltimaVisita: null,
+      ultimoTurnoId: null,
+      fechaUltimaVisita: null,
+    } as any)
+
+    return { creados: 1, actualizados: 0 }
+  }
+
+  // ==================== EMPALMAR TURNOS (REP GENERAL DIARIO) ====================
+
+  private async empalmarTurnosDesdeFila(
+    row: string[],
+    cliente: Cliente | null,
+    vehiculo: Vehiculo | null,
+    conductor: Conductor | null,
+    mesesMinimos: number
+  ): Promise<{ actualizados: number; recurrentes: number; recuperacion: number; nuevos: number }> {
+    if (!vehiculo?.placa) return { actualizados: 0, recurrentes: 0, recuperacion: 0, nuevos: 0 }
+
+    const placa = vehiculo.placa
+    const clienteIdFinal = cliente?.id ?? vehiculo.clienteId ?? null
+    const claseVehiculoIdFinal = (vehiculo as any).claseVehiculoId ?? null
+    const conductorIdFinal = conductor?.id ?? null
+
+    const fechaRaw = this.normText(row[this.IDX_FECHA])
+    const fechaParseada = fechaRaw ? this.parsearFecha(fechaRaw) : null
+    const fechaCSV = fechaParseada?.isValid ? fechaParseada.toISODate()! : null
+    const fechaParaComparar = fechaCSV ?? DateTime.now().toISODate()!
+
+    const rec = await this.detectarRecurrencia(
+      clienteIdFinal,
+      conductorIdFinal,
+      fechaParaComparar,
+      mesesMinimos,
+      null
+    )
+
+    let turnosRecurrentes = rec.esRecurrente ? 1 : 0
+    let turnosRecuperacion = rec.esRecuperacion ? 1 : 0
+    let turnosNuevos = !rec.esRecurrente && !rec.esRecuperacion ? 1 : 0
+    let turnosActualizados = 0
+
+    const turnos = await TurnoRtm.query()
+      .where('placa', placa)
+      .whereIn('estado', ['activo', 'finalizado'])
+
+    for (const turno of turnos) {
+      let changed = false
+
+      if (!turno.vehiculoId && vehiculo.id) {
+        turno.vehiculoId = vehiculo.id
+        changed = true
+      }
+      if (!turno.clienteId && clienteIdFinal) {
+        turno.clienteId = clienteIdFinal
+        changed = true
+      }
+      if (!(turno as any).claseVehiculoId && claseVehiculoIdFinal) {
+        ;(turno as any).claseVehiculoId = claseVehiculoIdFinal
+        changed = true
+      }
+      if (!turno.conductorId && conductorIdFinal) {
+        turno.conductorId = conductorIdFinal
+        changed = true
+      }
+
+      const necesitaClasificar =
+        turno.mesesDesdeUltimaVisita === null || (!turno.esRecurrente && !turno.esRecuperacion)
+
+      if (necesitaClasificar) {
+        let fechaTurnoISO: string
+        if (turno.fecha instanceof DateTime) {
+          fechaTurnoISO = turno.fecha.toISODate() ?? fechaParaComparar
+        } else {
+          fechaTurnoISO = String(turno.fecha).substring(0, 10) || fechaParaComparar
+        }
+
+        const recTurno = await this.detectarRecurrencia(
+          turno.clienteId,
+          turno.conductorId,
+          fechaTurnoISO,
+          mesesMinimos,
+          turno.id
+        )
+
+        turno.esRecurrente = recTurno.esRecurrente
+        turno.esRecuperacion = recTurno.esRecuperacion
+        turno.mesesDesdeUltimaVisita = recTurno.mesesDesdeUltimaVisita
+        turno.ultimoTurnoId = recTurno.ultimoTurnoId
+        ;(turno as any).fechaUltimaVisita = recTurno.fechaUltimaVisita
+        changed = true
+      }
+
+      if (changed) {
+        await turno.save()
+        turnosActualizados++
+
+        if (turno.captacionDateoId && turno.mesesDesdeUltimaVisita !== null) {
+          const recParaComision: RecurrenciaResult = {
+            esRecurrente: turno.esRecurrente,
+            esRecuperacion: turno.esRecuperacion,
+            mesesDesdeUltimaVisita: turno.mesesDesdeUltimaVisita,
+            ultimoTurnoId: turno.ultimoTurnoId,
+            fechaUltimaVisita: turno.fechaUltimaVisita
+              ? turno.fechaUltimaVisita instanceof DateTime
+                ? turno.fechaUltimaVisita.toISODate()
+                : String(turno.fechaUltimaVisita).substring(0, 10)
+              : null,
+          }
+          console.log(`   🔄 Recalculando comisión para dateo ${turno.captacionDateoId}`)
+          await this.recalcularComisionSiExiste(
+            turno.captacionDateoId,
+            recParaComision,
+            turno.tipoVehiculo
+          )
+        }
+      }
+    }
+
+    return {
+      actualizados: turnosActualizados,
+      recurrentes: turnosRecurrentes,
+      recuperacion: turnosRecuperacion,
+      nuevos: turnosNuevos,
+    }
+  }
+
+  // ==================== RECALCULAR COMISIÓN AL SUBIR REP GENERAL ====================
+
+  private async recalcularComisionSiExiste(
+    dateoId: number,
+    rec: RecurrenciaResult,
+    tipoVehiculo: string | null
+  ): Promise<void> {
+    const comision = await Comision.query()
+      .where('captacion_dateo_id', dateoId)
+      .where('estado', 'PENDIENTE')
+      .where('tipo_servicio', 'RTM')
+      .first()
+
+    if (!comision) {
+      console.log(`   ⚠️ No hay comisión PENDIENTE para dateo ${dateoId}`)
+      return
+    }
+
+    const esMoto = tipoVehiculo === 'Motocicleta'
+    console.log(`   🚗 tipoVehiculo: ${tipoVehiculo} | esMoto: ${esMoto}`)
+
+    const asesorId = comision.asesorId
+    const configGlobal = await db
+      .from('configuracion_recurrencia_global')
+      .orderBy('id', 'asc')
+      .first()
+
+    let valorRecurrente: number
+    let valorRecuperacion: number
+
+    if (esMoto) {
+      valorRecurrente = Number(
+        configGlobal?.valor_dateo_recurrencia_moto ?? configGlobal?.valor_dateo_recurrencia ?? 4300
+      )
+      valorRecuperacion = Number(
+        configGlobal?.valor_dateo_recuperacion_moto ??
+          configGlobal?.valor_dateo_recuperacion ??
+          8600
+      )
+    } else {
+      valorRecurrente = Number(
+        configGlobal?.valor_dateo_recurrencia_vehiculo ??
+          configGlobal?.valor_dateo_recurrencia ??
+          4300
+      )
+      valorRecuperacion = Number(
+        configGlobal?.valor_dateo_recuperacion_vehiculo ??
+          configGlobal?.valor_dateo_recuperacion ??
+          8600
+      )
+    }
+
+    if (asesorId) {
+      const asesorCfg = await db
+        .from('configuracion_recurrencia_asesores')
+        .where('asesor_id', asesorId)
+        .where('recurrencia_habilitada', true)
+        .first()
+
+      if (asesorCfg) {
+        if (esMoto) {
+          if (asesorCfg.valor_dateo_recurrencia_moto)
+            valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia_moto)
+          else if (asesorCfg.valor_dateo_recurrencia)
+            valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
+          if (asesorCfg.valor_dateo_recuperacion_moto)
+            valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion_moto)
+          else if (asesorCfg.valor_dateo_recuperacion)
+            valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+        } else {
+          if (asesorCfg.valor_dateo_recurrencia)
+            valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
+          if (asesorCfg.valor_dateo_recuperacion)
+            valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+        }
+      }
+    }
+
+    if (rec.esRecurrente) {
+      comision.monto = String(valorRecurrente)
+      comision.montoAsesor = String(valorRecurrente)
+      comision.montoConvenio = '0'
+      comision.base = '0'
+      console.log(
+        `   🔄 Comisión #${comision.id} → RECURRENTE ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'} $${valorRecurrente}`
+      )
+    } else if (rec.esRecuperacion) {
+      comision.monto = String(valorRecuperacion)
+      comision.montoAsesor = String(valorRecuperacion)
+      comision.montoConvenio = '0'
+      comision.base = '0'
+      console.log(
+        `   💛 Comisión #${comision.id} → RECUPERACIÓN ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'} $${valorRecuperacion}`
+      )
+    }
+
+    await comision.save()
+    console.log(`   ✅ Comisión #${comision.id} actualizada correctamente`)
   }
 }

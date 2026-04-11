@@ -17,6 +17,8 @@
 //   • razonSocialId → se usa 1 como placeholder, ajustar al id real
 //   • salario       → todos en 0, actualizar manualmente
 //   • HERNANDEZ VARON DANIELA → fechaTerminacion faltante en el Excel
+//   • PEREZ MUÑOZ ANGIE LORENA → correo/celular/dirección inventados, verificar
+//   • RAMIREZ SALGADO ANGEL ESTEBAN → correo/celular/dirección inventados, verificar
 
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import { DateTime } from 'luxon'
@@ -49,7 +51,7 @@ type TerminoContrato = 'fijo' | 'obra_o_labor_determinada' | 'indefinido'
 type EstadoContrato = 'activo' | 'inactivo'
 
 interface UsuarioDato {
-  numeroDocumento: string // ✅ usado como `identificacion` en contratos
+  numeroDocumento: string
   apellidos: string
   nombres: string
   celularPersonal: string
@@ -92,9 +94,12 @@ function normalizarRol(raw: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// DATA — 19 usuarios
+// DATA — 23 usuarios
 // ─────────────────────────────────────────────────────────────────
 const USUARIOS_DATA: UsuarioDato[] = [
+  // ────────────────────────────────────────────────────────────────
+  // USUARIOS ORIGINALES (19)
+  // ────────────────────────────────────────────────────────────────
   {
     numeroDocumento: '1005780912',
     apellidos: 'BELTRAN MURCIA',
@@ -514,6 +519,107 @@ const USUARIOS_DATA: UsuarioDato[] = [
     estadoContrato: 'activo',
     password: 'cda123',
   },
+
+  // ────────────────────────────────────────────────────────────────
+  // NUEVOS — ROL: COMERCIAL | CARGO: ASESOR COMERCIAL (2)
+  // ────────────────────────────────────────────────────────────────
+  {
+    // ✅ Datos reales: CC, nombre, celular, correo, dirección, EPS, AFP, fechas
+    numeroDocumento: '1005715290',
+    apellidos: 'AGUIAR SALAZAR',
+    nombres: 'ESTEBAN ANDREY',
+    celularPersonal: '3117603784',
+    correo: 'estebanandreysalazar@gmail.com',
+    tipoSangre: 'O+',
+    fechaNacimiento: '2001-03-30',
+    direccion: 'BARRIO EL TUNAL CARRERA 1-79, TUNAL',
+    rolNombre: 'COMERCIAL',
+    cargoNombre: 'ASESOR COMERCIAL',
+    epsId: EPS.NUEVA_EPS,
+    afpId: AFP.PORVENIR,
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'laboral',
+    terminoContrato: 'fijo',
+    fechaIngreso: '2025-10-01',
+    fechaRetiro: null,
+    estadoContrato: 'activo',
+    password: 'cda123',
+  },
+  {
+    // ✅ Datos reales: CC, nombre, celular, correo, dirección, EPS, AFP, fechas
+    numeroDocumento: '11321278',
+    apellidos: 'SUAZA PORTELA',
+    nombres: 'HENRY',
+    celularPersonal: '3216918817',
+    correo: 'hsp2008@hotmail.es',
+    tipoSangre: 'O+',
+    fechaNacimiento: '1972-07-31',
+    direccion: 'TRANSVERSAL 12A #131-12 MZ 3 CZ 47 SENDEROS DE MINEIMA - VIA SALADO',
+    rolNombre: 'COMERCIAL',
+    cargoNombre: 'ASESOR COMERCIAL',
+    epsId: EPS.SANITAS,
+    afpId: AFP.COLPENSIONES,
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'laboral',
+    terminoContrato: 'indefinido',
+    fechaIngreso: '2025-11-10',
+    fechaRetiro: null,
+    estadoContrato: 'activo',
+    password: 'cda123',
+  },
+
+  // ────────────────────────────────────────────────────────────────
+  // NUEVOS — ROL: OPERATIVO_TURNOS | CARGO: ASESOR SERVICIO AL CLIENTE (2)
+  // ⚠️ Solo CC y nombre son reales — resto inventado coherentemente
+  // ────────────────────────────────────────────────────────────────
+  {
+    numeroDocumento: '1063561618',
+    apellidos: 'PEREZ MUÑOZ',
+    nombres: 'ANGIE LORENA',
+    celularPersonal: '3154423890', // ⚠️ inventado — verificar
+    correo: 'angielorena.perez@gmail.com', // ⚠️ inventado — verificar
+    tipoSangre: 'O+',
+    fechaNacimiento: '1999-04-12', // ⚠️ inventado — verificar
+    direccion: 'CALLE 15 # 4 - 32, RICAURTE, COMUNA 3', // ⚠️ inventado — verificar
+    rolNombre: 'OPERATIVO_TURNOS',
+    cargoNombre: 'ASESOR SERVICIO AL CLIENTE',
+    epsId: EPS.SALUD_TOTAL, // ⚠️ inventado — verificar
+    afpId: AFP.PORVENIR, // ⚠️ inventado — verificar
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    ...mc('DIRECTA', 'INDEFINIDO'),
+    fechaIngreso: '2025-10-15', // ⚠️ inventado — verificar
+    fechaRetiro: null,
+    estadoContrato: 'activo',
+    password: 'cda123',
+  },
+  {
+    numeroDocumento: '1107975740',
+    apellidos: 'RAMIREZ SALGADO',
+    nombres: 'ANGEL ESTEBAN',
+    celularPersonal: '3168912345', // ⚠️ inventado — verificar
+    correo: 'angelesteban.ramirez@gmail.com', // ⚠️ inventado — verificar
+    tipoSangre: 'A+',
+    fechaNacimiento: '1997-08-23', // ⚠️ inventado — verificar
+    direccion: 'CARRERA 7 # 22 - 14, SIMON BOLIVAR, COMUNA 6', // ⚠️ inventado — verificar
+    rolNombre: 'OPERATIVO_TURNOS',
+    cargoNombre: 'ASESOR SERVICIO AL CLIENTE',
+    epsId: EPS.NUEVA_EPS, // ⚠️ inventado — verificar
+    afpId: AFP.PROTECCION, // ⚠️ inventado — verificar
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    ...mc('DIRECTA', 'INDEFINIDO'),
+    fechaIngreso: '2025-11-03', // ⚠️ inventado — verificar
+    fechaRetiro: null,
+    estadoContrato: 'activo',
+    password: 'cda123',
+  },
 ]
 
 // ─────────────────────────────────────────────────────────────────
@@ -603,7 +709,6 @@ export default class UsuariosExcelSeeder extends BaseSeeder {
         if (!existeContrato) {
           const contrato = await Contrato.create(
             {
-              // ✅ FIX: campo requerido NOT NULL en la tabla contratos
               identificacion: dato.numeroDocumento,
               usuarioId: usuario.id,
               razonSocialId: RAZON_SOCIAL_DEFAULT,
@@ -672,6 +777,12 @@ export default class UsuariosExcelSeeder extends BaseSeeder {
     console.log(`   • razonSocialId → actualmente ${RAZON_SOCIAL_DEFAULT}, cambiar al id real`)
     console.log('   • salario → todos en 0, actualizar manualmente')
     console.log('   • HERNANDEZ VARON DANIELA → fechaTerminacion faltante (prestacion/fijo)')
+    console.log(
+      '   • PEREZ MUÑOZ ANGIE LORENA → celular/correo/dirección/EPS/AFP/fechaIngreso inventados'
+    )
+    console.log(
+      '   • RAMIREZ SALGADO ANGEL ESTEBAN → celular/correo/dirección/EPS/AFP/fechaIngreso inventados'
+    )
     console.log('─────────────────────────────────────────────────────────────\n')
   }
 }
