@@ -329,7 +329,10 @@ export default class FacturacionTicketsController {
    * POST /facturacion/tickets
    */
   public async store({ request, auth, response }: HttpContext) {
-    const file = request.file('archivo', { size: '8mb', extnames: ['jpg', 'jpeg', 'png'] })
+    const file = request.file('archivo', {
+      size: '8mb',
+      extnames: ['jpg', 'jpeg', 'png', 'jfif', 'webp'],
+    })
     if (!file) return response.badRequest({ message: 'archivo (image/*) requerido' })
     if (!file.isValid) return response.badRequest({ message: file.errors })
 
@@ -713,8 +716,8 @@ export default class FacturacionTicketsController {
    *   🆕 Nuevo       → comercial: valor_dateo ($8.600) + convenio: incentivo ($14.000)
    *   🆕 Nuevo + INFORMATIVO_POLICIA (caja) → comercial: $4.300 | convenio: $0
    *   🆕 Nuevo + INFORMATIVO_EMPLEADO (caja) → comercial: $4.300 | convenio: $0
-   *   🔄 Recurrente  → comercial: valor_dateo_recurrencia SOLO (sin incentivo)
-   *   💛 Recuperación → comercial: valor_dateo_recuperacion SOLO (sin incentivo)
+   *   🔄 Recurrente  → comercial: valor_dateo_recurrencia + convenio: incentivo_global
+   *   💛 Recuperación → comercial: valor_dateo_recuperacion + convenio: incentivo_global
    *
    * ══════════════════════════════════════════════════════════
    * 🆕 AVANCE (cualquier caso con convenio)
@@ -873,6 +876,20 @@ export default class FacturacionTicketsController {
         await this.applyCommissionHook(ticket)
       } catch (err) {
         console.error('Commission hook failed:', err)
+      }
+    }
+
+    // 🆕 Para SOAT → marcar dateo EXITOSO al confirmar ticket
+    if (esSOAT && ticket.dateoId) {
+      try {
+        const dateoFinal = await CaptacionDateo.find(ticket.dateoId)
+        if (dateoFinal && dateoFinal.resultado !== 'EXITOSO') {
+          dateoFinal.resultado = 'EXITOSO'
+          await dateoFinal.save()
+          console.log(`✅ Dateo ${dateoFinal.id} marcado EXITOSO (ticket SOAT confirmado)`)
+        }
+      } catch (e) {
+        console.error('❌ Error marcando EXITOSO en SOAT:', e)
       }
     }
 
@@ -1055,6 +1072,7 @@ export default class FacturacionTicketsController {
         (turnoActual as any)?.ultimoTurnoId ?? (turnoActual as any)?.ultimo_turno_id ?? null,
       asesorConvenioIdActual: asesorConvenioIdReal,
       convenioIdActual: dateo.convenioId,
+      placaTurno: (turnoActual as any)?.placa ?? ticket.placaTurno ?? null,
     })
 
     console.log(`🔗 Continuidad asesor convenio: ${tuvoContinuidad ? '✅ SÍ' : '❌ NO'}`)
@@ -1074,6 +1092,12 @@ export default class FacturacionTicketsController {
       if (existingComision) {
         console.log('⚠️ Ya existe una comisión para este dateo hoy')
         await trx.rollback()
+        // Aun así marcar el dateo como EXITOSO
+        if (dateo.resultado !== 'EXITOSO') {
+          dateo.resultado = 'EXITOSO'
+          await dateo.save()
+          console.log(`✅ Dateo ${dateo.id} marcado EXITOSO (comisión duplicada)`)
+        }
         return
       }
 
@@ -1131,15 +1155,16 @@ export default class FacturacionTicketsController {
         }
 
         await c.useTransaction(trx).save()
-
-        // ════════════════════════════════════════════════════
-        //  CASO 2: CON CONVENIO — el mismo asesor convenio datea
-        // ════════════════════════════════════════════════════
       } else if (
         !dateo.agenteId ||
-        !asesorConvenioIdReal ||
-        dateo.agenteId === asesorConvenioIdReal
+        dateo.agenteId === asesorConvenioIdReal ||
+        dateo.canal === 'ASESOR_CONVENIO'
       ) {
+        // ═══════════════════════════════════════════════════════════
+        // CASO 2: Asesor convenio se datea a sí mismo
+        // El dinero va SIEMPRE a montoAsesor (él es asesor Y convenio)
+        // montoConvenio SIEMPRE es $0
+        // ═══════════════════════════════════════════════════════════
         const c = new Comision()
         c.captacionDateoId = dateo.id
         c.asesorId = asesorConvenioIdReal
@@ -1151,83 +1176,57 @@ export default class FacturacionTicketsController {
         c.porcentaje = '0'
         c.asesorSecundarioId = null
         c.valorNuevoDirecto = '0'
+        c.montoConvenio = '0' // Siempre $0 en CASO 2
         c.esAvance = esAvance
         if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
 
-        if (esClienteNuevo) {
+        if (esAvance) {
+          // Con avance: el asesor convenio ya recibió su dinero como descuento
+          // en la factura del cliente. No cobra comisión adicional.
           c.base = String(cfgValues.valorIncentivoPorTipo)
-          if (
-            (esInformativoPolicia ||
-              esInformativoEmpleado ||
-              esAvancePropietario ||
-              esObsequio ||
-              esInformativoSoatRtm) &&
-            descuentoOrigenCaja
-          ) {
-            // 🆕 CAMBIO 3
-            // 🆕 INFORMATIVO_POLICIA / INFORMATIVO_EMPLEADO / AVANCE_PROPIETARIO / INFORMATIVO_OBSEQUIO aplicado en caja: convenio queda en $0
-            c.monto = '0'
-            c.montoAsesor = '0'
-            c.montoConvenio = '0'
-            console.log(
-              `✅ Convenio datea 🆕 NUEVO + INFORMATIVO_POLICIA/EMPLEADO/AVANCE_PROPIETARIO/OBSEQUIO (caja) → convenio $0`
-            )
-          } else if (esAvance) {
-            // 🆕 AVANCE: montoConvenio = max(0, incentivo - montoAvance por tipo vehículo)
-            const montoConvenioFinal = Math.max(0, cfgValues.valorIncentivoPorTipo - montoAvance)
-            c.monto = String(montoConvenioFinal)
-            c.montoAsesor = '0'
-            c.montoConvenio = String(montoConvenioFinal)
-            c.descuentoMontoAplicado = montoAvance // 🆕
-            console.log(
-              `✅ Convenio datea 🆕 NUEVO + AVANCE → incentivo $${cfgValues.valorIncentivoPorTipo} - avance $${montoAvance} = montoConvenio $${montoConvenioFinal}`
-            )
-          } else {
-            c.monto = '0'
-            c.montoAsesor = '0'
-            c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
-            console.log(
-              `✅ Convenio datea 🆕 NUEVO → incentivo $${cfgValues.valorIncentivoPorTipo}`
-            )
-          }
-        } else if (esClienteRecurrente) {
+          c.monto = '0'
+          c.montoAsesor = '0'
+          c.descuentoMontoAplicado = montoAvance
+          console.log(`✅ Convenio datea + AVANCE → $0 (ya cobró vía descuento en factura)`)
+        } else if (
+          (esInformativoPolicia ||
+            esInformativoEmpleado ||
+            esAvancePropietario ||
+            esObsequio ||
+            esInformativoSoatRtm) &&
+          descuentoOrigenCaja
+        ) {
+          // Descuento especial aplicado en caja → $0
+          c.base = '0'
+          c.monto = '0'
+          c.montoAsesor = '0'
+          console.log(`✅ Convenio datea + DESCUENTO CAJA → $0`)
+        } else if (esClienteNuevo) {
+          // 2A — Nuevo: es continuidad automática → incentivo_base
+          c.base = String(cfgValues.valorIncentivo)
+          c.monto = String(cfgValues.valorIncentivo)
+          c.montoAsesor = String(cfgValues.valorIncentivo)
+          console.log(`✅ Convenio datea 🆕 NUEVO → asesor cobra $${cfgValues.valorIncentivo}`)
+        } else if (esClienteRecurrente || esClienteRecuperacion) {
           if (tuvoContinuidad) {
-            c.base = String(cfgValues.valorIncentivoPorTipo)
-            if (esAvance) {
-              // 🆕 AVANCE: misma lógica de reducción parcial
-              const montoConvenioFinalRec = Math.max(
-                0,
-                cfgValues.valorIncentivoPorTipo - montoAvance
-              )
-              c.monto = String(montoConvenioFinalRec)
-              c.montoAsesor = '0'
-              c.montoConvenio = String(montoConvenioFinalRec)
-              console.log(
-                `✅ Convenio datea 🔄 RECURRENTE + continuidad + AVANCE → incentivo $${cfgValues.valorIncentivoPorTipo} - avance $${montoAvance} = montoConvenio $${montoConvenioFinalRec}`
-              )
-            } else {
-              c.monto = '0'
-              c.montoAsesor = '0'
-              c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
-              console.log(
-                `✅ Convenio datea 🔄 RECURRENTE + continuidad → incentivo $${cfgValues.valorIncentivoPorTipo}`
-              )
-            }
+            // 2B — Continuidad
+            c.base = String(cfgValues.valorIncentivo)
+            c.monto = String(cfgValues.valorIncentivo)
+            c.montoAsesor = String(cfgValues.valorIncentivo)
+            console.log(`✅ Convenio datea CONTINUIDAD → asesor cobra $${cfgValues.valorIncentivo}`)
           } else {
+            // 2C/2D — Recurrente sin continuidad O Recuperación → dateo_recurrente
+            // (recuperación usa el mismo valor que recurrente para asesor convenio)
             c.base = '0'
             c.monto = String(recValues.valorRecurrente)
             c.montoAsesor = String(recValues.valorRecurrente)
-            c.montoConvenio = '0'
+            const etiqueta = esClienteRecuperacion
+              ? '💛 RECUPERACIÓN'
+              : '🔄 RECURRENTE sin continuidad'
             console.log(
-              `✅ Convenio datea 🔄 RECURRENTE sin continuidad → dateo $${recValues.valorRecurrente}`
+              `✅ Convenio datea ${etiqueta} → asesor cobra $${recValues.valorRecurrente}`
             )
           }
-        } else {
-          c.base = '0'
-          c.monto = String(recValues.valorRecuperacion)
-          c.montoAsesor = String(recValues.valorRecuperacion)
-          c.montoConvenio = '0'
-          console.log(`✅ Convenio datea 💛 RECUPERACIÓN → $${recValues.valorRecuperacion}`)
         }
 
         await c.useTransaction(trx).save()
@@ -1294,23 +1293,48 @@ export default class FacturacionTicketsController {
             )
           }
         } else if (esClienteRecurrente) {
-          c.monto = String(recValues.valorRecurrente)
-          c.montoAsesor = String(recValues.valorRecurrente)
-          c.base = '0'
-          c.montoConvenio = '0'
-          console.log(
-            `✅ Comercial con convenio 🔄 RECURRENTE${esAvance ? ' + AVANCE' : ''} → dateo $${recValues.valorRecurrente} (sin incentivo)`
-          )
+          // 3D/3E — Recurrente: comercial cobra dateo_via_convenio
+          c.monto = String(cfgValues.valorDateoNuevo)
+          c.montoAsesor = String(cfgValues.valorDateoNuevo)
+          c.base = String(cfgValues.valorIncentivoPorTipo)
+          if (esAvance) {
+            const montoConvenioConAvance = Math.max(
+              0,
+              cfgValues.valorIncentivoPorTipo - montoAvance
+            )
+            c.montoConvenio = String(montoConvenioConAvance)
+            c.descuentoMontoAplicado = montoAvance
+            console.log(
+              `✅ Comercial+convenio 🔄 RECURRENTE + AVANCE → dateo $${cfgValues.valorDateoNuevo} + convenio $${montoConvenioConAvance}`
+            )
+          } else {
+            c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+            console.log(
+              `✅ Comercial+convenio 🔄 RECURRENTE → dateo $${cfgValues.valorDateoNuevo} + convenio $${cfgValues.valorIncentivoPorTipo}`
+            )
+          }
         } else {
-          c.monto = String(recValues.valorRecuperacion)
-          c.montoAsesor = String(recValues.valorRecuperacion)
-          c.base = '0'
-          c.montoConvenio = '0'
-          console.log(
-            `✅ Comercial con convenio 💛 RECUPERACIÓN${esAvance ? ' + AVANCE' : ''} → dateo $${recValues.valorRecuperacion} (sin incentivo)`
-          )
+          // 3F/3G — Recuperación: comercial cobra dateo_via_convenio
+          c.monto = String(cfgValues.valorDateoNuevo)
+          c.montoAsesor = String(cfgValues.valorDateoNuevo)
+          c.base = String(cfgValues.valorIncentivoPorTipo)
+          if (esAvance) {
+            const montoConvenioConAvance = Math.max(
+              0,
+              cfgValues.valorIncentivoPorTipo - montoAvance
+            )
+            c.montoConvenio = String(montoConvenioConAvance)
+            c.descuentoMontoAplicado = montoAvance
+            console.log(
+              `✅ Comercial+convenio 💛 RECUPERACIÓN + AVANCE → dateo $${cfgValues.valorDateoNuevo} + convenio $${montoConvenioConAvance}`
+            )
+          } else {
+            c.montoConvenio = String(cfgValues.valorIncentivoPorTipo)
+            console.log(
+              `✅ Comercial+convenio 💛 RECUPERACIÓN → dateo $${cfgValues.valorDateoNuevo} + convenio $${cfgValues.valorIncentivoPorTipo}`
+            )
+          }
         }
-
         await c.useTransaction(trx).save()
       }
 
@@ -1324,6 +1348,18 @@ export default class FacturacionTicketsController {
     } catch (err) {
       await trx.rollback()
       throw err
+    } finally {
+      // Siempre garantizar que el dateo quede EXITOSO si el ticket RTM fue confirmado
+      try {
+        const dateoFinal = await CaptacionDateo.find(dateo.id)
+        if (dateoFinal && dateoFinal.resultado !== 'EXITOSO') {
+          dateoFinal.resultado = 'EXITOSO'
+          await dateoFinal.save()
+          console.log(`✅ Dateo ${dateo.id} marcado EXITOSO (finally)`)
+        }
+      } catch (e) {
+        console.error('❌ Error marcando dateo EXITOSO en finally:', e)
+      }
     }
   }
   // ========================== Helpers privados ==========================
@@ -1461,7 +1497,7 @@ export default class FacturacionTicketsController {
       })
     }
 
-    const file = request.file('archivo', { size: '8mb', extnames: ['jpg', 'jpeg', 'png'] })
+    const file = request.file('archivo', { size: '8mb', extnames: ['jpg', 'jpeg', 'png', 'jfif'] })
     if (!file) return response.badRequest({ message: 'archivo (image/*) requerido' })
     if (!file.isValid) return response.badRequest({ message: file.errors })
 
@@ -1849,46 +1885,84 @@ async function resolveConfigComision(params: {
     return q.first()
   }
 
-  let row: Comision | null = null
+  // Búsqueda 1: config del COMERCIAL (dateo nuevo, nuevo directo)
+  let rowComercial: Comision | null = null
+  if (asesorId && tipoVehiculo) rowComercial = await tryFind(asesorId, tipoVehiculo)
+  if (!rowComercial && asesorId) rowComercial = await tryFind(asesorId, null)
+  if (!rowComercial && tipoVehiculo) rowComercial = await tryFind(null, tipoVehiculo)
+  if (!rowComercial) rowComercial = await tryFind(null, null)
 
-  if (asesorId && tipoVehiculo) row = await tryFind(asesorId, tipoVehiculo)
-  if (!row && asesorConvenioId && tipoVehiculo) row = await tryFind(asesorConvenioId, tipoVehiculo)
-  if (!row && tipoVehiculo) row = await tryFind(null, tipoVehiculo)
-  if (!row && asesorId) row = await tryFind(asesorId, null)
-  if (!row) row = await tryFind(null, null)
+  // Búsqueda 2: incentivo — config personal del convenio (cualquier tipo), fallback global
+  let rowIncentivo: Comision | null = null
+  if (asesorConvenioId && tipoVehiculo) rowIncentivo = await tryFind(asesorConvenioId, tipoVehiculo)
+  if (!rowIncentivo && asesorConvenioId) {
+    // Buscar fila del convenio con CUALQUIER tipo de vehículo (MOTO o VEHICULO)
+    // para extraer luego el campo correcto según tipo real del vehículo
+    const rowConvenioMoto = await tryFind(asesorConvenioId, 'MOTO')
+    const rowConvenioVehiculo = await tryFind(asesorConvenioId, 'VEHICULO')
+    rowIncentivo = rowConvenioMoto ?? rowConvenioVehiculo ?? null
+  }
+  if (!rowIncentivo && tipoVehiculo) rowIncentivo = await tryFind(null, tipoVehiculo)
+  if (!rowIncentivo) rowIncentivo = await tryFind(null, null)
 
-  if (!row)
-    return {
-      valorIncentivo: 14000,
-      valorIncentivoPorTipo: 14000,
-      valorDateoNuevo: 8600,
-      valorNuevoDirecto: 17200,
+  // Mantener rowGlobal solo para valorIncentivo base (fallback)
+  let rowGlobal: Comision | null = null
+  if (tipoVehiculo) rowGlobal = await tryFind(null, tipoVehiculo)
+  if (!rowGlobal) rowGlobal = await tryFind(null, null)
+
+  // Calcular incentivo por tipo
+  // Prioridad: valorPlacaMoto/valorPlacaVehiculo específico > base
+  // Si rowIncentivo es de VEHICULO pero el vehículo real es MOTO,
+  // intenta leer valorPlacaMoto de esa fila antes de caer al base
+  let valorIncentivoPorTipo = 0
+  if (rowIncentivo) {
+    if (tipoVehiculo === 'MOTO') {
+      if (rowIncentivo.valorPlacaMoto !== null && rowIncentivo.valorPlacaMoto !== undefined) {
+        valorIncentivoPorTipo = num(rowIncentivo.valorPlacaMoto)
+      } else {
+        // Intentar buscar otra fila del mismo convenio con tipo MOTO
+        const rowMotoEspecifica = asesorConvenioId ? await tryFind(asesorConvenioId, 'MOTO') : null
+        valorIncentivoPorTipo = rowMotoEspecifica
+          ? rowMotoEspecifica.valorPlacaMoto !== null
+            ? num(rowMotoEspecifica.valorPlacaMoto)
+            : num(rowMotoEspecifica.base)
+          : num(rowIncentivo.base)
+      }
+    } else if (tipoVehiculo === 'VEHICULO') {
+      if (
+        rowIncentivo.valorPlacaVehiculo !== null &&
+        rowIncentivo.valorPlacaVehiculo !== undefined
+      ) {
+        valorIncentivoPorTipo = num(rowIncentivo.valorPlacaVehiculo)
+      } else {
+        const rowVehiculoEspecifica = asesorConvenioId
+          ? await tryFind(asesorConvenioId, 'VEHICULO')
+          : null
+        valorIncentivoPorTipo = rowVehiculoEspecifica
+          ? rowVehiculoEspecifica.valorPlacaVehiculo !== null
+            ? num(rowVehiculoEspecifica.valorPlacaVehiculo)
+            : num(rowVehiculoEspecifica.base)
+          : num(rowIncentivo.base)
+      }
+    } else {
+      valorIncentivoPorTipo = num(rowIncentivo.base)
     }
-
-  let valorIncentivoPorTipo: number
-  if (tipoVehiculo === 'MOTO') {
-    valorIncentivoPorTipo =
-      row.valorPlacaMoto !== null && row.valorPlacaMoto !== undefined
-        ? num(row.valorPlacaMoto)
-        : num(row.base)
-  } else if (tipoVehiculo === 'VEHICULO') {
-    valorIncentivoPorTipo =
-      row.valorPlacaVehiculo !== null && row.valorPlacaVehiculo !== undefined
-        ? num(row.valorPlacaVehiculo)
-        : num(row.base)
-  } else {
-    valorIncentivoPorTipo = num(row.base)
   }
 
+  const valorIncentivo = rowIncentivo ? num(rowIncentivo.base) : 14000
+  console.log(`   💰 resolveConfigComision`)
   console.log(
-    `   💰 resolveConfigComision | tipoVehiculo: ${tipoVehiculo} | incentivo base: $${num(row.base)} | incentivoPorTipo: $${valorIncentivoPorTipo}`
+    `      COMERCIAL → fila: ${rowComercial?.asesorId ?? 'global'} | dateoNuevo: $${num(rowComercial?.monto)} | nuevoDirecto: $${num(rowComercial?.valorNuevoDirecto)}`
+  )
+  console.log(
+    `      INCENTIVO → personal/global | base: $${valorIncentivo} | incentivoPorTipo: $${valorIncentivoPorTipo}`
   )
 
   return {
-    valorIncentivo: num(row.base),
+    valorIncentivo,
     valorIncentivoPorTipo,
-    valorDateoNuevo: num(row.monto),
-    valorNuevoDirecto: num(row.valorNuevoDirecto),
+    valorDateoNuevo: num(rowComercial?.monto),
+    valorNuevoDirecto: num(rowComercial?.valorNuevoDirecto),
   }
 }
 
@@ -1947,31 +2021,66 @@ async function verificarContinuidad(params: {
   ultimoTurnoId: number | null
   asesorConvenioIdActual: number | null
   convenioIdActual: number | null
+  placaTurno?: string | null
 }): Promise<boolean> {
-  const { ultimoTurnoId, asesorConvenioIdActual, convenioIdActual } = params
+  const { ultimoTurnoId, asesorConvenioIdActual, convenioIdActual, placaTurno } = params
 
-  if (!ultimoTurnoId) return false
   if (!convenioIdActual && !asesorConvenioIdActual) return false
 
-  const turnoAnterior = await Database.from('turno_rtms')
-    .where('id', ultimoTurnoId)
-    .select('captacion_dateo_id')
-    .first()
+  // Continuidad real: TODAS las visitas históricas del cliente deben haber
+  // sido con este mismo convenio/asesor. Una sola visita sin él rompe la continuidad.
 
-  const dateoAnteriorId = turnoAnterior?.captacion_dateo_id ?? null
-  if (!dateoAnteriorId) return false
+  // Obtener todos los turnos finalizados de esta placa (historia completa)
+  let todosLosTurnos: any[] = []
+  if (placaTurno) {
+    todosLosTurnos = await Database.from('turnos_rtms')
+      .where('placa', placaTurno)
+      .where('estado', 'finalizado')
+      .orderBy('fecha', 'asc')
+      .select('id', 'captacion_dateo_id')
+  } else if (ultimoTurnoId) {
+    // Si no tenemos la placa, solo revisamos el último turno (comportamiento anterior)
+    const turnoAnterior = await Database.from('turnos_rtms')
+      .where('id', ultimoTurnoId)
+      .select('captacion_dateo_id')
+      .first()
 
-  const dateoAnterior = await Database.from('captacion_dateos')
-    .where('id', dateoAnteriorId)
-    .select('convenio_id', 'asesor_convenio_id', 'agente_id')
-    .first()
+    const dateoAnteriorId = turnoAnterior?.captacion_dateo_id ?? null
+    if (!dateoAnteriorId) return false
 
-  if (!dateoAnterior) return false
+    const dateoAnterior = await Database.from('captacion_dateos')
+      .where('id', dateoAnteriorId)
+      .select('convenio_id', 'agente_id')
+      .first()
 
-  if (convenioIdActual && dateoAnterior.convenio_id === convenioIdActual) return true
-  if (asesorConvenioIdActual && dateoAnterior.agente_id === asesorConvenioIdActual) return true
+    if (!dateoAnterior) return false
+    if (convenioIdActual && dateoAnterior.convenio_id === convenioIdActual) return true
+    if (asesorConvenioIdActual && dateoAnterior.agente_id === asesorConvenioIdActual) return true
+    return false
+  }
 
-  return false
+  if (!todosLosTurnos.length) return false
+
+  // Revisar TODOS los dateos históricos
+  // Si alguna visita NO fue con este convenio/asesor → no hay continuidad
+  for (const turno of todosLosTurnos) {
+    const dateoId = turno.captacion_dateo_id
+    if (!dateoId) return false // Visita sin dateo → rompe continuidad
+
+    const dateo = await Database.from('captacion_dateos')
+      .where('id', dateoId)
+      .select('convenio_id', 'agente_id')
+      .first()
+
+    if (!dateo) return false
+
+    const esteConvenio = convenioIdActual && dateo.convenio_id === convenioIdActual
+    const esteAsesor = asesorConvenioIdActual && dateo.agente_id === asesorConvenioIdActual
+
+    if (!esteConvenio && !esteAsesor) return false // Esta visita fue con otro → sin continuidad
+  }
+
+  return true // Todas las visitas fueron con este asesor/convenio
 }
 
 /* ======================== OCR Fake ======================== */

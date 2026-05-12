@@ -177,7 +177,9 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO', 'OPERATIVO_TURNOS'],
+        }), // 👈 agregado
       ])
 
     router
@@ -783,6 +785,18 @@ router
       ])
 
     router
+      .get('/captacion-dateos/verificar-placa', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().verificarPlaca(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
+
+    router
       .get('/captacion-dateos/:id', async (ctx) => {
         const { default: CaptacionDateosController } = await import(
           '#controllers/captacion_dateos_controller'
@@ -1162,6 +1176,18 @@ router
       ])
 
     router
+      .post('/comisiones', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'],
+        }),
+      ])
+
+    router
       .get('/comisiones/metas-mensuales', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().metasMensuales(ctx)
@@ -1255,7 +1281,16 @@ router
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
       ])
-
+    router
+      .patch('/comisiones/:id/editar', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().editar(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
+      ])
     router
       .patch('/comisiones/:id/valores', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
@@ -1322,7 +1357,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({
-          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL', 'OPERATIVO_TURNOS'], // 👈 agregado
         }),
       ])
     router

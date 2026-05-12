@@ -97,6 +97,21 @@ export default class UsuariosController {
         agenteExistente = await AgenteCaptacion.find(user.agenteId)
       }
 
+      // Opción 3: Buscar por nombre exacto — evita crear duplicados cuando ya existe
+      // un agente con ese nombre (ej: convenio creado manualmente sin usuario)
+      if (!agenteExistente) {
+        const nombreCompleto = `${user.nombres} ${user.apellidos}`.trim()
+        const porNombre = await AgenteCaptacion.query()
+          .whereRaw('TRIM(nombre) = ?', [nombreCompleto])
+          .first()
+        if (porNombre) {
+          console.warn(
+            `⚠️ Ya existe un agente con el nombre "${nombreCompleto}" (ID: ${porNombre.id}, Tipo: ${porNombre.tipo}). No se crea duplicado.`
+          )
+          return
+        }
+      }
+
       // Si existe y es de tipo diferente, NO sobrescribir
       if (agenteExistente && agenteExistente.tipo !== tipo) {
         console.warn(

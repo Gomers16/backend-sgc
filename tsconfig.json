@@ -10,7 +10,7 @@
       "#controllers/*": ["app/controllers/*"],
       "#models/*": ["app/models/*"],
       "#services/*": ["app/services/*"],
-      "#validators/*": ["app/validators/*"]    // ✅ corregido aquí
+      "#validators/*": ["app/validators/*"]
     }
   },
   "include": ["**/*"],

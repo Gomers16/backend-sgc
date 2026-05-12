@@ -356,14 +356,37 @@ export default class ClientesController {
       .clone()
       .leftJoin('servicios as s', 's.id', 't.servicio_id')
       .leftJoin('sedes as se', 'se.id', 't.sede_id')
+      .joinRaw(
+        `LEFT JOIN captacion_dateos as cd ON cd.id = COALESCE(
+  t.captacion_dateo_id,
+  (
+    SELECT t2.captacion_dateo_id
+    FROM turnos_rtms t2
+    WHERE t2.placa = t.placa
+    AND t2.turno_numero < 0
+    AND t2.captacion_dateo_id IS NOT NULL
+    AND ABS(DATEDIFF(t2.fecha, t.fecha)) <= 7
+    ORDER BY ABS(DATEDIFF(t2.fecha, t.fecha))
+    LIMIT 1
+  )
+)`
+      )
+      .leftJoin('agentes_captacions as ac', 'ac.id', 'cd.agente_id')
+      .leftJoin('convenios as cv', 'cv.id', 'cd.convenio_id')
       .select([
         't.id',
         't.fecha',
+        't.turno_numero',
         't.placa',
         't.estado',
         's.nombre_servicio as servicioNombre',
         'se.nombre as sedeNombre',
+        'ac.nombre as asesorNombre',
+        'cv.nombre as convenioNombre',
+        't.es_recurrente as esRecurrente',
+        't.es_recuperacion as esRecuperacion',
       ])
+      .where('t.turno_numero', '>=', 0)
       .orderBy('t.fecha', 'desc')
       .orderBy('t.turno_numero', 'desc')
       .limit(5)
@@ -419,6 +442,23 @@ export default class ClientesController {
       .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
       .leftJoin('servicios as s', 's.id', 't.servicio_id')
       .leftJoin('sedes as se', 'se.id', 't.sede_id')
+      .joinRaw(
+        `LEFT JOIN captacion_dateos as cd ON cd.id = COALESCE(
+  t.captacion_dateo_id,
+  (
+    SELECT t2.captacion_dateo_id
+    FROM turnos_rtms t2
+    WHERE t2.placa = t.placa
+    AND t2.turno_numero < 0
+    AND t2.captacion_dateo_id IS NOT NULL
+    AND ABS(DATEDIFF(t2.fecha, t.fecha)) <= 7
+    ORDER BY ABS(DATEDIFF(t2.fecha, t.fecha))
+    LIMIT 1
+  )
+)`
+      )
+      .leftJoin('agentes_captacions as ac', 'ac.id', 'cd.agente_id')
+      .leftJoin('convenios as cv', 'cv.id', 'cd.convenio_id')
       .where((qb) => {
         qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
       })
@@ -440,6 +480,10 @@ export default class ClientesController {
         's.codigo_servicio as servicioCodigo',
         's.nombre_servicio as servicioNombre',
         'se.nombre as sedeNombre',
+        'ac.nombre as asesorNombre',
+        'cv.nombre as convenioNombre',
+        't.es_recurrente as esRecurrente',
+        't.es_recuperacion as esRecuperacion',
       ])
       .orderBy('t.fecha', 'desc')
       .orderBy('t.turno_numero', 'desc')

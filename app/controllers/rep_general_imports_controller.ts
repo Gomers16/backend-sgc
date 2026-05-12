@@ -348,7 +348,8 @@ export default class RepGeneralImportController {
     conductorId: number | null,
     fechaActualISO: string,
     mesesMinimos: number,
-    turnoActualId: number | null = null
+    turnoActualId: number | null = null,
+    captacionDateoIdActual: number | null = null
   ): Promise<RecurrenciaResult> {
     const vacio: RecurrenciaResult = {
       esRecurrente: false,
@@ -400,8 +401,37 @@ export default class RepGeneralImportController {
     }
 
     const mesesTranscurridos = Math.floor(fechaActual.diff(fechaAnterior, 'months').months)
-    const esRecurrente = mesesTranscurridos < mesesMinimos
-    const esRecuperacion = mesesTranscurridos >= mesesMinimos
+    let esRecurrente: boolean
+    let esRecuperacion: boolean
+
+    if (captacionDateoIdActual) {
+      const dateoActual = await db
+        .from('captacion_dateos')
+        .where('id', captacionDateoIdActual)
+        .first()
+      const agenteIdActual = dateoActual?.agente_id ?? null
+
+      if (agenteIdActual) {
+        const lastDateoId = (ultimoTurno as any).captacionDateoId ?? null
+        let agenteIdUltimo: number | null = null
+
+        if (lastDateoId) {
+          const lastDateo = await db.from('captacion_dateos').where('id', lastDateoId).first()
+          agenteIdUltimo = lastDateo?.agente_id ?? null
+        }
+
+        // Si la última visita fue con el mismo asesor → Continuidad (false)
+        // Si la última visita fue sin su dateo → Recurrente (true)
+        esRecurrente = agenteIdUltimo !== agenteIdActual
+        esRecuperacion = false
+      } else {
+        esRecurrente = mesesTranscurridos < mesesMinimos
+        esRecuperacion = mesesTranscurridos >= mesesMinimos
+      }
+    } else {
+      esRecurrente = mesesTranscurridos < mesesMinimos
+      esRecuperacion = mesesTranscurridos >= mesesMinimos
+    }
 
     if (esRecurrente) {
       logger.info(
@@ -457,6 +487,25 @@ export default class RepGeneralImportController {
     if (t.includes('TAXIMETRO') || t.includes('TAXI')) return 'Liviano Taxi'
     if (t.includes('PUBLICO') || t.includes('SERVICIO PUBLICO')) return 'Liviano Público'
     return 'Liviano Particular'
+  }
+
+  /**
+   * Detecta el claseVehiculoId según col8 (L1_LIVIANA / L2_MOTOS) o col9 (MOTO / LIVIANO)
+   * IDs según seeder: 1=Liviano Particular, 2=Liviano Taxi, 3=Liviano Público, 4=Motocicleta
+   */
+  private detectarClaseVehiculoId(row: string[]): number {
+    const col8 = this.normText(row[8])?.toUpperCase() || ''
+    const col9 = this.normText(row[this.IDX_TIPO_SERVICIO])?.toUpperCase() || ''
+
+    // Moto detectada por col8 o col9
+    if (col8.includes('L2_MOTO') || col9.includes('MOTO')) return 4
+
+    // Livianos especiales
+    if (col9.includes('TAXIMETRO') || col9.includes('TAXI')) return 2
+    if (col9.includes('PUBLICO')) return 3
+
+    // Default liviano particular
+    return 1
   }
 
   // ==================== PARSEO DE ARCHIVOS ====================
@@ -694,6 +743,8 @@ export default class RepGeneralImportController {
 
     let vehiculo = await Vehiculo.query().whereRaw('UPPER(placa) = ?', [placa]).first()
 
+    const claseVehiculoId = this.detectarClaseVehiculoId(row)
+
     if (!vehiculo) {
       vehiculo = await Vehiculo.create({
         placa,
@@ -703,12 +754,18 @@ export default class RepGeneralImportController {
         color,
         matricula,
         clienteId: cliente?.id ?? null,
-        claseVehiculoId: 1,
+        claseVehiculoId,
       } as any)
       return { vehiculo, creado: true }
     }
 
     let debeGuardar = false
+
+    // Corregir clase si estaba mal asignada (ej: moto importada como liviano)
+    if ((vehiculo as any).claseVehiculoId !== claseVehiculoId) {
+      ;(vehiculo as any).claseVehiculoId = claseVehiculoId
+      debeGuardar = true
+    }
 
     if (!vehiculo.marca && marca) {
       vehiculo.marca = marca
@@ -967,6 +1024,9 @@ export default class RepGeneralImportController {
     for (const turno of turnos) {
       let changed = false
 
+      // Siempre marcar verificado si la placa está en Rep General
+      turno.repGeneralVerificado = true
+      changed = true
       if (!turno.vehiculoId && vehiculo.id) {
         turno.vehiculoId = vehiculo.id
         changed = true
@@ -984,8 +1044,10 @@ export default class RepGeneralImportController {
         changed = true
       }
 
-      const necesitaClasificar =
-        turno.mesesDesdeUltimaVisita === null || (!turno.esRecurrente && !turno.esRecuperacion)
+      const cambioDeDueno =
+        clienteIdFinal !== null && turno.clienteId !== null && clienteIdFinal !== turno.clienteId
+
+      const necesitaClasificar = turno.mesesDesdeUltimaVisita === null || cambioDeDueno
 
       if (necesitaClasificar) {
         let fechaTurnoISO: string
@@ -996,13 +1058,13 @@ export default class RepGeneralImportController {
         }
 
         const recTurno = await this.detectarRecurrencia(
-          turno.clienteId,
-          turno.conductorId,
+          clienteIdFinal,
+          conductorIdFinal ?? turno.conductorId,
           fechaTurnoISO,
           mesesMinimos,
-          turno.id
+          turno.id,
+          turno.captacionDateoId ?? null
         )
-
         turno.esRecurrente = recTurno.esRecurrente
         turno.esRecuperacion = recTurno.esRecuperacion
         turno.mesesDesdeUltimaVisita = recTurno.mesesDesdeUltimaVisita
@@ -1012,6 +1074,7 @@ export default class RepGeneralImportController {
       }
 
       if (changed) {
+        ;(turno as any).repGeneralVerificado = true
         await turno.save()
         turnosActualizados++
 
@@ -1123,22 +1186,51 @@ export default class RepGeneralImportController {
       }
     }
 
-    if (rec.esRecurrente) {
-      comision.monto = String(valorRecurrente)
-      comision.montoAsesor = String(valorRecurrente)
-      comision.montoConvenio = '0'
-      comision.base = '0'
+    // Actualizar flags en el turno
+    const turnoParaActualizar = await TurnoRtm.query().where('captacion_dateo_id', dateoId).first()
+
+    if (turnoParaActualizar) {
+      turnoParaActualizar.esRecurrente = rec.esRecurrente
+      turnoParaActualizar.esRecuperacion = rec.esRecuperacion
+      await turnoParaActualizar.save()
       console.log(
-        `   🔄 Comisión #${comision.id} → RECURRENTE ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'} $${valorRecurrente}`
+        `   🔄 Turno #${turnoParaActualizar.id} → esRecurrente: ${rec.esRecurrente} | esRecuperacion: ${rec.esRecuperacion}`
       )
-    } else if (rec.esRecuperacion) {
-      comision.monto = String(valorRecuperacion)
-      comision.montoAsesor = String(valorRecuperacion)
-      comision.montoConvenio = '0'
-      comision.base = '0'
-      console.log(
-        `   💛 Comisión #${comision.id} → RECUPERACIÓN ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'} $${valorRecuperacion}`
-      )
+    }
+
+    const tieneConvenio = !!comision.convenioId
+    const esComercialConConvenio = tieneConvenio && !!comision.asesorSecundarioId
+
+    if (rec.esRecurrente || rec.esRecuperacion) {
+      const valorAsesor = rec.esRecurrente ? valorRecurrente : valorRecuperacion
+      const etiqueta = rec.esRecurrente
+        ? `🔄 RECURRENTE ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'}`
+        : `💛 RECUPERACIÓN ${esMoto ? '🏍️ MOTO' : '🚗 VEHICULO'}`
+
+      if (!tieneConvenio) {
+        // CASO 1: Sin convenio — solo actualizar monto del asesor
+        comision.monto = String(valorAsesor)
+        comision.montoAsesor = String(valorAsesor)
+        console.log(
+          `   ${etiqueta} Comisión #${comision.id} | Sin convenio → asesor $${valorAsesor}`
+        )
+      } else if (esComercialConConvenio) {
+        // CASO 3: Comercial + convenio
+        // montoAsesor = valorDateoNuevo (mismo para nuevo/recurrente/recuperacion)
+        // montoConvenio = valorIncentivoPorTipo (mismo para todos los casos)
+        // No se modifica nada — los montos ya son correctos
+        console.log(
+          `   ${etiqueta} Comisión #${comision.id} | Comercial+convenio → sin cambios (dateo $${comision.montoAsesor ?? 0} + incentivo $${comision.montoConvenio ?? 0})`
+        )
+      } else {
+        // CASO 2: Convenio datea él mismo
+        // montoConvenio siempre es $0, solo actualizar montoAsesor
+        comision.monto = String(valorAsesor)
+        comision.montoAsesor = String(valorAsesor)
+        console.log(
+          `   ${etiqueta} Comisión #${comision.id} | Convenio datea → asesor $${valorAsesor} | convenio $0`
+        )
+      }
     }
 
     await comision.save()

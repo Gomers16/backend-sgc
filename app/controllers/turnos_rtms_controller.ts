@@ -46,7 +46,6 @@ function parseHoraIngresoToHHmm(h: string): string | null {
 function bloqueoMesesPorServicio(codigo?: string): number {
   const c = (codigo || '').toUpperCase()
   if (c === 'RTM' || c === 'SOAT') return 12
-  if (c === 'PREV' || c === 'PERI') return 2
   return 0
 }
 
@@ -319,7 +318,6 @@ export default class TurnosRtmController {
         }
       })
 
-      // POR ESTO (temporal):
       return response.ok(payload)
     } catch (error) {
       console.error('Error en index turnos:', error)
@@ -338,6 +336,7 @@ export default class TurnosRtmController {
     if (any.razonSocial) return String(any.razonSocial)
     return null
   }
+
   /** GET /turnos/:id */
   public async show({ params, response }: HttpContext) {
     try {
@@ -371,6 +370,7 @@ export default class TurnosRtmController {
       return response.internalServerError({ message: 'Error al obtener el turno' })
     }
   }
+
   /** Crear turno */
   public async store({ request, response }: HttpContext) {
     const trx = await Database.transaction()
@@ -535,7 +535,9 @@ export default class TurnosRtmController {
         const meses = bloqueoMesesPorServicio((servicio as any).codigoServicio)
         if (meses > 0) {
           const ultimaFecha = lastFinalizado.fecha as DateTime
-          const nextAllowed = ultimaFecha.plus({ months: meses }).startOf('day')
+          const DIAS_VENTANA_PRE = 10
+          const vencimiento = ultimaFecha.plus({ months: meses }).startOf('day')
+          const nextAllowed = vencimiento.minus({ days: DIAS_VENTANA_PRE })
           if (fechaGuardar.startOf('day') < nextAllowed) {
             await trx.rollback()
             return response.conflict({
@@ -544,7 +546,9 @@ export default class TurnosRtmController {
               servicio: servicio.codigoServicio,
               lastFinalizedOn: ultimaFecha.toISODate(),
               nextAllowedDate: nextAllowed.toISODate(),
+              vencimientoDate: vencimiento.toISODate(),
               monthsBlocked: meses,
+              diasVentana: DIAS_VENTANA_PRE,
             })
           }
         }
@@ -679,10 +683,7 @@ export default class TurnosRtmController {
       }
 
       let captacionDateoId: number | null = null
-
-      // ========== 🆕 AVANCE: variable para heredar del dateo ==========
       let esAvanceHeredado: boolean = false
-      // ================================================================
 
       if (dateo) {
         const r = buildReserva(dateo)
@@ -699,11 +700,8 @@ export default class TurnosRtmController {
           }
 
           captacionDateoId = dateo.id
-
-          // ========== 🆕 AVANCE: heredar esAvance del dateo vigente ==========
           esAvanceHeredado = Boolean((dateo as any).esAvance ?? false)
           console.log(`🆕 esAvance heredado del dateo ${dateo.id}: ${esAvanceHeredado}`)
-          // ====================================================================
         } else {
           dateo = null
           dateoObservacion = null
@@ -711,7 +709,96 @@ export default class TurnosRtmController {
           dateoCanal = null
         }
       }
+      // ── Clasificación de recurrencia en tiempo real ──
+      const configGlobal = await Database.from('configuracion_recurrencia_global')
+        .orderBy('id', 'asc')
+        .first()
+      const mesesMinimos: number = configGlobal?.meses_minimos ?? 24
 
+      let esRecurrente = false
+      let esRecuperacion = false
+      let mesesDesdeUltimaVisita: number | null = null
+      let ultimoTurnoId: number | null = null
+      let fechaUltimaVisita: string | null = null
+
+      if (clienteId) {
+        const ultimoTurno = await TurnoRtm.query({ client: trx })
+          .where('cliente_id', clienteId)
+          .where('estado', 'finalizado')
+          .where('fecha', '<', hoyISO)
+          .orderBy('fecha', 'desc')
+          .first()
+
+        if (ultimoTurno) {
+          const fechaAnteriorISO =
+            ultimoTurno.fecha instanceof DateTime
+              ? ultimoTurno.fecha.toISODate()!
+              : String(ultimoTurno.fecha).substring(0, 10)
+
+          const fechaActualDt = DateTime.fromISO(hoyISO, { zone: 'America/Bogota' })
+          const fechaAnteriorDt = DateTime.fromISO(fechaAnteriorISO, { zone: 'America/Bogota' })
+          const meses = Math.floor(fechaActualDt.diff(fechaAnteriorDt, 'months').months)
+
+          ultimoTurnoId = ultimoTurno.id
+          fechaUltimaVisita = fechaAnteriorISO
+          mesesDesdeUltimaVisita = meses
+
+          if (captacionDateoId) {
+            const dateoActual = await Database.from('captacion_dateos')
+              .where('id', captacionDateoId)
+              .first()
+            const convenioIdActual = dateoActual?.convenio_id ?? null
+            const asesorConvenioActual = dateoActual?.asesor_convenio_id ?? null
+
+            const esAsesorConvenioDateando = dateoActual?.canal === 'ASESOR_CONVENIO'
+            if (esAsesorConvenioDateando && (asesorConvenioActual || convenioIdActual)) {
+              // Verificar continuidad real: TODAS las visitas históricas deben
+              // haber sido con este mismo asesor convenio
+              const todasVisitas = await Database.from('turnos_rtms') // ✅
+                .where('placa', placa)
+                .where('estado', 'finalizado')
+                .whereNotNull('captacion_dateo_id')
+                .orderBy('fecha', 'asc')
+                .select('captacion_dateo_id')
+
+              let tieneContinuidad = true
+
+              for (const visita of todasVisitas) {
+                const dateoVisita = await Database.from('captacion_dateos')
+                  .where('id', visita.captacion_dateo_id)
+                  .select('convenio_id', 'asesor_convenio_id')
+                  .first()
+
+                if (!dateoVisita) {
+                  tieneContinuidad = false
+                  break
+                }
+
+                const mismoConvenio =
+                  convenioIdActual && dateoVisita.convenio_id === convenioIdActual
+                const mismoAsesor =
+                  asesorConvenioActual && dateoVisita.asesor_convenio_id === asesorConvenioActual
+
+                if (!mismoConvenio && !mismoAsesor) {
+                  tieneContinuidad = false
+                  break
+                }
+              }
+
+              // Con continuidad → no es recurrente (cobra incentivo completo)
+              // Sin continuidad → sí es recurrente (cobra valor recurrente)
+              esRecurrente = !tieneContinuidad
+              esRecuperacion = false
+            } else {
+              esRecurrente = meses < mesesMinimos
+              esRecuperacion = meses >= mesesMinimos
+            }
+          } else {
+            esRecurrente = meses < mesesMinimos
+            esRecuperacion = meses >= mesesMinimos
+          }
+        }
+      }
       const payload: any = {
         sedeId: usuarioCreador.sedeId!,
         funcionarioId: usuarioCreador.id,
@@ -734,9 +821,12 @@ export default class TurnosRtmController {
         dateoObservacion,
         dateoImagenUrl,
         dateoCanal,
-        // ========== 🆕 AVANCE: heredado del dateo (false si no hay dateo vigente) ==========
         esAvance: esAvanceHeredado,
-        // ====================================================================================
+        esRecurrente,
+        esRecuperacion,
+        mesesDesdeUltimaVisita,
+        ultimoTurnoId,
+        fechaUltimaVisita,
       }
 
       if (canalAtribucion) {
@@ -819,9 +909,7 @@ export default class TurnosRtmController {
                   consumidoTurnoId: turno.id,
                   consumidoAt: nowBog,
                   observacion: 'Auto-dateo por teléfono detectado',
-                  // ========== 🆕 AVANCE: auto-dateos nunca son avance ==========
                   esAvance: false,
-                  // ===============================================================
                 } as any,
                 { client: trx }
               )
@@ -860,6 +948,7 @@ export default class TurnosRtmController {
       })
     }
   }
+
   /** Actualizar turno */
   public async update({ params, request, response }: HttpContext) {
     try {
@@ -938,6 +1027,26 @@ export default class TurnosRtmController {
         servicioIdNext = s.id
       }
 
+      // ✅ FIX: Recalcular turno_numero_servicio cuando cambia el servicio
+      let turnoNumeroServicioNext: number | undefined
+      if (servicioIdNext && servicioIdNext !== turno.servicioId) {
+        const fechaISO = (turno.fecha as DateTime).toISODate()!
+        const rowSvc = await Database.from('turnos_rtms')
+          .where('sede_id', turno.sedeId)
+          .where('servicio_id', servicioIdNext)
+          .where('fecha', fechaISO)
+          .where('turno_numero_servicio', '>', 0)
+          .whereIn('estado', ['activo', 'finalizado'])
+          .whereNot('id', turno.id)
+          .max('turno_numero_servicio as max')
+          .first()
+
+        turnoNumeroServicioNext = Number(rowSvc?.max ?? 0) + 1
+        console.log(
+          `🔄 Cambiando servicio ${turno.servicioId} → ${servicioIdNext}, nuevo turno_numero_servicio: ${turnoNumeroServicioNext}`
+        )
+      }
+
       let canalAtribucionNext: (CanalAtrib | null) | undefined
       if (raw.canal !== undefined) {
         canalAtribucionNext = normalizeCanal(raw.canal)
@@ -997,7 +1106,6 @@ export default class TurnosRtmController {
       turno.merge({
         placa: raw.placa ? normalizePlaca(raw.placa)! : turno.placa,
         tipoVehiculo: tipoVehiculoNext ?? turno.tipoVehiculo,
-        funcionarioId: usuarioActualizador.id,
         observaciones: raw.observaciones ?? turno.observaciones ?? null,
         horaSalida: raw.horaSalida ?? turno.horaSalida ?? null,
         tiempoServicio: raw.tiempoServicio ?? turno.tiempoServicio ?? null,
@@ -1014,6 +1122,10 @@ export default class TurnosRtmController {
           ? { agenteCaptacionId: Number(raw.agenteCaptacionId) || null }
           : {}),
         ...(conductorIdNext !== undefined ? { conductorId: conductorIdNext } : {}),
+        // ✅ FIX: aplicar nuevo número de turno por servicio si cambió
+        ...(turnoNumeroServicioNext !== undefined
+          ? { turnoNumeroServicio: turnoNumeroServicioNext }
+          : {}),
       })
 
       await turno.save()
@@ -1032,6 +1144,7 @@ export default class TurnosRtmController {
       return response.internalServerError({ message: 'Error al actualizar el turno' })
     }
   }
+
   /** Activar turno */
   public async activar({ params, response, request }: HttpContext) {
     try {
@@ -1155,6 +1268,27 @@ export default class TurnosRtmController {
       turno.estado = 'finalizado'
       await turno.save()
 
+      // 🆕 Para servicios NO RTM (PREV, PERITAJE) → marcar dateo EXITOSO al finalizar turno
+      if ((turno as any).captacionDateoId) {
+        try {
+          const servicioTurno = await Servicio.find(turno.servicioId)
+          const codigoServicio = servicioTurno?.codigoServicio ?? ''
+          const esRTM = codigoServicio.toUpperCase().includes('RTM')
+          if (!esRTM) {
+            const dateo = await CaptacionDateo.find((turno as any).captacionDateoId)
+            if (dateo && dateo.resultado !== 'EXITOSO') {
+              dateo.resultado = 'EXITOSO'
+              await dateo.save()
+              console.log(
+                `✅ Dateo ${dateo.id} marcado EXITOSO (turno ${codigoServicio} finalizado)`
+              )
+            }
+          }
+        } catch (e) {
+          console.error('❌ Error marcando EXITOSO en registrarSalida:', e)
+        }
+      }
+
       return response.ok({
         message: 'Hora de salida registrada',
         horaSalida: turno.horaSalida,
@@ -1207,7 +1341,9 @@ export default class TurnosRtmController {
         } else if (servicioCodigo) {
           const s = await Servicio.query().where('codigo_servicio', String(servicioCodigo)).first()
           if (!s)
-            return response.badRequest({ message: `Servicio código '${servicioCodigo}' no existe` })
+            return response.badRequest({
+              message: `Servicio código '${servicioCodigo}' no existe`,
+            })
           sid = s.id
         }
 

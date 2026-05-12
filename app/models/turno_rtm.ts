@@ -193,6 +193,9 @@ export default class TurnoRtm extends BaseModel {
   declare esAvance: boolean
   // ========== FIN AVANCE ==========
 
+  @column({ columnName: 'rep_general_verificado' })
+  declare repGeneralVerificado: boolean
+
   // ── Timestamps
   @column.dateTime({ autoCreate: true, columnName: 'created_at' })
   declare createdAt: DateTime

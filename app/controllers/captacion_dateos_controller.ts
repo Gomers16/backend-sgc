@@ -11,6 +11,7 @@ import TurnoRtm from '#models/turno_rtm'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import Prospecto from '#models/prospecto'
 import Descuento from '#models/descuento' // 🆕
+import Servicio from '#models/servicio' // 🆕 servicio del dateo
 
 /* ======================= Constantes / Tipos ======================= */
 const CANALES_DB = ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'] as const
@@ -35,7 +36,9 @@ function ttlSinConsumir() {
 function ttlPostConsumo() {
   return Number(process.env.TTL_POST_CONSUMO_DIAS ?? 365)
 }
-
+function diasVentanaPreRtm() {
+  return Number(process.env.DIAS_VENTANA_PRE_RTM ?? 10)
+}
 /** Reserva/ventana de exclusividad */
 function buildReserva(d: CaptacionDateo) {
   const now = DateTime.now()
@@ -414,6 +417,17 @@ export default class CaptacionDateosController {
       descuentoId = descuentoIdRaw
     }
 
+    // 🆕 Servicio para el que se datéa (opcional, default = RTM)
+    const servicioDateoId = readOptionalNumber(
+      (request.input('servicio_id') ?? request.input('servicioId')) as unknown
+    )
+    let servicioDateo: Servicio | null = null
+    if (servicioDateoId !== null) {
+      servicioDateo = await Servicio.find(servicioDateoId)
+      if (!servicioDateo) {
+        return response.badRequest({ message: 'servicio_id no existe' })
+      }
+    }
     // ========== 🆕 AVANCE ==========
     /**
      * es_avance:
@@ -557,54 +571,72 @@ export default class CaptacionDateosController {
     // 🚫 VALIDACIONES DE TURNO
     // ========================================
 
+    // Código del servicio del dateo — se necesita en ambas validaciones
+    const codigoServicioDateo = (servicioDateo?.codigoServicio ?? 'RTM').toUpperCase()
+    const esDateoParaRtm = codigoServicioDateo === 'RTM'
+
     // VALIDACIÓN 1: Bloquear si hay turno ACTIVO hoy (el vehículo ya está en la sede)
     const hoyISO = DateTime.local().setZone('America/Bogota').toISODate()!
 
     const turnoActivoHoy = await TurnoRtm.query()
       .where('placa', placa!)
       .where('fecha', hoyISO)
-      .where('estado', 'activo')
+      .whereIn('estado', ['activo', 'finalizado'])
       .preload('servicio')
+      .orderBy('id', 'desc')
       .first()
 
-    if (turnoActivoHoy) {
-      const servicioNombre = turnoActivoHoy.servicio?.codigoServicio || 'servicio'
-      return response.conflict({
-        code: 'TURNO_ACTIVO',
-        message: `Esta placa ya tiene un turno activo de ${servicioNombre} hoy. El vehículo ya está en la sede, no se puede datear.`,
-        turnoId: turnoActivoHoy.id,
-        turnoNumero: turnoActivoHoy.turnoNumero,
-        servicio: servicioNombre,
-        estado: 'activo',
-      })
-    }
+    // Verificar si el usuario tiene rol privilegiado
+    await auth.user!.load('rol')
+    const rolNombre = auth.user!.rol?.nombre ?? ''
+    const esPrivilegiado = ['SUPER_ADMIN', 'GERENCIA'].includes(rolNombre)
 
-    // VALIDACIÓN 2: Bloquear si tiene RTM finalizado vigente (< 12 meses)
-    const lastRtmFinalizado = await TurnoRtm.query()
-      .where('placa', placa!)
-      .andWhere('estado', 'finalizado')
-      .whereHas('servicio', (q) => {
-        q.where('codigo_servicio', 'RTM')
-      })
-      .preload('servicio')
-      .orderBy('fecha', 'desc')
-      .first()
-
-    if (lastRtmFinalizado) {
-      const fechaUltimoRtm = lastRtmFinalizado.fecha as DateTime
-      const caducaEl = fechaUltimoRtm.plus({ months: 12 }).startOf('day')
-      const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
-
-      if (hoy < caducaEl) {
+    if (turnoActivoHoy && !esPrivilegiado) {
+      const codigoTurnoActivo = (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase()
+      // Solo bloquear si el turno activo de hoy es del MISMO servicio que se quiere datear.
+      // Caso de uso: cliente llega hoy por SOAT y el comercial lo datéa para RTM futuro → permitido.
+      if (codigoTurnoActivo === codigoServicioDateo) {
         return response.conflict({
-          code: 'RTM_VIGENTE',
-          message: `Esta placa ya tiene RTM vigente hasta ${caducaEl.toFormat('dd/LL/yyyy')}. No se puede datear.`,
-          turnoId: lastRtmFinalizado.id,
-          turnoNumero: lastRtmFinalizado.turnoNumero,
-          fechaRtm: fechaUltimoRtm.toISODate(),
-          validoHasta: caducaEl.toISODate(),
-          diasRestantes: Math.ceil(caducaEl.diff(hoy, 'days').days),
+          code: 'TURNO_ACTIVO',
+          message: `Esta placa ya tiene un turno activo de ${codigoTurnoActivo} hoy. El vehículo ya está en la sede, no se puede datear para el mismo servicio.`,
+          turnoId: turnoActivoHoy.id,
+          turnoNumero: turnoActivoHoy.turnoNumero,
+          servicio: codigoTurnoActivo,
+          estado: turnoActivoHoy.estado,
         })
+      }
+    }
+    // VALIDACIÓN 2: Bloquear si tiene RTM vigente — solo aplica si el dateo es para RTM
+
+    if (esDateoParaRtm) {
+      const lastRtmFinalizado = await TurnoRtm.query()
+        .where('placa', placa!)
+        .andWhere('estado', 'finalizado')
+        .whereHas('servicio', (q) => {
+          q.where('codigo_servicio', 'RTM')
+        })
+        .preload('servicio')
+        .orderBy('fecha', 'desc')
+        .first()
+
+      if (lastRtmFinalizado) {
+        const fechaUltimoRtm = lastRtmFinalizado.fecha as DateTime
+        const caducaEl = fechaUltimoRtm.plus({ months: 12 }).startOf('day')
+        const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
+        const ventanaPrevia = caducaEl.minus({ days: diasVentanaPreRtm() })
+
+        if (hoy < ventanaPrevia) {
+          return response.conflict({
+            code: 'RTM_VIGENTE',
+            message: `Esta placa tiene RTM vigente hasta ${caducaEl.toFormat('dd/LL/yyyy')}. Podrá datear a partir del ${ventanaPrevia.toFormat('dd/LL/yyyy')}.`,
+            turnoId: lastRtmFinalizado.id,
+            turnoNumero: lastRtmFinalizado.turnoNumero,
+            fechaRtm: fechaUltimoRtm.toISODate(),
+            validoHasta: caducaEl.toISODate(),
+            diasRestantes: Math.ceil(caducaEl.diff(hoy, 'days').days),
+            puedeDataearDesde: ventanaPrevia.toISODate(),
+          })
+        }
       }
     }
 
@@ -628,13 +660,26 @@ export default class CaptacionDateosController {
       imagenHash,
       imagenOrigenId: imagenOrigenId === null ? null : String(imagenOrigenId),
       imagenSubidaPor,
-      descuentoId, // 🆕
-      // ========== 🆕 AVANCE ==========
+      descuentoId,
+      servicioId: servicioDateoId,
       esAvance,
       comprobanteAvanceUrl: esAvance ? comprobanteAvanceUrl : null,
-      // ================================
+      // Si hay turno activo/finalizado hoy y el usuario es privilegiado → vincular directo
+      // Si hay turno activo/finalizado hoy, el usuario es privilegiado
+      // Y el turno es del mismo servicio que el dateo → vincular directo
+      consumidoTurnoId:
+        esPrivilegiado &&
+        turnoActivoHoy &&
+        (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase() === codigoServicioDateo
+          ? turnoActivoHoy.id
+          : undefined,
+      consumidoAt:
+        esPrivilegiado &&
+        turnoActivoHoy &&
+        (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase() === codigoServicioDateo
+          ? DateTime.now()
+          : undefined,
     })
-
     if (placa) {
       try {
         const prospectoEncontrado = await Prospecto.query()
@@ -976,4 +1021,36 @@ export default class CaptacionDateosController {
   }
 
   // ========== FIN AVANCE ==========
+
+  /** GET /captacion-dateos/verificar-placa */
+  public async verificarPlaca({ request, response }: HttpContext) {
+    const placa = normalizePlaca(request.input('placa') as string | undefined)
+    if (!placa) return response.badRequest({ message: 'placa requerida' })
+
+    const lastRtm = await TurnoRtm.query()
+      .where('placa', placa)
+      .andWhere('estado', 'finalizado')
+      .whereHas('servicio', (q) => q.where('codigo_servicio', 'RTM'))
+      .orderBy('fecha', 'desc')
+      .first()
+
+    if (!lastRtm) return response.ok({ rtm_vigente: false })
+
+    const fechaUltimoRtm = lastRtm.fecha as DateTime
+    const caducaEl = fechaUltimoRtm.plus({ months: 12 }).startOf('day')
+    const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
+    const ventanaPrevia = caducaEl.minus({ days: diasVentanaPreRtm() })
+
+    const rtmVigente = hoy < caducaEl
+    const dentroDeVentana = rtmVigente && hoy >= ventanaPrevia
+
+    return response.ok({
+      rtm_vigente: rtmVigente,
+      valido_hasta: caducaEl.toISODate(),
+      puede_datear_desde: ventanaPrevia.toISODate(),
+      dentro_de_ventana: dentroDeVentana,
+      dias_restantes: rtmVigente ? Math.ceil(caducaEl.diff(hoy, 'days').days) : 0,
+      fecha_rtm: fechaUltimoRtm.toISODate(),
+    })
+  }
 }

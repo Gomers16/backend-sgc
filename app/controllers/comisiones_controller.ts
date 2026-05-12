@@ -120,7 +120,11 @@ function mapComisionToDto(c: Comision) {
   const descuentoMontoAplicadoComision =
     c.descuentoMontoAplicado !== null ? Number(c.descuentoMontoAplicado) : null
   const descuentoMontoAplicadoTicket =
-    ticket?.descuentoMontoAplicado !== null ? Number(ticket.descuentoMontoAplicado) : null
+    ticket !== null &&
+    ticket.descuentoMontoAplicado !== null &&
+    ticket.descuentoMontoAplicado !== undefined
+      ? Number(ticket.descuentoMontoAplicado)
+      : null
   const descuentoMontoAplicado = descuentoMontoAplicadoComision ?? descuentoMontoAplicadoTicket
 
   // base = incentivo original antes del avance (guardado por el hook como valorIncentivoPorTipo).
@@ -213,6 +217,9 @@ function mapComisionToDto(c: Comision) {
             null,
           ultimo_turno_id: (turno as any).ultimoTurnoId ?? (turno as any).ultimo_turno_id ?? null,
           fecha_ultima_visita: fechaUltimaVisitaISO,
+          rep_general_verificado: Boolean(
+            (turno as any).repGeneralVerificado ?? (turno as any).rep_general_verificado ?? false
+          ),
           ultima_visita: null as {
             placa: string | null
             conductor_nombre: string | null
@@ -230,6 +237,7 @@ function mapComisionToDto(c: Comision) {
     descuento_autorizado_por: descuentoAutorizadoPor,
     // monto del avance/descuento aplicado en caja
     descuento_monto_aplicado: descuentoMontoAplicado,
+    dateo_observacion: dateo?.observacion ?? null,
   }
 }
 
@@ -278,7 +286,8 @@ export default class ComisionesController {
     const asesorId = request.input('asesorId') as number | undefined
     const convenioId = request.input('convenioId') as number | undefined
     const estado = request.input('estado') as string | undefined
-    const tipoVehiculo = request.input('tipoVehiculo') as string | undefined // 🆕
+    const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
+    const placa = request.input('placa') as string | undefined // 🆕
     const sortBy = (request.input('sortBy') || 'id') as string
     const order = (request.input('order') || 'desc') as 'asc' | 'desc'
 
@@ -311,6 +320,16 @@ export default class ComisionesController {
     // 🆕 Filtro por tipo de vehículo (MOTO | VEHICULO)
     if (tipoVehiculo && ['MOTO', 'VEHICULO'].includes(tipoVehiculo.toUpperCase()))
       query.where('tipo_vehiculo', tipoVehiculo.toUpperCase())
+
+    // 🆕 Filtro por placa (busca en el turno vinculado al dateo)
+    if (placa) {
+      const placaNorm = placa.replace(/[\s-]/g, '').toUpperCase()
+      query.whereHas('dateo', (dq) => {
+        dq.whereHas('turno', (tq) => {
+          tq.whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNorm])
+        })
+      })
+    }
 
     const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
     let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
@@ -516,6 +535,78 @@ export default class ComisionesController {
   /**
    * PATCH /api/comisiones/:id/valores
    */
+
+  public async editar({ params, request, response }: HttpContext) {
+    const comision = await Comision.find(params.id)
+    if (!comision || comision.esConfig)
+      return response.notFound({ message: 'Comisión no encontrada' })
+    if (comision.estado !== 'PENDIENTE')
+      return response.badRequest({ message: 'Solo se pueden editar comisiones PENDIENTES' })
+
+    const payload = request.only([
+      'asesor_id',
+      'convenio_id',
+      'monto_asesor',
+      'monto_convenio',
+      'tipo_cliente',
+      'descuento_id',
+      'dateo_observacion',
+    ])
+
+    if ('asesor_id' in payload)
+      comision.asesorId = payload.asesor_id ? Number(payload.asesor_id) : null
+
+    if ('convenio_id' in payload)
+      comision.convenioId = payload.convenio_id ? Number(payload.convenio_id) : null
+
+    if (payload.monto_asesor !== undefined) {
+      const v = Math.max(0, toNumber(payload.monto_asesor))
+      comision.montoAsesor = String(v)
+      comision.monto = String(v)
+    }
+
+    if (payload.monto_convenio !== undefined) {
+      const v = Math.max(0, toNumber(payload.monto_convenio))
+      comision.montoConvenio = String(v)
+      comision.base = String(v)
+    }
+
+    if ('descuento_id' in payload) {
+      if (!payload.descuento_id) {
+        ;(comision as any).descuentoId = null
+      } else {
+        const descId = Number(payload.descuento_id)
+        const { default: Descuento } = await import('#models/descuento')
+        const desc = await Descuento.query().where('id', descId).where('activo', true).first()
+        if (!desc) return response.badRequest({ message: 'Descuento no existe o está inactivo' })
+        ;(comision as any).descuentoId = descId
+      }
+    }
+
+    if (payload.tipo_cliente) {
+      await comision.load('dateo', (q) => q.preload('turno'))
+      const turno = (comision as any).$preloaded?.dateo?.$preloaded?.turno
+      if (turno) {
+        turno.esRecurrente = payload.tipo_cliente === 'RECURRENTE'
+        turno.esRecuperacion = payload.tipo_cliente === 'RECUPERACION'
+        await turno.save()
+      }
+    }
+
+    if ('dateo_observacion' in payload) {
+      if (!(comision as any).$preloaded?.dateo) await comision.load('dateo')
+      const dateo = (comision as any).$preloaded?.dateo
+      if (dateo) {
+        dateo.observacion = payload.dateo_observacion
+          ? String(payload.dateo_observacion).trim()
+          : null
+        await dateo.save()
+      }
+    }
+
+    await comision.save()
+    return this.show({ params, response } as any)
+  }
   public async actualizarValores({ params, request, response }: HttpContext) {
     const comision = await Comision.find(params.id)
 
@@ -581,7 +672,116 @@ export default class ComisionesController {
     await comision.save()
     return this.show({ params, response } as any)
   }
+  /**
+   * POST /api/comisiones
+   */
+  public async store({ request, response }: HttpContext) {
+    const payload = request.only([
+      'turno_id',
+      'asesor_id',
+      'convenio_id',
+      'monto_asesor',
+      'monto_convenio',
+      'tipo_cliente',
+      'descuento_id',
+      'dateo_observacion',
+      'es_avance',
+    ])
 
+    const turnoId = Number(payload.turno_id)
+    if (!turnoId) return response.badRequest({ message: 'turno_id es requerido' })
+
+    const turno = await TurnoRtm.query().where('id', turnoId).preload('servicio').first()
+
+    if (!turno) return response.notFound({ message: 'Turno no encontrado' })
+
+    const { default: CaptacionDateo } = await import('#models/captacion_dateo')
+
+    let captacionDateoId: number | null = (turno as any).captacionDateoId ?? null
+
+    if (!captacionDateoId) {
+      // Detectar canal según tipo de asesor
+      let canalNuevo: string = 'ASESOR_COMERCIAL'
+      if (payload.asesor_id) {
+        const asesorNuevo = await AgenteCaptacion.find(Number(payload.asesor_id))
+        const tipoNuevo = String(asesorNuevo?.tipo ?? '').toUpperCase()
+        if (tipoNuevo.includes('CONVENIO')) canalNuevo = 'ASESOR_CONVENIO'
+      }
+
+      const nuevaDateo = await CaptacionDateo.create({
+        canal: canalNuevo as any,
+        agenteId: payload.asesor_id ? Number(payload.asesor_id) : null,
+        convenioId: payload.convenio_id ? Number(payload.convenio_id) : null,
+        placa: turno.placa,
+        origen: 'UI',
+        resultado: 'EN_PROCESO',
+        consumidoTurnoId: turno.id,
+        consumidoAt: DateTime.now(),
+        observacion: payload.dateo_observacion || null,
+        esAvance: Boolean(payload.es_avance),
+      } as any)
+      captacionDateoId = nuevaDateo.id
+      ;(turno as any).captacionDateoId = captacionDateoId
+      await turno.save()
+    } else {
+      // Corregir el canal si quedó mal (FACHADA) por creaciones anteriores
+      let canalCorrecto: string = 'ASESOR_COMERCIAL'
+      if (payload.asesor_id) {
+        const asesorExistente = await AgenteCaptacion.find(Number(payload.asesor_id))
+        const tipoAsesor = String(asesorExistente?.tipo ?? '').toUpperCase()
+        if (tipoAsesor.includes('CONVENIO')) canalCorrecto = 'ASESOR_CONVENIO'
+      }
+
+      const updateData: Record<string, unknown> = { canal: canalCorrecto }
+      if (payload.dateo_observacion !== undefined) {
+        updateData.observacion = payload.dateo_observacion || null
+      }
+
+      await CaptacionDateo.query()
+        .where('id', captacionDateoId)
+        .update(updateData as any)
+    }
+
+    if (payload.tipo_cliente) {
+      ;(turno as any).esRecurrente = payload.tipo_cliente === 'RECURRENTE'
+      ;(turno as any).esRecuperacion = payload.tipo_cliente === 'RECUPERACION'
+      await turno.save()
+    }
+
+    const tipoVehiculo = turno.tipoVehiculo?.includes('Motocicleta') ? 'MOTO' : 'VEHICULO'
+    const tipoServicio = ((turno as any).servicio?.codigoServicio ?? 'RTM').toUpperCase()
+    const montoAsesor = Math.max(0, toNumber(payload.monto_asesor ?? 0))
+    const montoConvenio = Math.max(0, toNumber(payload.monto_convenio ?? 0))
+
+    const comision = new Comision()
+    comision.esConfig = false
+    comision.captacionDateoId = captacionDateoId
+    comision.asesorId = payload.asesor_id ? Number(payload.asesor_id) : null
+    comision.convenioId = payload.convenio_id ? Number(payload.convenio_id) : null
+    comision.montoAsesor = String(montoAsesor)
+    comision.montoConvenio = String(montoConvenio)
+    comision.monto = String(montoAsesor)
+    comision.base = String(montoConvenio)
+    comision.porcentaje = '0'
+    comision.tipoServicio = tipoServicio as any
+    ;(comision as any).tipoVehiculo = tipoVehiculo
+    comision.estado = 'PENDIENTE'
+    comision.fechaCalculo = DateTime.now()
+    ;(comision as any).esAvance = Boolean(payload.es_avance)
+
+    if (payload.descuento_id) {
+      const { default: Descuento } = await import('#models/descuento')
+      const desc = await Descuento.query()
+        .where('id', Number(payload.descuento_id))
+        .where('activo', true)
+        .first()
+      if (!desc) return response.badRequest({ message: 'Descuento no válido o inactivo' })
+      ;(comision as any).descuentoId = Number(payload.descuento_id)
+    }
+
+    await comision.save()
+    return this.show({ params: { id: comision.id }, response } as any)
+  }
   /* ============================================================
    *          CONFIGURACIONES DE COMISIONES (es_config = true)
    * ============================================================*/
@@ -734,7 +934,13 @@ export default class ComisionesController {
     const asesorId = request.input('asesorId') as number | undefined
     const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
 
-    const q = Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
+    const q = Comision.query()
+      .where('es_config', true)
+      .where((wb) => {
+        wb.where('meta_rtm', '>', 0)
+          .orWhere('valor_rtm_moto', '>', 0)
+          .orWhere('valor_rtm_vehiculo', '>', 0)
+      })
     if (asesorId) q.where('asesor_id', asesorId)
     if (tipoVehiculo) q.where('tipo_vehiculo', tipoVehiculo)
     q.orderBy('asesor_id', 'asc').orderBy('tipo_vehiculo', 'asc')

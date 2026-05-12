@@ -11,6 +11,7 @@ import Cliente from '#models/cliente'
 import Usuario from '#models/usuario'
 import TurnoRtm from '#models/turno_rtm'
 import Descuento from '#models/descuento'
+import Servicio from '#models/servicio'
 
 export type Canal = 'FACHADA' | 'ASESOR_COMERCIAL' | 'ASESOR_CONVENIO' | 'TELE' | 'REDES'
 export type Origen = 'UI' | 'WHATSAPP' | 'IMPORT'
@@ -189,6 +190,13 @@ export default class CaptacionDateo extends BaseModel {
   // 🆕
   @belongsTo(() => Descuento, { foreignKey: 'descuentoId' })
   declare descuento: BelongsTo<typeof Descuento>
+
+  // 🆕 Servicio para el que se datéa
+  @column({ columnName: 'servicio_id' })
+  declare servicioId: number | null
+
+  @belongsTo(() => Servicio, { foreignKey: 'servicioId' })
+  declare servicio: BelongsTo<typeof Servicio>
 
   // ===== Normalización =====
   @beforeSave()
