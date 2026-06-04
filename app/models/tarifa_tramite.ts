@@ -1,0 +1,30 @@
+import { DateTime } from 'luxon'
+import { BaseModel, column } from '@adonisjs/lucid/orm'
+
+export default class TarifaTramite extends BaseModel {
+  public static table = 'tarifas_tramites'
+
+  @column({ isPrimary: true })
+  declare id: number
+
+  @column({ columnName: 'tipo_tramite' })
+  declare tipoTramite: string
+
+  @column({ columnName: 'clase_vehiculo' })
+  declare claseVehiculo: string | null
+
+  @column()
+  declare valor: number
+
+  @column.date({ columnName: 'vigencia_desde' })
+  declare vigenciaDesde: DateTime
+
+  @column()
+  declare descripcion: string | null
+
+  @column.dateTime({ autoCreate: true, columnName: 'created_at' })
+  declare createdAt: DateTime
+
+  @column.dateTime({ autoCreate: true, autoUpdate: true, columnName: 'updated_at' })
+  declare updatedAt: DateTime
+}

@@ -1,0 +1,419 @@
+import type { HttpContext } from '@adonisjs/core/http'
+import ExcelJS from 'exceljs'
+import app from '@adonisjs/core/services/app'
+
+import FormularioRunt from '#models/formulario_runt'
+import Tramite from '#models/tramite'
+
+const CAMPOS_FORMULARIO = [
+  // Vehículo
+  'placa',
+  'marca',
+  'linea',
+  'modelo',
+  'color',
+  'claseVehiculo',
+  'combustible',
+  'noMotor',
+  'noChasis',
+  'noSerie',
+  'noVin',
+  'tipoServicio',
+  'carroceriaCodigo',
+  'carroceriaTipo',
+  'capacidadKg',
+  'blindaje',
+  'potenciaHp',
+  'cilindrada',
+  // Propietario
+  'propPrimerApellido',
+  'propSegundoApellido',
+  'propNombres',
+  'propTipoDocumento',
+  'propNoDocumento',
+  'propDireccion',
+  'propCiudad',
+  'propTelefono',
+  // Comprador
+  'compPrimerApellido',
+  'compSegundoApellido',
+  'compNombres',
+  'compTipoDocumento',
+  'compNoDocumento',
+  'compDireccion',
+  'compCiudad',
+  'compTelefono',
+  // Importación
+  'importacionTipo',
+  'importacionNoDocumento',
+  'importacionFecha',
+  // Alertas
+  'alertaHurto',
+  'alertaLimPropiedad',
+  'alertaEmbargo',
+  'alertaOtro',
+  // Observaciones
+  'observaciones',
+] as const
+
+// Celdas del formulario RUNT oficial según tipo de trámite
+const TRAMITE_CELDAS: Record<string, string> = {
+  MATRICULA_REGISTRO:             'A8',
+  TRASPASO:                       'E8',
+  TRASLADO_MATRICULA_REGISTRO:    'I8',
+  RADICADO_MATRICULA_REGISTRO:    'N8',
+  CAMBIO_COLOR:                   'Q8',
+  CAMBIO_SERVICIO:                'T8',
+  REGRABAR_MOTOR:                 'A10',
+  REGRABAR_CHASIS:                'E10',
+  TRANSFORMACION:                 'I10',
+  DUPLICADO_LICENCIA_TRANSITO:    'N10',
+  INSCRIPCION_PRENDA:             'Q10',
+  LEVANTA_PRENDA:                 'T10',
+  CANCELACION_MATRICULA_REGISTRO: 'A13',
+  CAMBIO_PLACAS:                  'E13',
+  DUPLICADO_PLACAS:               'I13',
+  REMATRICULA:                    'N13',
+  CAMBIO_CARROCERIA:              'Q13',
+  OTROS:                          'T13',
+}
+
+const CLASE_VEHICULO_CELDAS: Record<string, string> = {
+  automovil:     'A17',
+  bus:           'D17',
+  buseta:        'H17',
+  camion:        'L17',
+  camioneta:     'O17',
+  campero:       'P17',
+  microbus:      'S17',
+  tractocamion:  'A19',
+  motocicleta:   'D19',
+  motocarro:     'H19',
+  mototriciciclo:'L19',
+  cuatrimoto:    'O19',
+  volqueta:      'P19',
+  otro:          'S19',
+}
+
+const COMBUSTIBLE_CELDAS: Record<string, string> = {
+  gasolina:  'AC8',
+  diesel:    'AE8',
+  gas:       'AF8',
+  electrico: 'AG8',
+  hibrido:   'AH8',
+  etanol:    'AJ8',
+  biodiesel: 'AK8',
+}
+
+const TIPO_SERVICIO_VEH_CELDAS: Record<string, string> = {
+  particular:  'AE29',
+  publico:     'AF29',
+  diplomatico: 'AG29',
+  oficial:     'AH29',
+  especial:    'AI29',
+  otros:       'AJ29',
+}
+
+const IMPORT_TIPO_CELDAS: Record<string, string> = {
+  manif_o_acta:    'W25',
+  dec_importacion: 'X25',
+  acta:            'Y25',
+  entidad:         'Z25',
+  lugar:           'AA25',
+  codigo:          'AB25',
+}
+
+const PROP_DOC_CELDAS: Record<string, string> = {
+  cc:            'A26',
+  nit:           'C26',
+  nn:            'D26',
+  pasaporte:     'G26',
+  c_extranjeria: 'J26',
+  t_identidad:   'L26',
+  nuip:          'O26',
+  c_diplomatico: 'P26',
+}
+
+const COMP_DOC_CELDAS: Record<string, string> = {
+  cc:            'A41',
+  nit:           'C41',
+  nn:            'D41',
+  pasaporte:     'G41',
+  c_extranjeria: 'J41',
+  t_identidad:   'L41',
+  nuip:          'O41',
+  c_diplomatico: 'P41',
+}
+
+export default class FormulariosRuntController {
+  /** GET /tramites/:tramiteId/formulario-runt */
+  public async show({ params, response }: HttpContext) {
+    try {
+      const formulario = await FormularioRunt.query()
+        .where('tramite_id', Number(params.tramiteId))
+        .first()
+
+      if (!formulario) return response.notFound({ message: 'Formulario RUNT no encontrado' })
+      return response.ok(formulario)
+    } catch (error) {
+      console.error('Error en show formulario RUNT:', error)
+      return response.internalServerError({ message: 'Error al obtener el formulario RUNT' })
+    }
+  }
+
+  /** PUT /tramites/:tramiteId/formulario-runt */
+  public async upsert({ params, request, response }: HttpContext) {
+    try {
+      const tramite = await Tramite.find(Number(params.tramiteId))
+      if (!tramite) return response.notFound({ message: 'Trámite no encontrado' })
+
+      const raw = request.only([...CAMPOS_FORMULARIO])
+
+      // Solo actualizar los campos que el cliente envió explícitamente
+      const updates = Object.fromEntries(
+        Object.entries(raw).filter(([, v]) => v !== undefined)
+      )
+
+      let formulario = await FormularioRunt.query()
+        .where('tramite_id', tramite.id)
+        .first()
+
+      if (!formulario) {
+        formulario = await FormularioRunt.create({ tramiteId: tramite.id, ...updates })
+      } else {
+        formulario.merge(updates)
+        await formulario.save()
+      }
+
+      return response.ok(formulario)
+    } catch (error) {
+      console.error('Error en upsert formulario RUNT:', error)
+      return response.internalServerError({ message: 'Error al guardar el formulario RUNT' })
+    }
+  }
+
+  /** GET /tramites/:tramiteId/formulario-runt/export-excel */
+  public async exportExcel({ params, response }: HttpContext) {
+    try {
+      const tramite = await Tramite.query()
+        .where('id', Number(params.tramiteId))
+        .preload('formularioRunt')
+        .preload('funcionario')
+        .first()
+
+      if (!tramite) return response.notFound({ message: 'Trámite no encontrado' })
+
+      const formulario = tramite.formularioRunt
+      if (!formulario) {
+        return response.unprocessableEntity({
+          message: 'Este trámite no tiene formulario RUNT guardado. Llénalo primero.',
+        })
+      }
+
+      // El archivo base debe estar en storage/runt/ como .xlsx
+      // (ftrunt_0.xls debe convertirse a .xlsx antes de copiarlo)
+      const workbook = new ExcelJS.Workbook()
+      await workbook.xlsx.readFile(app.makePath('storage/runt/formulario_runt_base.xlsx'))
+
+      const ws = workbook.getWorksheet(1)
+      if (!ws) {
+        return response.internalServerError({
+          message: 'Archivo base RUNT no encontrado o sin hojas válidas',
+        })
+      }
+
+      // Guardar anchos de columna del template antes de cualquier modificación.
+      // ExcelJS los pierde al escribir celdas; los restauramos antes de writeBuffer.
+      const colWidths: Record<number, number> = {}
+      ws.columns.forEach((col, i) => {
+        if (col.width) colWidths[i] = col.width
+      })
+
+      // Limpiar tachado heredado del template.
+      // includeEmpty: true alcanza celdas mergeadas (slaves) que eachRow omite por defecto.
+      // Se preserva row.height para que los rangos mergeados no colapsen.
+      ws.eachRow({ includeEmpty: true }, (row) => {
+        const h = row.height
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          if (cell.font?.strike) cell.font = { ...cell.font, strike: false }
+        })
+        if (h !== undefined) row.height = h
+      })
+      // Segundo pase: iterar explícitamente las celdas master de cada rango mergeado.
+      // eachRow puede omitir masters de merges grandes que empiezan en filas sin datos
+      // propios (ej. sección importación filas 23-28 columnas W-AB).
+      if (ws.model?.merges) {
+        for (const range of ws.model.merges) {
+          const masterAddr = range.split(':')[0]
+          const masterCell = ws.getCell(masterAddr)
+          if (masterCell.font?.strike) masterCell.font = { ...masterCell.font, strike: false }
+        }
+      }
+      // Tercer pase: limpieza de strike en zona de importación (filas 22-28, cols W-AB).
+      // Debug confirmó strike=false en toda la zona — el italic del template es intencional.
+      // El bucle se mantiene como salvaguarda por si el template cambia.
+      for (let r = 22; r <= 28; r++) {
+        for (let c = 23; c <= 28; c++) {
+          const cell = ws.getRow(r).getCell(c)
+          if (cell.font?.strike) cell.font = { ...cell.font, strike: false }
+        }
+      }
+
+      // setCell: resuelve la master cell del merge antes de escribir.
+      const setCell = (address: string, value: ExcelJS.CellValue) => {
+        const cell = ws.getCell(address)
+        const target = cell.isMerged ? cell.master : cell
+        target.value = value
+      }
+      // setCellNoWrap: escribe en la dirección exacta (sin resolver master) y
+      // desactiva wrapText. Usar en celdas de datos que comparten fila con headers
+      // mergeados (ej. fila 24 de propietario) para no sobreescribir etiquetas.
+      const setCellNoWrap = (address: string, value: ExcelJS.CellValue) => {
+        const cell = ws.getCell(address)
+        cell.alignment = { ...cell.alignment, wrapText: false }
+        cell.value = value
+      }
+      const mark = (address: string, condition: boolean | null | undefined) => {
+        if (condition) setCell(address, 'X')
+      }
+
+      // ── SECCIÓN 2: PLACA ──────────────────────────────────────────────
+      if (formulario.placa) {
+        const placa = formulario.placa.toUpperCase().trim()
+        const esCarro = /^[A-Z]{3}[0-9]{3}$/.test(placa)
+        if (esCarro) {
+          setCell('AJ4', placa.substring(0, 3))
+          setCell('AK4', placa.substring(3, 6))
+        } else {
+          setCell('AJ4', placa)
+          setCell('AK4', '')
+        }
+      }
+
+      // ── SECCIÓN 3: TRÁMITE SOLICITADO ─────────────────────────────────
+      if (tramite.tipoTramite && TRAMITE_CELDAS[tramite.tipoTramite]) {
+        setCell(TRAMITE_CELDAS[tramite.tipoTramite], 'X')
+      }
+
+      // ── SECCIÓN 4: CLASE DE VEHÍCULO ──────────────────────────────────
+      if (formulario.claseVehiculo && CLASE_VEHICULO_CELDAS[formulario.claseVehiculo]) {
+        setCell(CLASE_VEHICULO_CELDAS[formulario.claseVehiculo], 'X')
+      }
+
+      // ── SECCIÓN 5: DATOS DEL VEHÍCULO ─────────────────────────────────
+      setCell('W7',  formulario.marca            ?? null)
+      setCell('Z7',  formulario.linea            ?? null)
+      setCell('W10', formulario.color            ?? null)
+      setCell('AG10', formulario.modelo          ?? null)
+      setCell('AI10', formulario.cilindrada      ?? null)
+      setCell('W13', formulario.capacidadKg      ?? null)
+      setCell('AI13', formulario.potenciaHp      ?? null)
+      setCell('W17', formulario.carroceriaCodigo ?? null)
+      setCell('W19', formulario.carroceriaTipo   ?? null)
+
+      // ── SECCIÓN 6: COMBUSTIBLE ────────────────────────────────────────
+      if (formulario.combustible && COMBUSTIBLE_CELDAS[formulario.combustible]) {
+        setCell(COMBUSTIBLE_CELDAS[formulario.combustible], 'X')
+      }
+
+      // ── SECCIÓN 8: IDENTIFICACIÓN INTERNA ────────────────────────────
+      setCell('AE17', formulario.noMotor  ?? null)
+      setCell('AE19', formulario.noChasis ?? null)
+      setCell('AE22', formulario.noSerie  ?? null)
+      setCell('AE24', formulario.noVin    ?? null)
+
+      // ── SECCIÓN 9: TIPO DE SERVICIO ───────────────────────────────────
+      if (formulario.tipoServicio && TIPO_SERVICIO_VEH_CELDAS[formulario.tipoServicio]) {
+        setCell(TIPO_SERVICIO_VEH_CELDAS[formulario.tipoServicio], 'X')
+      }
+
+      // ── SECCIÓN 10: IMPORTACIÓN O REMATE ─────────────────────────────
+      if (formulario.importacionTipo && IMPORT_TIPO_CELDAS[formulario.importacionTipo]) {
+        setCell(IMPORT_TIPO_CELDAS[formulario.importacionTipo], 'X')
+      }
+      setCell('W27', formulario.importacionNoDocumento ?? null)
+      if (formulario.importacionFecha) {
+        setCell('Z28',  formulario.importacionFecha.day)
+        setCell('AA28', formulario.importacionFecha.month)
+        setCell('AB28', formulario.importacionFecha.year)
+      }
+
+      // ── SECCIÓN 11: DATOS DEL PROPIETARIO ────────────────────────────
+      // Fila 23 = headers (PRIMER APELLIDO, etc.) — NO tocar.
+      // Fila 24 = datos: se escribe directo con setCellNoWrap para desactivar wrapText.
+      setCellNoWrap('A24', formulario.propPrimerApellido  ?? null)
+      setCellNoWrap('I24', formulario.propSegundoApellido ?? null)
+      setCellNoWrap('P24', formulario.propNombres         ?? null)
+      setCell('S27', formulario.propNoDocumento     ?? null)
+      setCell('A29', formulario.propDireccion       ?? null)
+      setCell('M29', formulario.propCiudad          ?? null)
+      setCell('S29', formulario.propTelefono        ?? null)
+
+      if (formulario.propTipoDocumento && PROP_DOC_CELDAS[formulario.propTipoDocumento]) {
+        setCell(PROP_DOC_CELDAS[formulario.propTipoDocumento], 'X')
+      }
+
+      // ── SECCIÓN 12: DATOS DEL COMPRADOR (solo TRASPASO) ───────────────
+      if (tramite.tipoTramite === 'TRASPASO') {
+        setCell('A37', formulario.compPrimerApellido  ?? null)
+        setCell('I37', formulario.compSegundoApellido ?? null)
+        setCell('P37', formulario.compNombres         ?? null)
+        setCell('S41', formulario.compNoDocumento     ?? null)
+        setCell('A44', formulario.compDireccion       ?? null)
+        setCell('M44', formulario.compCiudad          ?? null)
+        setCell('S44', formulario.compTelefono        ?? null)
+
+        if (formulario.compTipoDocumento && COMP_DOC_CELDAS[formulario.compTipoDocumento]) {
+          setCell(COMP_DOC_CELDAS[formulario.compTipoDocumento], 'X')
+        }
+      }
+
+      // ── SECCIÓN 13: ALERTAS ───────────────────────────────────────────
+      mark('W33', formulario.alertaHurto)
+      mark('X33', formulario.alertaLimPropiedad)
+      mark('Z33', formulario.alertaEmbargo)
+      if (formulario.alertaOtro) setCell('AB33', formulario.alertaOtro)
+
+      // ── SECCIÓN 14: OBSERVACIONES ────────────────────────────────────
+      setCell('W39', formulario.observaciones ?? null)
+
+      // ── SERIALIZAR Y ENVIAR ───────────────────────────────────────────
+      // Restaurar anchos del template y aplicar mínimos en columnas de texto libre.
+      const colLetter = (n: number): string => {
+        let s = ''
+        while (n > 0) { s = String.fromCharCode(65 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26) }
+        return s
+      }
+      const minWidths: Record<string, number> = { A: 15, I: 12, M: 10, P: 15, S: 10, W: 20, AJ: 12, AK: 8, AL: 8 }
+      ws.columns.forEach((col, i) => {
+        const letter   = colLetter(i + 1)
+        const restored = colWidths[i] ?? 0
+        col.width = Math.max(restored, minWidths[letter] ?? 0)
+      })
+      const minHeights: Record<number, number> = {
+        10: 25,
+        24: 25,
+        29: 25,
+        37: 25,
+        44: 25,
+      }
+      ws.eachRow({ includeEmpty: true }, (row) => {
+        const min = minHeights[row.number]
+        if (min && (!row.height || row.height < min)) row.height = min
+      })
+      const buffer = await workbook.xlsx.writeBuffer()
+      const placa = formulario.placa ?? 'SIN-PLACA'
+      const fileName = `RUNT-${placa}-${tramite.turnoNumero}.xlsx`
+
+      response.header(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      )
+      response.header('Content-Disposition', `attachment; filename="${fileName}"`)
+      return response.send(buffer)
+    } catch (error) {
+      console.error('Error en exportExcel formulario RUNT:', error)
+      return response.internalServerError({ message: 'Error al generar el Excel RUNT' })
+    }
+  }
+}

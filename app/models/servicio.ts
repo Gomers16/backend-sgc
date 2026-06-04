@@ -9,7 +9,7 @@ export default class Servicio extends BaseModel {
   declare id: number
 
   @column({ columnName: 'codigo_servicio' })
-  declare codigoServicio: string // 'RTM' | 'PREV' | 'PERI'
+  declare codigoServicio: string // 'RTM' | 'PREV' | 'PERI' | 'SOAT' | 'TRAMITES'
 
   @column({ columnName: 'nombre_servicio' })
   declare nombreServicio: string // texto visible en UI
