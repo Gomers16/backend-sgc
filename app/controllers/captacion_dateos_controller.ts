@@ -12,6 +12,7 @@ import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import Prospecto from '#models/prospecto'
 import Descuento from '#models/descuento' // 🆕
 import Servicio from '#models/servicio' // 🆕 servicio del dateo
+import Comision from '#models/comision'
 
 /* ======================= Constantes / Tipos ======================= */
 const CANALES_DB = ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'] as const
@@ -790,6 +791,21 @@ export default class CaptacionDateosController {
 
     if (placa !== undefined) {
       item.placa = normalizePlaca(placa)
+
+      const hace7Dias = DateTime.now().setZone('America/Bogota').minus({ days: 7 }).toISODate()!
+      const turnoVinculado = await TurnoRtm.query()
+        .where('placa', item.placa!)
+        .where('fecha', '>=', hace7Dias)
+        .orderBy('fecha', 'desc')
+        .first()
+
+      if (turnoVinculado) {
+        item.consumidoTurnoId = turnoVinculado.id
+        item.consumidoAt = DateTime.now()
+        if (turnoVinculado.estado === 'finalizado') {
+          item.resultado = 'EXITOSO'
+        }
+      }
     }
 
     if (telefono !== undefined) {
@@ -842,6 +858,178 @@ export default class CaptacionDateosController {
     }
 
     await item.save()
+
+    // Generar comisión PENDIENTE si el dateo quedó EXITOSO y no existe ya una
+    if (item.resultado === 'EXITOSO' && item.consumidoTurnoId !== null) {
+      const yaExisteComision = await Comision.query()
+        .where('captacion_dateo_id', item.id)
+        .where('es_config', false)
+        .first()
+
+      if (!yaExisteComision) {
+        const turnoParaComision = await TurnoRtm.query()
+          .where('id', item.consumidoTurnoId)
+          .preload('servicio')
+          .first()
+
+        if (turnoParaComision) {
+          const tipoServicio = (
+            (turnoParaComision as any).servicio?.codigoServicio ?? 'RTM'
+          ).toUpperCase()
+          const tipoVehiculo: 'MOTO' | 'VEHICULO' = (turnoParaComision as any).tipoVehiculo?.includes(
+            'Motocicleta'
+          )
+            ? 'MOTO'
+            : 'VEHICULO'
+
+          // ── Leer configuración de comisión ──────────────────────────
+          const toNum = (v: any) => {
+            const n = Number(String(v ?? '').replace(/[^\d.-]/g, ''))
+            return Number.isFinite(n) ? n : 0
+          }
+          const tryFindCfg = (aId: number | null, tv: string | null) => {
+            const q = Comision.query().where('es_config', true)
+            if (aId === null) q.whereNull('asesor_id')
+            else q.where('asesor_id', aId)
+            if (tv === null) q.whereNull('tipo_vehiculo')
+            else q.where('tipo_vehiculo', tv)
+            return q.first()
+          }
+
+          const asesorId = item.agenteId
+          const asesorConvenioId = item.asesorConvenioId
+
+          let rowComercial: Comision | null = null
+          if (asesorId && tipoVehiculo) rowComercial = await tryFindCfg(asesorId, tipoVehiculo)
+          if (!rowComercial && asesorId) rowComercial = await tryFindCfg(asesorId, null)
+          if (!rowComercial) rowComercial = await tryFindCfg(null, tipoVehiculo)
+          if (!rowComercial) rowComercial = await tryFindCfg(null, null)
+
+          let rowIncentivo: Comision | null = null
+          if (asesorConvenioId) rowIncentivo = await tryFindCfg(asesorConvenioId, tipoVehiculo)
+          if (!rowIncentivo && asesorConvenioId) {
+            const m = await tryFindCfg(asesorConvenioId, 'MOTO')
+            const v = await tryFindCfg(asesorConvenioId, 'VEHICULO')
+            rowIncentivo = m ?? v ?? null
+          }
+          if (!rowIncentivo) rowIncentivo = await tryFindCfg(null, tipoVehiculo)
+          if (!rowIncentivo) rowIncentivo = await tryFindCfg(null, null)
+
+          let valorIncentivoPorTipo = 0
+          if (rowIncentivo) {
+            if (tipoVehiculo === 'MOTO') {
+              valorIncentivoPorTipo =
+                rowIncentivo.valorPlacaMoto !== null
+                  ? toNum(rowIncentivo.valorPlacaMoto)
+                  : toNum(rowIncentivo.base)
+            } else {
+              valorIncentivoPorTipo =
+                rowIncentivo.valorPlacaVehiculo !== null
+                  ? toNum(rowIncentivo.valorPlacaVehiculo)
+                  : toNum(rowIncentivo.base)
+            }
+          }
+          const valorIncentivo = rowIncentivo ? toNum(rowIncentivo.base) : 14000
+          const valorDateoNuevo = toNum(rowComercial?.monto)
+          const valorNuevoDirecto = toNum(rowComercial?.valorNuevoDirecto)
+
+          // ── Leer configuración de recurrencia ───────────────────────
+          const globalCfg = await db
+            .from('configuracion_recurrencia_global')
+            .orderBy('id', 'asc')
+            .first()
+          const esMoto = tipoVehiculo === 'MOTO'
+          let valorRecurrente = Number(
+            esMoto
+              ? (globalCfg?.valor_dateo_recurrencia_moto ?? globalCfg?.valor_dateo_recurrencia ?? 4300)
+              : (globalCfg?.valor_dateo_recurrencia_vehiculo ?? globalCfg?.valor_dateo_recurrencia ?? 4300)
+          )
+          let valorRecuperacion = Number(
+            esMoto
+              ? (globalCfg?.valor_dateo_recuperacion_moto ?? globalCfg?.valor_dateo_recuperacion ?? 8600)
+              : (globalCfg?.valor_dateo_recuperacion_vehiculo ?? globalCfg?.valor_dateo_recuperacion ?? 8600)
+          )
+          if (asesorId) {
+            const asesorCfg = await db
+              .from('configuracion_recurrencia_asesores')
+              .where('asesor_id', asesorId)
+              .where('recurrencia_habilitada', true)
+              .first()
+            if (asesorCfg?.valor_dateo_recurrencia)
+              valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
+            if (asesorCfg?.valor_dateo_recuperacion)
+              valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+          }
+
+          // ── Calcular montos según caso de negocio ───────────────────
+          const esRecurrente = Boolean((turnoParaComision as any).esRecurrente)
+          const esRecuperacion = Boolean((turnoParaComision as any).esRecuperacion)
+          const esClienteNuevo = !esRecurrente && !esRecuperacion
+          const esAsesorConvenio =
+            item.canal === 'ASESOR_CONVENIO' || asesorId === asesorConvenioId
+
+          let montoAsesor = 0
+          let montoConvenio = 0
+          let base = 0
+          let valorNuevoDirectoFinal = 0
+
+          if (!item.convenioId) {
+            // CASO 1: Sin convenio — comercial datea directo
+            montoConvenio = 0
+            base = 0
+            if (esClienteNuevo) {
+              montoAsesor = valorNuevoDirecto
+              valorNuevoDirectoFinal = valorNuevoDirecto
+            } else if (esRecurrente) {
+              montoAsesor = valorRecurrente
+            } else {
+              montoAsesor = valorRecuperacion
+            }
+          } else if (esAsesorConvenio) {
+            // CASO 2: Asesor convenio se datea a sí mismo
+            montoConvenio = 0
+            if (item.esAvance) {
+              montoAsesor = 0
+              base = valorIncentivoPorTipo
+            } else {
+              montoAsesor = esClienteNuevo ? valorIncentivo : valorRecurrente
+              base = valorIncentivo
+            }
+          } else {
+            // CASO 3: Comercial + convenio
+            base = valorIncentivoPorTipo
+            montoAsesor = valorDateoNuevo
+            montoConvenio = item.esAvance
+              ? Math.max(0, valorIncentivoPorTipo - 0)
+              : valorIncentivoPorTipo
+          }
+
+          // ── Crear la comisión ────────────────────────────────────────
+          const comision = new Comision()
+          comision.esConfig = false
+          comision.captacionDateoId = item.id
+          comision.asesorId = item.agenteId
+          comision.convenioId = item.convenioId
+          comision.asesorSecundarioId = item.asesorConvenioId
+          comision.montoAsesor = String(montoAsesor)
+          comision.montoConvenio = String(montoConvenio)
+          comision.monto = String(montoAsesor)
+          comision.base = String(base)
+          comision.porcentaje = '0'
+          comision.valorNuevoDirecto = String(valorNuevoDirectoFinal)
+          comision.tipoServicio = tipoServicio as any
+          ;(comision as any).tipoVehiculo = tipoVehiculo
+          comision.estado = 'PENDIENTE'
+          comision.fechaCalculo = DateTime.now()
+          comision.metaRtm = 0
+          comision.porcentajeComisionMeta = '0'
+          comision.valorRtmMoto = 0
+          comision.valorRtmVehiculo = 0
+          comision.esAvance = item.esAvance ?? false
+          await comision.save()
+        }
+      }
+    }
 
     const out = item.serialize() as any
     out.canal = (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const).includes(out.canal)

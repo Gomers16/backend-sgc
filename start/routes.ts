@@ -44,7 +44,7 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
     router
@@ -54,7 +54,7 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
     router
@@ -74,7 +74,7 @@ router
       })
       .use([
         middleware.auth(),
-        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
     router
@@ -1564,7 +1564,127 @@ router
       ])
 
     /* ============================ CERTIFICACIONES ====================== */
+    /* ============================= TARIFAS TRÁMITES ==================== */
 
+    router
+      .get('/tarifas/tramite', async (ctx) => {
+        const { default: TarifasTramitesController } = await import(
+          '#controllers/tarifas_tramites_controller'
+        )
+        return new TarifasTramitesController().byTipoClase(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    /* ================================ TRÁMITES ========================= */
+
+    router
+      .get('/tramites/siguiente-numero', async (ctx) => {
+        const { default: TramitesController } = await import('#controllers/tramites_controller')
+        return new TramitesController().siguienteNumero(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .get('/tramites', async (ctx) => {
+        const { default: TramitesController } = await import('#controllers/tramites_controller')
+        return new TramitesController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .get('/tramites/:id', async (ctx) => {
+        const { default: TramitesController } = await import('#controllers/tramites_controller')
+        return new TramitesController().show(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .post('/tramites', async (ctx) => {
+        const { default: TramitesController } = await import('#controllers/tramites_controller')
+        return new TramitesController().store(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .put('/tramites/:id', async (ctx) => {
+        const { default: TramitesController } = await import('#controllers/tramites_controller')
+        return new TramitesController().update(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .post('/tramites/:id/pago', async (ctx) => {
+        const { default: TramitesController } = await import('#controllers/tramites_controller')
+        return new TramitesController().registrarPago(ctx)
+      })
+      .where('id', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    /* ========================== FORMULARIO RUNT ======================== */
+
+    router
+      .get('/tramites/:tramiteId/formulario-runt/export-excel', async (ctx) => {
+        const { default: FormulariosRuntController } = await import(
+          '#controllers/formularios_runt_controller'
+        )
+        return new FormulariosRuntController().exportExcel(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .get('/tramites/:tramiteId/formulario-runt', async (ctx) => {
+        const { default: FormulariosRuntController } = await import(
+          '#controllers/formularios_runt_controller'
+        )
+        return new FormulariosRuntController().show(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .put('/tramites/:tramiteId/formulario-runt', async (ctx) => {
+        const { default: FormulariosRuntController } = await import(
+          '#controllers/formularios_runt_controller'
+        )
+        return new FormulariosRuntController().upsert(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    /* ============================ CERTIFICACIONES ====================== */
     /* ============================ CERTIFICACIONES ====================== */
 
     router
@@ -1670,7 +1790,7 @@ router
 
     /* ================================ UPLOADS ========================== */
 
-    router.post('/uploads/images', async (ctx) => {
+    router.post('/media/upload', async (ctx) => {
       const { default: UploadsController } = await import('#controllers/uploads_controller')
       return new UploadsController().uploadImage(ctx)
     })

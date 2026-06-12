@@ -23,8 +23,6 @@
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import { DateTime } from 'luxon'
 import db from '@adonisjs/lucid/services/db'
-import Hash from '@adonisjs/core/services/hash'
-
 import Usuario from '#models/usuario'
 import Contrato from '#models/contrato'
 import ContratoSalario from '#models/contrato_salario'
@@ -115,6 +113,7 @@ const USUARIOS_DATA: UsuarioDato[] = [
     afpId: AFP.PORVENIR,
     arlId: ARL_DEFAULT,
     afcId: AFC_DEFAULT,
+    
     ccfId: CCF_DEFAULT,
     ...mc('DIRECTA', 'INDEFINIDO'),
     fechaIngreso: '2025-09-05',
@@ -599,6 +598,153 @@ const USUARIOS_DATA: UsuarioDato[] = [
     estadoContrato: 'activo',
     password: 'cda123',
   },
+
+  // ────────────────────────────────────────────────────────────────
+  // NUEVOS — 2026-05-19 | ROL: OPERATIVO_TURNOS | CARGO: ASESOR SERVICIO AL CLIENTE (4)
+  // ────────────────────────────────────────────────────────────────
+  {
+    numeroDocumento: '1192727869',
+    apellidos: 'ROMERO ALVARADO',
+    nombres: 'YULIETH',
+    celularPersonal: '3123292003',
+    correo: 'yuliethr@cda.com',
+    tipoSangre: null,
+    fechaNacimiento: null,
+    direccion: 'MANZANA B CASA 1 BARRIO BUNDE',
+    rolNombre: 'OPERATIVO_TURNOS',
+    cargoNombre: 'ASESOR SERVICIO AL CLIENTE',
+    epsId: EPS.NUEVA_EPS,
+    afpId: AFP.PORVENIR,
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'laboral',
+    terminoContrato: 'fijo',
+    fechaIngreso: '2026-05-19',
+    fechaRetiro: '2026-11-19',
+    estadoContrato: 'activo',
+    password: 'Yulieth@869',
+  },
+  {
+    numeroDocumento: '1106397631',
+    apellidos: 'RONDON FIRIGUA',
+    nombres: 'NAYSHA',
+    celularPersonal: '3227078006',
+    correo: 'nayshaw@cda.com',
+    tipoSangre: null,
+    fechaNacimiento: null,
+    direccion: 'MANZANA D CASA 7 BARRIO SANTA ISABEL IBAGUE, TOLIMA',
+    rolNombre: 'OPERATIVO_TURNOS',
+    cargoNombre: 'ASESOR SERVICIO AL CLIENTE',
+    epsId: EPS.NUEVA_EPS,
+    afpId: AFP.PROTECCION,
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'laboral',
+    terminoContrato: 'fijo',
+    fechaIngreso: '2026-05-19',
+    fechaRetiro: '2026-11-19',
+    estadoContrato: 'activo',
+    password: 'Naysha@631',
+  },
+  {
+    numeroDocumento: '1006129217',
+    apellidos: 'LOZANO FIGUEROA',
+    nombres: 'JOSE IVAN',
+    celularPersonal: '3132596581',
+    correo: 'joseivank@cda.com',
+    tipoSangre: null,
+    fechaNacimiento: null,
+    direccion: 'MANZANA 22 CASA 4 B PROTECHO 2',
+    rolNombre: 'OPERATIVO_TURNOS',
+    cargoNombre: 'ASESOR SERVICIO AL CLIENTE',
+    epsId: EPS.NUEVA_EPS,
+    afpId: AFP.PROTECCION,
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'laboral',
+    terminoContrato: 'fijo',
+    fechaIngreso: '2026-05-19',
+    fechaRetiro: '2026-11-19',
+    estadoContrato: 'activo',
+    password: 'Joseivan@217',
+  },
+  {
+    numeroDocumento: '1007705521',
+    apellidos: 'LEON ORTIZ',
+    nombres: 'CAMILO ANDRES',
+    celularPersonal: '3115397142',
+    correo: 'camilom@cda.com',
+    tipoSangre: null,
+    fechaNacimiento: null,
+    direccion: 'CARRERA 6 SUR N° 72-80 BOSQUE SAN ANGEL TORRE 15 APTO 657',
+    rolNombre: 'OPERATIVO_TURNOS',
+    cargoNombre: 'ASESOR SERVICIO AL CLIENTE',
+    epsId: EPS.SANITAS,
+    afpId: AFP.COLPENSIONES,
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'laboral',
+    terminoContrato: 'fijo',
+    fechaIngreso: '2026-05-19',
+    fechaRetiro: '2026-11-19',
+    estadoContrato: 'activo',
+    password: 'Camilo@521',
+  },
+
+  // ────────────────────────────────────────────────────────────────
+  // NUEVOS — ROL: TRAMITADOR | CARGO: TRAMITADOR (2)
+  // ⚠️ numeroDocumento, celular, dirección, EPS, AFP inventados — verificar
+  // ────────────────────────────────────────────────────────────────
+  {
+    numeroDocumento: '1234567001', // ⚠️ inventado
+    apellidos: 'TELLEZ',
+    nombres: 'TATIANA',
+    celularPersonal: '3100000001', // ⚠️ inventado
+    correo: 'tatianam@cda.com',
+    tipoSangre: null,
+    fechaNacimiento: null,
+    direccion: 'IBAGUE, TOLIMA', // ⚠️ inventado
+    rolNombre: 'TRAMITADOR',
+    cargoNombre: 'TRAMITADOR',
+    epsId: EPS.SALUD_TOTAL, // ⚠️ inventado
+    afpId: AFP.PORVENIR, // ⚠️ inventado
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'prestacion',
+    terminoContrato: 'indefinido',
+    fechaIngreso: '2026-06-11',
+    fechaRetiro: null,
+    estadoContrato: 'activo',
+    password: 'Tatiana@lez',
+  },
+  {
+    numeroDocumento: '1234567002', // ⚠️ inventado
+    apellidos: 'BONILLA',
+    nombres: 'JHON DAYRO',
+    celularPersonal: '3100000002', // ⚠️ inventado
+    correo: 'jhondayrok@cda.com',
+    tipoSangre: null,
+    fechaNacimiento: null,
+    direccion: 'IBAGUE, TOLIMA', // ⚠️ inventado
+    rolNombre: 'TRAMITADOR',
+    cargoNombre: 'TRAMITADOR',
+    epsId: EPS.SALUD_TOTAL, // ⚠️ inventado
+    afpId: AFP.PORVENIR, // ⚠️ inventado
+    arlId: ARL_DEFAULT,
+    afcId: AFC_DEFAULT,
+    ccfId: CCF_DEFAULT,
+    tipoContrato: 'prestacion',
+    terminoContrato: 'indefinido',
+    fechaIngreso: '2026-06-11',
+    fechaRetiro: null,
+    estadoContrato: 'activo',
+    password: 'Jhondayro@lla',
+  },
 ]
 
 // ─────────────────────────────────────────────────────────────────
@@ -608,9 +754,7 @@ export default class UsuariosExcelSeeder extends BaseSeeder {
   async run() {
     console.log('\n🌱 UsuariosExcelSeeder — iniciando...\n')
 
-    // ── Hash de contraseña (una vez para todos) ───────────────────────────────
-    const passwordHash = await Hash.use('scrypt').make('cda123')
-    console.log('🔐 Password hasheado\n')
+    console.log('🔐 Contraseñas en texto plano — withAuthFinder hashea automáticamente\n')
 
     // ── Sede ──────────────────────────────────────────────────────────────────
     console.log('📍 Sede...')
@@ -653,7 +797,7 @@ export default class UsuariosExcelSeeder extends BaseSeeder {
             apellidos: dato.apellidos,
             correo: dato.correo,
             correoPersonal: dato.correo,
-            password: passwordHash,
+            password: dato.password,
             rolId,
             razonSocialId: RAZON_SOCIAL_DEFAULT,
             sedeId: sede.id,
