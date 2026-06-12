@@ -66,6 +66,9 @@ export default class Usuario extends compose(BaseModel, AuthFinder) {
   declare correoPersonal?: string
 
   // ✅ NUEVOS CAMPOS
+  @column({ columnName: 'numero_documento' })
+  declare numeroDocumento?: string | null
+
   @column({ columnName: 'tipo_sangre' })
   declare tipoSangre?: 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-' | null
 
