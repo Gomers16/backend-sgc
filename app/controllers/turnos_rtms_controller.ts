@@ -124,7 +124,7 @@ export default class TurnosRtmController {
       clienteId,
       vehiculoId,
       page = 1,
-      perPage = 50,
+      perPage = 100,
     } = request.qs()
 
     try {
@@ -223,7 +223,7 @@ export default class TurnosRtmController {
 
       // 👇 PAGINACIÓN
       const pageNum = Math.max(1, Number(page) || 1)
-      const limit = Math.min(100, Math.max(10, Number(perPage) || 50))
+      const limit = Math.min(100, Math.max(10, Number(perPage) || 100))
 
       const paginatedResult = await query
         .orderBy('fecha', 'desc')
@@ -535,7 +535,7 @@ export default class TurnosRtmController {
         const meses = bloqueoMesesPorServicio((servicio as any).codigoServicio)
         if (meses > 0) {
           const ultimaFecha = lastFinalizado.fecha as DateTime
-          const DIAS_VENTANA_PRE = 10
+          const DIAS_VENTANA_PRE = 16
           const vencimiento = ultimaFecha.plus({ months: meses }).startOf('day')
           const nextAllowed = vencimiento.minus({ days: DIAS_VENTANA_PRE })
           if (fechaGuardar.startOf('day') < nextAllowed) {
