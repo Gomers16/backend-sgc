@@ -646,8 +646,10 @@ export default class FormulariosRuntController {
       // template original (tipo "expression" con dxfId). Se limpian aquí porque
       // son puramente cosméticas y no afectan valores ni fórmulas =DATOS!...
       workbook.worksheets.forEach((ws) => {
-        ws.conditionalFormattings = []
+        ;(ws as any).conditionalFormattings = []
       })
+      // Fuerza recálculo completo de todas las fórmulas =DATOS!... al abrir en Excel
+      workbook.calcProperties.fullCalcOnLoad = true
       const buffer = await workbook.xlsx.writeBuffer()
       const placa    = formulario.placa ?? 'SIN-PLACA'
       const fileName = `PAQUETE-${placa}-${tramite.turnoNumero}.xlsx`
