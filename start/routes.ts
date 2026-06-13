@@ -1658,6 +1658,21 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
+    /* ======================== PAQUETE COMPLETO ========================= */
+
+    router
+      .get('/tramites/:tramiteId/paquete/export-excel', async (ctx) => {
+        const { default: FormulariosRuntController } = await import(
+          '#controllers/formularios_runt_controller'
+        )
+        return new FormulariosRuntController().exportPaqueteCompleto(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
     /* ========================== FORMULARIO RUNT ======================== */
 
     router

@@ -546,4 +546,115 @@ export default class FormulariosRuntController {
       return response.internalServerError({ message: 'Error al generar el Excel de mandato' })
     }
   }
+
+  /** GET /tramites/:tramiteId/paquete/export-excel
+   *
+   * Devuelve runt_mandato_datos.xlsx con la hoja DATOS rellena desde el
+   * FormularioRunt + Tramite. Las hojas FORMULARIO, " MANDATO" y COMPRAVENTA
+   * se auto-populan vía sus fórmulas =DATOS!... al abrir el archivo en Excel.
+   * Excepción: C11 y F13 de " MANDATO" (mandatario) se escriben directamente.
+   */
+  public async exportPaqueteCompleto({ params, response }: HttpContext) {
+    try {
+      const tramite = await Tramite.query()
+        .where('id', Number(params.tramiteId))
+        .preload('formularioRunt')
+        .first()
+
+      if (!tramite) return response.notFound({ message: 'Trámite no encontrado' })
+
+      const formulario = tramite.formularioRunt
+      if (!formulario) {
+        return response.unprocessableEntity({
+          message: 'Este trámite no tiene formulario RUNT guardado. Llénalo primero.',
+        })
+      }
+
+      const workbook = new ExcelJS.Workbook()
+      await workbook.xlsx.readFile(app.makePath('storage/runt/runt_mandato_datos.xlsx'))
+
+      // ── Hoja DATOS: escritura directa (sin fórmulas, sin merges) ─────────
+      const wsDatos = workbook.getWorksheet('DATOS')
+      if (!wsDatos) {
+        return response.internalServerError({
+          message: 'Hoja DATOS no encontrada en la plantilla maestra',
+        })
+      }
+
+      const set = (addr: string, value: ExcelJS.CellValue) => {
+        wsDatos.getCell(addr).value = value
+      }
+
+      // Propietario (vendedor)
+      set('B3', formulario.propPrimerApellido  ?? null)
+      set('C3', formulario.propSegundoApellido ?? null)
+      set('D3', formulario.propNombres         ?? null)
+      set('B4', formulario.propNoDocumento     ?? null)
+      set('B5', formulario.propTelefono        ?? null)
+      set('B6', formulario.propCorreo          ?? null)
+      set('B7', formulario.propDireccion       ?? null)
+      set('B8', formulario.propCiudad          ?? null)
+
+      // Comprador (solo cuando incluyeCompraventa)
+      if (tramite.incluyeCompraventa) {
+        set('B11', formulario.compPrimerApellido  ?? null)
+        set('C11', formulario.compSegundoApellido ?? null)
+        set('D11', formulario.compNombres         ?? null)
+        set('B12', formulario.compNoDocumento     ?? null)
+        set('B13', formulario.compTelefono        ?? null)
+        set('B14', formulario.compCorreo          ?? null)
+        set('B15', formulario.compDireccion       ?? null)
+        set('B16', formulario.compCiudad          ?? null)
+      }
+
+      // Vehículo
+      set('B19', formulario.placa          ?? null)
+      set('B20', formulario.modelo         ?? null)
+      set('B21', formulario.claseVehiculo  ?? null)
+      set('B22', formulario.marca          ?? null)
+      set('B23', formulario.linea          ?? null)
+      set('B24', formulario.color          ?? null)
+      set('B25', formulario.puertas        ?? null)
+      set('B26', formulario.tipoServicio   ?? null)
+      set('B27', formulario.noMotor        ?? null)
+      set('B28', formulario.noSerie        ?? null)
+      set('B29', formulario.noChasis       ?? null)
+      set('B30', formulario.noVin          ?? null)
+      set('B31', formulario.cilindrada     ?? null)
+      set('B32', formulario.capacidadKg    ?? null)
+
+      // Tipo de trámite — alimenta la fórmula =DATOS!B43 en " MANDATO"!P25
+      set('B43', tramite.tipoTramite
+        ? (TIPO_TRAMITE_LABEL[tramite.tipoTramite] ?? tramite.tipoTramite)
+        : null)
+
+      // ── Hoja " MANDATO": mandatario (celdas directas, sin fórmula) ────────
+      // El nombre tiene un espacio al inicio: " MANDATO"
+      const wsMandato = workbook.getWorksheet(' MANDATO')
+      if (wsMandato) {
+        const setMandato = (address: string, value: ExcelJS.CellValue) => {
+          const cell = wsMandato.getCell(address)
+          const target = cell.isMerged ? cell.master : cell
+          target.value = value
+        }
+        setMandato('C11', formulario.mandatarioNombre    ?? null)
+        setMandato('F13', formulario.mandatarioDocumento ?? null)
+      }
+
+      // ── Serializar y enviar el workbook completo ──────────────────────────
+      const buffer = await workbook.xlsx.writeBuffer()
+      const placa    = formulario.placa ?? 'SIN-PLACA'
+      const fileName = `PAQUETE-${placa}-${tramite.turnoNumero}.xlsx`
+
+      response.header(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      )
+      response.header('Content-Disposition', `attachment; filename="${fileName}"`)
+      return response.send(buffer)
+    } catch (error) {
+      console.error('Error en exportPaqueteCompleto:', error)
+      return response.internalServerError({ message: 'Error al generar el paquete Excel' })
+    }
+  }
 }
