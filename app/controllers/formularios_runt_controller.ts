@@ -642,6 +642,12 @@ export default class FormulariosRuntController {
       }
 
       // ── Serializar y enviar el workbook completo ──────────────────────────
+      // ExcelJS no puede serializar ciertas reglas de formato condicional del
+      // template original (tipo "expression" con dxfId). Se limpian aquí porque
+      // son puramente cosméticas y no afectan valores ni fórmulas =DATOS!...
+      workbook.worksheets.forEach((ws) => {
+        ws.conditionalFormattings = []
+      })
       const buffer = await workbook.xlsx.writeBuffer()
       const placa    = formulario.placa ?? 'SIN-PLACA'
       const fileName = `PAQUETE-${placa}-${tramite.turnoNumero}.xlsx`
