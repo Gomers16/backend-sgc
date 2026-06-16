@@ -133,7 +133,10 @@ export default class TramiteLiquidacionesController {
         { label: 'Impuesto año actual',    valor: liq.impuestoAnioActual },
         { label: 'Impuesto años vencidos', valor: liq.impuestoAniosVencidos },
       ]
-      const total = conceptos.reduce((sum, c) => sum + (c.valor ?? 0), 0)
+      const total = conceptos.reduce((sum, c) => {
+        const v = Number(c.valor)
+        return sum + (isNaN(v) ? 0 : v)
+      }, 0)
 
       const placa = tramite.placa ?? tramite.formularioRunt?.placa ?? 'SIN-PLACA'
       const tipoLabel = tramite.tipoTramite
