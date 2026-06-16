@@ -1590,6 +1590,32 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
+    /* ========================== CHECKLIST DE DOCUMENTOS ================ */
+
+    router
+      .get('/tramites/checklist', async (ctx) => {
+        const { default: TramiteChecklistsController } = await import(
+          '#controllers/tramite_checklists_controller'
+        )
+        return new TramiteChecklistsController().getByTurno(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .put('/tramites/checklist', async (ctx) => {
+        const { default: TramiteChecklistsController } = await import(
+          '#controllers/tramite_checklists_controller'
+        )
+        return new TramiteChecklistsController().upsert(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
     router
       .get('/tramites', async (ctx) => {
         const { default: TramitesController } = await import('#controllers/tramites_controller')
