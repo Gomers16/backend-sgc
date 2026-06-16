@@ -1740,6 +1740,34 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
+    /* ============================ LIQUIDACIÓN ========================== */
+
+    router
+      .get('/tramites/:tramiteId/liquidacion', async (ctx) => {
+        const { default: TramiteLiquidacionesController } = await import(
+          '#controllers/tramite_liquidaciones_controller'
+        )
+        return new TramiteLiquidacionesController().getByTramite(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .put('/tramites/:tramiteId/liquidacion', async (ctx) => {
+        const { default: TramiteLiquidacionesController } = await import(
+          '#controllers/tramite_liquidaciones_controller'
+        )
+        return new TramiteLiquidacionesController().upsert(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
     /* ============================ CERTIFICACIONES ====================== */
     /* ============================ CERTIFICACIONES ====================== */
 
