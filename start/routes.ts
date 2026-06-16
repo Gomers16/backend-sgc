@@ -1768,6 +1768,19 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
+    router
+      .get('/tramites/:tramiteId/liquidacion/export-pdf', async (ctx) => {
+        const { default: TramiteLiquidacionesController } = await import(
+          '#controllers/tramite_liquidaciones_controller'
+        )
+        return new TramiteLiquidacionesController().exportLiquidacionPdf(ctx)
+      })
+      .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
     /* ============================ CERTIFICACIONES ====================== */
     /* ============================ CERTIFICACIONES ====================== */
 
