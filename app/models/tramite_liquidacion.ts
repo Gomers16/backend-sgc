@@ -1,7 +1,8 @@
 import { DateTime } from 'luxon'
-import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
-import type { BelongsTo } from '@adonisjs/lucid/types/relations'
+import { BaseModel, column, belongsTo, hasMany } from '@adonisjs/lucid/orm'
+import type { BelongsTo, HasMany } from '@adonisjs/lucid/types/relations'
 import Tramite from '#models/tramite'
+import LiquidacionPago from '#models/liquidacion_pago'
 
 export default class TramiteLiquidacion extends BaseModel {
   public static table = 'tramite_liquidaciones'
@@ -15,6 +16,9 @@ export default class TramiteLiquidacion extends BaseModel {
 
   @belongsTo(() => Tramite, { foreignKey: 'tramiteId' })
   declare tramite: BelongsTo<typeof Tramite>
+
+  @hasMany(() => LiquidacionPago, { foreignKey: 'tramiteLiquidacionId' })
+  declare pagos: HasMany<typeof LiquidacionPago>
 
   // ── Conceptos de liquidación
   @column()

@@ -1617,6 +1617,18 @@ router
       ])
 
     router
+      .get('/tramites/liquidacion-historial', async (ctx) => {
+        const { default: LiquidacionPagosController } = await import(
+          '#controllers/liquidacion_pagos_controller'
+        )
+        return new LiquidacionPagosController().getHistorialTurno(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
       .get('/tramites', async (ctx) => {
         const { default: TramitesController } = await import('#controllers/tramites_controller')
         return new TramitesController().index(ctx)
@@ -1776,6 +1788,32 @@ router
         return new TramiteLiquidacionesController().exportLiquidacionPdf(ctx)
       })
       .where('tramiteId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .post('/tramites/liquidacion/:tramiteLiquidacionId/pago', async (ctx) => {
+        const { default: LiquidacionPagosController } = await import(
+          '#controllers/liquidacion_pagos_controller'
+        )
+        return new LiquidacionPagosController().registrarPago(ctx)
+      })
+      .where('tramiteLiquidacionId', /^[0-9]+$/)
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
+    router
+      .get('/tramites/liquidacion-pago/:liquidacionPagoId/pdf', async (ctx) => {
+        const { default: LiquidacionPagosController } = await import(
+          '#controllers/liquidacion_pagos_controller'
+        )
+        return new LiquidacionPagosController().getPagoPdf(ctx)
+      })
+      .where('liquidacionPagoId', /^[0-9]+$/)
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
