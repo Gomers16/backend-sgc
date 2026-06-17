@@ -479,7 +479,8 @@ export default class LiquidacionPagosController {
       const totalIngresado  = pagosEnPeriodo.reduce((sum, p) => sum + Number(p.monto), 0)
       const porFormaPago: Record<string, number> = {}
       for (const p of pagosEnPeriodo) {
-        const forma = p.formaPago ?? 'Sin especificar'
+        const raw   = p.formaPago ?? 'Sin especificar'
+        const forma = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
         porFormaPago[forma] = (porFormaPago[forma] ?? 0) + Number(p.monto)
       }
 
