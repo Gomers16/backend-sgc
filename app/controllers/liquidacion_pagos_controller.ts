@@ -381,12 +381,11 @@ export default class LiquidacionPagosController {
   /** GET /tramites/reporte-caja?sedeId=&fechaInicio=&fechaFin= */
   public async getReporteCaja({ request, response }: HttpContext) {
     try {
-      const sedeId      = Number(request.input('sedeId'))
       const fechaInicio = request.input('fechaInicio') as string
       const fechaFin    = request.input('fechaFin')    as string
 
-      if (!sedeId || !fechaInicio || !fechaFin) {
-        return response.badRequest({ message: 'sedeId, fechaInicio y fechaFin son requeridos' })
+      if (!fechaInicio || !fechaFin) {
+        return response.badRequest({ message: 'fechaInicio y fechaFin son requeridos' })
       }
 
       const dtInicio = DateTime.fromISO(fechaInicio, { zone: 'America/Bogota' })
@@ -395,14 +394,9 @@ export default class LiquidacionPagosController {
         return response.badRequest({ message: 'Fechas inválidas — use formato YYYY-MM-DD' })
       }
 
-      // ── 1. Pagos en el período, filtrados por sede ───────────────────────
+      // ── 1. Pagos en el período ───────────────────────────────────────────
       const pagosEnPeriodo = await LiquidacionPago.query()
         .whereBetween('fecha', [fechaInicio, fechaFin])
-        .whereHas('tramiteLiquidacion', (liqQ) => {
-          liqQ.whereHas('tramite', (tramQ) => {
-            tramQ.where('sede_id', sedeId)
-          })
-        })
         .preload('tramiteLiquidacion', (liqQ) => {
           liqQ.preload('tramite', (tramQ) => {
             tramQ.preload('formularioRunt')

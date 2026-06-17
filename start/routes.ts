@@ -1,4 +1,5 @@
 // start/routes.ts
+// updated: reporte-caja sin sedeId
 import router from '@adonisjs/core/services/router'
 import { middleware } from './kernel.js'
 
