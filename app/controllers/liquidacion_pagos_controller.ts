@@ -279,7 +279,68 @@ export default class LiquidacionPagosController {
         }
       )
 
-      doc.moveDown(1.5)
+      // ── Historial de pagos ───────────────────────────────────────────────
+      doc.moveDown(1.2)
+      doc.moveTo(50, doc.y).lineTo(562, doc.y).strokeColor('#cccccc').lineWidth(0.5).stroke()
+      doc.moveDown(0.6)
+      doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a3c5e').text('Historial de pagos')
+      doc.moveDown(0.4)
+
+      const todosPagos = [...pagosExistentes, pago].sort(
+        (a, b) => (a.fecha?.toMillis() ?? 0) - (b.fecha?.toMillis() ?? 0)
+      )
+
+      const filasHistorial = [
+        ...todosPagos.map((p) => ({
+          fecha:      p.fecha?.toFormat('dd/MM/yyyy') ?? '—',
+          monto:      formatPeso(Number(p.monto)),
+          formaPago:  p.formaPago ?? '—',
+          referencia: p.referenciaPago ?? '',
+        })),
+        {
+          fecha:      'TOTAL PAGADO',
+          monto:      formatPeso(totalPagado),
+          formaPago:  '',
+          referencia: '',
+        },
+      ]
+
+      await (doc as any).table(
+        {
+          headers: [
+            { label: 'FECHA',         property: 'fecha',      width: 88  },
+            { label: 'MONTO',         property: 'monto',      width: 112, align: 'right' },
+            { label: 'FORMA DE PAGO', property: 'formaPago',  width: 142 },
+            { label: 'REFERENCIA',    property: 'referencia', width: 150 },
+          ],
+          datas: filasHistorial,
+        },
+        {
+          prepareHeader: () =>
+            (doc as any).font('Helvetica-Bold').fontSize(10).fillColor('#ffffff'),
+          prepareRow: (_row: any, _col: number, indexRow: number) => {
+            const esTotal = indexRow === filasHistorial.length - 1
+            ;(doc as any)
+              .font(esTotal ? 'Helvetica-Bold' : 'Helvetica')
+              .fontSize(esTotal ? 11 : 10)
+              .fillColor('#000000')
+          },
+          columnSpacing: 5,
+          padding: 6,
+          headerColor: '#1a3c5e',
+        }
+      )
+
+      if (saldoPendiente > 0) {
+        doc.moveDown(0.4)
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(10)
+          .fillColor('#cc7700')
+          .text(`Saldo pendiente: ${formatPeso(saldoPendiente)}`, { align: 'right' })
+      }
+
+      doc.moveDown(1.2)
       doc.font('Helvetica-Bold').fontSize(12)
 
       if (estaPagado) {
@@ -289,8 +350,6 @@ export default class LiquidacionPagosController {
         doc
           .fillColor('#cc7700')
           .text(`ABONO PARCIAL  —  Abonado hoy: ${formatPeso(montoNum)}`, { align: 'center' })
-        doc.moveDown(0.5)
-        doc.fontSize(11).text(`Saldo pendiente: ${formatPeso(saldoPendiente)}`, { align: 'center' })
       }
 
       doc.fillColor('#000000')
