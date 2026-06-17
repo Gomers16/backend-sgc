@@ -378,6 +378,124 @@ export default class LiquidacionPagosController {
     }
   }
 
+  /** GET /tramites/reporte-caja?sedeId=&fechaInicio=&fechaFin= */
+  public async getReporteCaja({ request, response }: HttpContext) {
+    try {
+      const sedeId      = Number(request.input('sedeId'))
+      const fechaInicio = request.input('fechaInicio') as string
+      const fechaFin    = request.input('fechaFin')    as string
+
+      if (!sedeId || !fechaInicio || !fechaFin) {
+        return response.badRequest({ message: 'sedeId, fechaInicio y fechaFin son requeridos' })
+      }
+
+      const dtInicio = DateTime.fromISO(fechaInicio, { zone: 'America/Bogota' })
+      const dtFin    = DateTime.fromISO(fechaFin,    { zone: 'America/Bogota' })
+      if (!dtInicio.isValid || !dtFin.isValid) {
+        return response.badRequest({ message: 'Fechas inválidas — use formato YYYY-MM-DD' })
+      }
+
+      // ── 1. Pagos en el período, filtrados por sede ───────────────────────
+      const pagosEnPeriodo = await LiquidacionPago.query()
+        .whereBetween('fecha', [fechaInicio, fechaFin])
+        .whereHas('tramiteLiquidacion', (liqQ) => {
+          liqQ.whereHas('tramite', (tramQ) => {
+            tramQ.where('sede_id', sedeId)
+          })
+        })
+        .preload('tramiteLiquidacion', (liqQ) => {
+          liqQ.preload('tramite', (tramQ) => {
+            tramQ.preload('formularioRunt')
+          })
+        })
+        .orderBy('tramite_liquidacion_id', 'asc')
+        .orderBy('fecha', 'asc')
+
+      // ── 2. IDs únicos de liquidaciones presentes en el período ───────────
+      const liquidacionIds = [...new Set(pagosEnPeriodo.map((p) => p.tramiteLiquidacionId))]
+
+      // ── 3. TODOS los pagos de esas liquidaciones (historial completo) ────
+      const todosPagosMap = new Map<number, LiquidacionPago[]>()
+      if (liquidacionIds.length > 0) {
+        const todosPagos = await LiquidacionPago.query()
+          .whereIn('tramite_liquidacion_id', liquidacionIds)
+        for (const p of todosPagos) {
+          const arr = todosPagosMap.get(p.tramiteLiquidacionId) ?? []
+          arr.push(p)
+          todosPagosMap.set(p.tramiteLiquidacionId, arr)
+        }
+      }
+
+      // ── 4. Agrupar pagos del período por liquidación ─────────────────────
+      const pagosPorLiquidacion = new Map<number, typeof pagosEnPeriodo>()
+      for (const p of pagosEnPeriodo) {
+        const arr = pagosPorLiquidacion.get(p.tramiteLiquidacionId) ?? []
+        arr.push(p)
+        pagosPorLiquidacion.set(p.tramiteLiquidacionId, arr)
+      }
+
+      // ── 5. Construir array de liquidaciones ──────────────────────────────
+      const liquidaciones = []
+      for (const [liquidacionId, pagos] of pagosPorLiquidacion) {
+        const liq     = pagos[0].tramiteLiquidacion
+        const tramite = liq.tramite
+
+        const totalLiquidacion     = calcularTotal(liq)
+        const abonadoEnPeriodo     = pagos.reduce((sum, p) => sum + Number(p.monto), 0)
+        const totalPagadoReal      = (todosPagosMap.get(liquidacionId) ?? [])
+          .reduce((sum, p) => sum + Number(p.monto), 0)
+        const saldoPendienteActual = Math.max(0, totalLiquidacion - totalPagadoReal)
+
+        let estado: 'pendiente' | 'parcial' | 'pagado'
+        if (totalPagadoReal === 0) {
+          estado = 'pendiente'
+        } else if (totalPagadoReal >= totalLiquidacion) {
+          estado = 'pagado'
+        } else {
+          estado = 'parcial'
+        }
+
+        liquidaciones.push({
+          tramiteLiquidacionId: liquidacionId,
+          tramiteId:            tramite.id,
+          placa:                tramite.placa ?? tramite.formularioRunt?.placa ?? null,
+          tipoTramite:          tramite.tipoTramite,
+          nombreCliente:        tramite.nombreCliente,
+          abonadoEnPeriodo,
+          totalLiquidacion,
+          saldoPendienteActual,
+          estado,
+          pagosEnPeriodo: pagos.map((p) => ({
+            id:             p.id,
+            fecha:          p.fecha?.toFormat('yyyy-MM-dd') ?? null,
+            monto:          Number(p.monto),
+            formaPago:      p.formaPago,
+            referenciaPago: p.referenciaPago,
+          })),
+        })
+      }
+
+      // ── 6. Totales globales ──────────────────────────────────────────────
+      const totalIngresado  = pagosEnPeriodo.reduce((sum, p) => sum + Number(p.monto), 0)
+      const porFormaPago: Record<string, number> = {}
+      for (const p of pagosEnPeriodo) {
+        const forma = p.formaPago ?? 'Sin especificar'
+        porFormaPago[forma] = (porFormaPago[forma] ?? 0) + Number(p.monto)
+      }
+
+      return response.ok({
+        fechaInicio,
+        fechaFin,
+        totalIngresado,
+        porFormaPago,
+        liquidaciones,
+      })
+    } catch (error) {
+      console.error('Error en getReporteCaja:', error)
+      return response.internalServerError({ message: 'Error al generar el reporte de caja' })
+    }
+  }
+
   /** GET /tramites/liquidacion-pago/:liquidacionPagoId/pdf */
   public async getPagoPdf({ params, response }: HttpContext) {
     try {

@@ -1819,6 +1819,18 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
       ])
 
+    router
+      .get('/tramites/reporte-caja', async (ctx) => {
+        const { default: LiquidacionPagosController } = await import(
+          '#controllers/liquidacion_pagos_controller'
+        )
+        return new LiquidacionPagosController().getReporteCaja(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS', 'TRAMITADOR'] }),
+      ])
+
     /* ============================ CERTIFICACIONES ====================== */
     /* ============================ CERTIFICACIONES ====================== */
 
