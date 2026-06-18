@@ -452,6 +452,7 @@ export default class LiquidacionPagosController {
         liquidaciones.push({
           tramiteLiquidacionId: liquidacionId,
           tramiteId:            tramite.id,
+          turnoNumero:          tramite.turnoNumero,
           placa:                tramite.placa ?? tramite.formularioRunt?.placa ?? null,
           tipoTramite:          tramite.tipoTramite,
           nombreCliente:        tramite.nombreCliente,
