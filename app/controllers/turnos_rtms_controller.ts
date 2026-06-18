@@ -554,28 +554,89 @@ export default class TurnosRtmController {
         }
       }
 
-      const rowGlobal = await trx
+      // ── Reasignación: slots liberados por cancelados del mismo día ──────
+      // Subquery: IDs de cancelados cuyo slot global ya fue reclamado
+      const slotsClamados = trx
         .from('turnos_rtms')
+        .select('reasignado_de_turno_id')
         .where('sede_id', usuarioCreador.sedeId!)
         .where('fecha', hoyISO)
-        .where('turno_numero', '>', 0)
-        .whereIn('estado', ['activo', 'finalizado'])
-        .max('turno_numero as max')
-        .forUpdate()
-        .first()
-      const nextGlobal: number = Number(rowGlobal?.max ?? 0) + 1
+        .whereNotNull('reasignado_de_turno_id')
 
-      const rowSvc = await trx
+      const huecoGlobal = await trx
         .from('turnos_rtms')
+        .select('id')
+        .select(Database.raw('ABS(turno_numero) AS slot_libre'))
         .where('sede_id', usuarioCreador.sedeId!)
-        .where('servicio_id', servicio.id)
         .where('fecha', hoyISO)
-        .where('turno_numero_servicio', '>', 0)
-        .whereIn('estado', ['activo', 'finalizado'])
-        .max('turno_numero_servicio as max')
+        .where('estado', 'cancelado')
+        .where('turno_numero', '<', 0)
+        .whereNotIn('id', slotsClamados)
+        // Excluir slots cuyo número positivo ya está físicamente ocupado
+        // (cubre turnos creados antes de que existiera reasignadoDeTurnoId)
+        .whereRaw(
+          'ABS(turno_numero) NOT IN (SELECT turno_numero FROM turnos_rtms WHERE sede_id = ? AND fecha = ? AND turno_numero > 0)',
+          [usuarioCreador.sedeId!, hoyISO]
+        )
+        .orderByRaw('ABS(turno_numero) ASC')
+        .limit(1)
         .forUpdate()
         .first()
-      const nextPorServicio: number = Number(rowSvc?.max ?? 0) + 1
+
+      const huecoServicio = await trx
+        .from('turnos_rtms')
+        .select(Database.raw('ABS(turno_numero_servicio) AS slot_svc_libre'))
+        .where('sede_id', usuarioCreador.sedeId!)
+        .where('fecha', hoyISO)
+        .where('servicio_id', servicio.id)
+        .where('estado', 'cancelado')
+        .where('turno_numero_servicio', '<', 0)
+        .whereRaw(
+          'ABS(turno_numero_servicio) NOT IN (SELECT turno_numero_servicio FROM turnos_rtms WHERE sede_id = ? AND fecha = ? AND servicio_id = ? AND turno_numero_servicio > 0)',
+          [usuarioCreador.sedeId!, hoyISO, servicio.id]
+        )
+        .orderByRaw('ABS(turno_numero_servicio) ASC')
+        .limit(1)
+        .forUpdate()
+        .first()
+
+      let nextGlobal: number
+      let reasignadoDeTurnoId: number | null = null
+
+      if (huecoGlobal?.slot_libre != null) {
+        nextGlobal = Number(huecoGlobal.slot_libre)
+        reasignadoDeTurnoId = Number(huecoGlobal.id)
+      } else {
+        const rowGlobal = await trx
+          .from('turnos_rtms')
+          .where('sede_id', usuarioCreador.sedeId!)
+          .where('fecha', hoyISO)
+          .where('turno_numero', '>', 0)
+          .whereIn('estado', ['activo', 'finalizado'])
+          .max('turno_numero as max')
+          .forUpdate()
+          .first()
+        nextGlobal = Number(rowGlobal?.max ?? 0) + 1
+      }
+
+      let nextPorServicio: number
+
+      if (huecoServicio?.slot_svc_libre != null) {
+        nextPorServicio = Number(huecoServicio.slot_svc_libre)
+      } else {
+        const rowSvc = await trx
+          .from('turnos_rtms')
+          .where('sede_id', usuarioCreador.sedeId!)
+          .where('servicio_id', servicio.id)
+          .where('fecha', hoyISO)
+          .where('turno_numero_servicio', '>', 0)
+          .whereIn('estado', ['activo', 'finalizado'])
+          .max('turno_numero_servicio as max')
+          .forUpdate()
+          .first()
+        nextPorServicio = Number(rowSvc?.max ?? 0) + 1
+      }
+      // ── fin reasignación ─────────────────────────────────────────────────
 
       let vehiculoId: number | null = null
       let clienteId: number | null = null
@@ -824,6 +885,7 @@ export default class TurnosRtmController {
         mesesDesdeUltimaVisita,
         ultimoTurnoId,
         fechaUltimaVisita,
+        reasignadoDeTurnoId,
       }
 
       if (canalAtribucion) {
@@ -1319,14 +1381,39 @@ export default class TurnosRtmController {
 
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
-      const rowGlobal = await Database.from('turnos_rtms')
+      // Hueco global disponible (slot más pequeño liberado por un cancelado)
+      const slotsClamadosSig = Database
+        .from('turnos_rtms')
+        .select('reasignado_de_turno_id')
+        .where('sede_id', usuarioSolicitante.sedeId)
         .where('fecha', hoy)
-        .andWhere('sede_id', usuarioSolicitante.sedeId)
-        .where('turno_numero', '>', 0)
-        .whereIn('estado', ['activo', 'finalizado'])
-        .max('turno_numero as max')
+        .whereNotNull('reasignado_de_turno_id')
+
+      const huecoGlobalSig = await Database
+        .from('turnos_rtms')
+        .select(Database.raw('ABS(turno_numero) AS slot_libre'))
+        .where('sede_id', usuarioSolicitante.sedeId)
+        .where('fecha', hoy)
+        .where('estado', 'cancelado')
+        .where('turno_numero', '<', 0)
+        .whereNotIn('id', slotsClamadosSig)
+        .orderByRaw('ABS(turno_numero) ASC')
+        .limit(1)
         .first()
-      const siguiente = Number(rowGlobal?.max ?? 0) + 1
+
+      let siguiente: number
+      if (huecoGlobalSig?.slot_libre != null) {
+        siguiente = Number(huecoGlobalSig.slot_libre)
+      } else {
+        const rowGlobal = await Database.from('turnos_rtms')
+          .where('fecha', hoy)
+          .andWhere('sede_id', usuarioSolicitante.sedeId)
+          .where('turno_numero', '>', 0)
+          .whereIn('estado', ['activo', 'finalizado'])
+          .max('turno_numero as max')
+          .first()
+        siguiente = Number(rowGlobal?.max ?? 0) + 1
+      }
 
       let siguientePorServicio: number | null = null
       if (servicioId || servicioCodigo) {
@@ -1344,16 +1431,31 @@ export default class TurnosRtmController {
           sid = s.id
         }
 
-        const rowSvc = await Database.from('turnos_rtms')
+        const huecoSvcSig = await Database
+          .from('turnos_rtms')
+          .select(Database.raw('ABS(turno_numero_servicio) AS slot_svc_libre'))
+          .where('sede_id', usuarioSolicitante.sedeId)
           .where('fecha', hoy)
-          .andWhere('sede_id', usuarioSolicitante.sedeId)
-          .andWhere('servicio_id', sid!)
-          .where('turno_numero_servicio', '>', 0)
-          .whereIn('estado', ['activo', 'finalizado'])
-          .max('turno_numero_servicio as max')
+          .where('servicio_id', sid!)
+          .where('estado', 'cancelado')
+          .where('turno_numero_servicio', '<', 0)
+          .orderByRaw('ABS(turno_numero_servicio) ASC')
+          .limit(1)
           .first()
 
-        siguientePorServicio = Number(rowSvc?.max ?? 0) + 1
+        if (huecoSvcSig?.slot_svc_libre != null) {
+          siguientePorServicio = Number(huecoSvcSig.slot_svc_libre)
+        } else {
+          const rowSvc = await Database.from('turnos_rtms')
+            .where('fecha', hoy)
+            .andWhere('sede_id', usuarioSolicitante.sedeId)
+            .andWhere('servicio_id', sid!)
+            .where('turno_numero_servicio', '>', 0)
+            .whereIn('estado', ['activo', 'finalizado'])
+            .max('turno_numero_servicio as max')
+            .first()
+          siguientePorServicio = Number(rowSvc?.max ?? 0) + 1
+        }
       }
 
       return response.ok({

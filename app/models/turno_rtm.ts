@@ -193,6 +193,9 @@ export default class TurnoRtm extends BaseModel {
   declare esAvance: boolean
   // ========== FIN AVANCE ==========
 
+  @column({ columnName: 'reasignado_de_turno_id' })
+  declare reasignadoDeTurnoId: number | null
+
   @column({ columnName: 'rep_general_verificado' })
   declare repGeneralVerificado: boolean
 
