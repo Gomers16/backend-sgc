@@ -554,11 +554,6 @@ export default class TurnosRtmController {
         }
       }
 
-      const lockKey = `${usuarioCreador.sedeId!}${hoyISO.replace(/-/g, '')}`
-      const lockId = Number.parseInt(lockKey.substring(0, 10), 10) || 1
-
-      await trx.raw('SELECT pg_advisory_xact_lock(?)', [lockId])
-
       const rowGlobal = await trx
         .from('turnos_rtms')
         .where('sede_id', usuarioCreador.sedeId!)
@@ -566,6 +561,7 @@ export default class TurnosRtmController {
         .where('turno_numero', '>', 0)
         .whereIn('estado', ['activo', 'finalizado'])
         .max('turno_numero as max')
+        .forUpdate()
         .first()
       const nextGlobal: number = Number(rowGlobal?.max ?? 0) + 1
 
@@ -577,6 +573,7 @@ export default class TurnosRtmController {
         .where('turno_numero_servicio', '>', 0)
         .whereIn('estado', ['activo', 'finalizado'])
         .max('turno_numero_servicio as max')
+        .forUpdate()
         .first()
       const nextPorServicio: number = Number(rowSvc?.max ?? 0) + 1
 
