@@ -523,10 +523,13 @@ export default class ComisionesController {
 
     const result = {
       ...dto,
-      aprobado_at: null,
-      pagado_at: null,
-      anulado_at: null,
-      observacion: null,
+      aprobado_at: comision.aprobadoAt?.toISO() ?? null,
+      aprobado_por: comision.aprobadoPor ?? null,
+      pagado_at: comision.pagadoAt?.toISO() ?? null,
+      pagado_por: comision.pagadoPor ?? null,
+      anulado_at: comision.anuladoAt?.toISO() ?? null,
+      anulado_por: comision.anuladoPor ?? null,
+      observacion: comision.observacion ?? null,
     }
 
     return response.ok(result)
@@ -621,8 +624,10 @@ export default class ComisionesController {
     const { cantidad, valor_unitario: valorUnitario } = request.only(['cantidad', 'valor_unitario'])
     const cant = toNumber(cantidad || 1)
     const vu = toNumber(valorUnitario || 0)
+    const nuevoMonto = String(cant * vu)
 
-    comision.monto = String(cant * vu)
+    comision.monto = nuevoMonto
+    comision.montoAsesor = nuevoMonto
     await comision.save()
 
     return this.show({ params, response } as any)
@@ -631,7 +636,7 @@ export default class ComisionesController {
   /**
    * POST /api/comisiones/:id/aprobar
    */
-  public async aprobar({ params, response }: HttpContext) {
+  public async aprobar({ params, response, auth }: HttpContext) {
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -639,6 +644,8 @@ export default class ComisionesController {
       return response.badRequest({ message: 'Solo se pueden aprobar comisiones PENDIENTES' })
 
     comision.estado = 'APROBADA'
+    comision.aprobadoAt = DateTime.now()
+    comision.aprobadoPor = auth.user?.id ?? null
     await comision.save()
     return this.show({ params, response } as any)
   }
@@ -646,7 +653,7 @@ export default class ComisionesController {
   /**
    * POST /api/comisiones/:id/pagar
    */
-  public async pagar({ params, response }: HttpContext) {
+  public async pagar({ params, response, auth }: HttpContext) {
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -654,6 +661,8 @@ export default class ComisionesController {
       return response.badRequest({ message: 'Solo se pueden pagar comisiones APROBADAS' })
 
     comision.estado = 'PAGADA'
+    comision.pagadoAt = DateTime.now()
+    comision.pagadoPor = auth.user?.id ?? null
     await comision.save()
     return this.show({ params, response } as any)
   }
@@ -661,7 +670,7 @@ export default class ComisionesController {
   /**
    * POST /api/comisiones/:id/anular
    */
-  public async anular({ params, response }: HttpContext) {
+  public async anular({ params, request, response, auth }: HttpContext) {
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -669,6 +678,10 @@ export default class ComisionesController {
       return response.badRequest({ message: 'No se pueden anular comisiones PAGADAS' })
 
     comision.estado = 'ANULADA'
+    comision.anuladoAt = DateTime.now()
+    comision.anuladoPor = auth.user?.id ?? null
+    const { observacion } = request.only(['observacion'])
+    if (observacion) comision.observacion = String(observacion).trim()
     await comision.save()
     return this.show({ params, response } as any)
   }
@@ -740,6 +753,18 @@ export default class ComisionesController {
       await CaptacionDateo.query()
         .where('id', captacionDateoId)
         .update(updateData as any)
+    }
+
+    const comisionExistente = await Comision.query()
+      .where('captacion_dateo_id', captacionDateoId!)
+      .where('es_config', false)
+      .whereNot('estado', 'ANULADA')
+      .first()
+
+    if (comisionExistente) {
+      return response.unprocessableEntity({
+        message: `Ya existe una comisión activa (id: ${comisionExistente.id}, estado: ${comisionExistente.estado}) para este turno.`,
+      })
     }
 
     if (payload.tipo_cliente) {

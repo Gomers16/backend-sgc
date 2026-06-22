@@ -130,6 +130,29 @@ export default class Comision extends BaseModel {
   @column({ columnName: 'calculado_por' })
   declare calculadoPor: number | null
 
+  // ========== 📋 CICLO DE VIDA ==========
+  @column.dateTime({ columnName: 'aprobado_at' })
+  declare aprobadoAt: DateTime | null
+
+  @column({ columnName: 'aprobado_por' })
+  declare aprobadoPor: number | null
+
+  @column.dateTime({ columnName: 'pagado_at' })
+  declare pagadoAt: DateTime | null
+
+  @column({ columnName: 'pagado_por' })
+  declare pagadoPor: number | null
+
+  @column.dateTime({ columnName: 'anulado_at' })
+  declare anuladoAt: DateTime | null
+
+  @column({ columnName: 'anulado_por' })
+  declare anuladoPor: number | null
+
+  @column()
+  declare observacion: string | null
+  // ========== FIN CICLO DE VIDA ==========
+
   // ========== 🔄 CAMPOS DE RECURRENCIA ==========
   @column({ columnName: 'descuento_recurrencia_aplicado' })
   declare descuentoRecurrenciaAplicado: boolean
