@@ -115,7 +115,7 @@ const USUARIOS_DATA: UsuarioDato[] = [
     afpId: AFP.PORVENIR,
     arlId: ARL_DEFAULT,
     afcId: AFC_DEFAULT,
-    
+
     ccfId: CCF_DEFAULT,
     ...mc('DIRECTA', 'INDEFINIDO'),
     fechaIngreso: '2025-09-05',
