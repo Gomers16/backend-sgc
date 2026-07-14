@@ -11,7 +11,8 @@ import TurnoRtm from '#models/turno_rtm'
 function toNumber(v: any): number {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0
   if (typeof v === 'string') {
-    const n = Number(v)
+    const cleaned = v.replace(/\./g, '').replace(',', '.')
+    const n = Number(cleaned)
     return Number.isFinite(n) ? n : 0
   }
   return 0
@@ -406,6 +407,12 @@ export default class ComisionesController {
       })
     }
 
+    const globalCfg = await Comision.query()
+      .where('es_config', true)
+      .whereNull('asesor_id')
+      .where((wb) => wb.where('valor_rtm_moto', '>', 0).orWhere('valor_rtm_vehiculo', '>', 0))
+      .first()
+
     const cfgRows = await Comision.query().where('es_config', true).where('meta_rtm', '>', 0)
     const cfgByAsesor = new Map<number, Comision>()
     for (const c of cfgRows) {
@@ -436,8 +443,8 @@ export default class ComisionesController {
 
       const metaRtm = cfg ? (cfg.metaRtm ?? 0) : 0
       const pctMeta = cfg ? toNumber(cfg.porcentajeComisionMeta ?? 0) : 0
-      const valorRtmMoto = cfg ? (cfg.valorRtmMoto ?? 126100) : 126100
-      const valorRtmVehiculo = cfg ? (cfg.valorRtmVehiculo ?? 208738) : 208738
+      const valorRtmMoto = cfg ? cfg.valorRtmMoto : (globalCfg?.valorRtmMoto ?? 0)
+      const valorRtmVehiculo = cfg ? cfg.valorRtmVehiculo : (globalCfg?.valorRtmVehiculo ?? 0)
 
       const totalFacturacionMotos = counts.rtm_motos * valorRtmMoto
       const totalFacturacionVehiculos = counts.rtm_vehiculos * valorRtmVehiculo
@@ -685,6 +692,167 @@ export default class ComisionesController {
     await comision.save()
     return this.show({ params, response } as any)
   }
+
+  /**
+   * POST /api/comisiones/pagar-masivo
+   * Body: { ids: number[], accion: 'APROBAR' | 'PAGAR', fecha_pago?: string }
+   *
+   * APROBAR solo afecta comisiones en PENDIENTE.
+   * PAGAR afecta PENDIENTE o APROBADA (si estaba PENDIENTE, se auto-aprueba
+   * con la misma fecha/usuario, igual que pide el enunciado con COALESCE).
+   * Usa un loop de modelos Lucid (no un UPDATE crudo) para reutilizar la
+   * misma lógica/validación que aprobar()/pagar() individuales, envuelto en
+   * una transacción para que sea todo-o-nada.
+   */
+  public async pagarMasivo({ request, response, auth }: HttpContext) {
+    const { ids, accion, fecha_pago: fechaPago } = request.only(['ids', 'accion', 'fecha_pago'])
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return response.badRequest({ message: 'ids es requerido y debe ser un arreglo no vacío' })
+    }
+    if (accion !== 'APROBAR' && accion !== 'PAGAR') {
+      return response.badRequest({ message: "accion debe ser 'APROBAR' o 'PAGAR'" })
+    }
+
+    const idsNumericos = [
+      ...new Set(
+        (ids as unknown[]).map((id) => Number(id)).filter((id) => Number.isFinite(id))
+      ),
+    ]
+    if (idsNumericos.length === 0) {
+      return response.badRequest({ message: 'ids no contiene valores numéricos válidos' })
+    }
+
+    const usuarioId = auth.user?.id ?? null
+    const ahora = DateTime.now()
+
+    const trx = await Database.transaction()
+    try {
+      const idsActualizadas: number[] = []
+
+      if (accion === 'APROBAR') {
+        const comisiones = await Comision.query({ client: trx })
+          .whereIn('id', idsNumericos)
+          .where('es_config', false)
+          .where('estado', 'PENDIENTE')
+
+        for (const c of comisiones) {
+          c.useTransaction(trx)
+          c.estado = 'APROBADA'
+          c.aprobadoAt = ahora
+          c.aprobadoPor = usuarioId
+          await c.save()
+          idsActualizadas.push(c.id)
+        }
+      } else {
+        const fechaPagoDt = fechaPago ? DateTime.fromISO(fechaPago) : ahora
+        const fechaPagoFinal = fechaPagoDt.isValid ? fechaPagoDt : ahora
+
+        const comisiones = await Comision.query({ client: trx })
+          .whereIn('id', idsNumericos)
+          .where('es_config', false)
+          .whereIn('estado', ['PENDIENTE', 'APROBADA'])
+
+        for (const c of comisiones) {
+          c.useTransaction(trx)
+          if (!c.aprobadoAt) {
+            c.aprobadoAt = ahora
+            c.aprobadoPor = usuarioId
+          }
+          c.estado = 'PAGADA'
+          c.pagadoAt = fechaPagoFinal
+          c.pagadoPor = usuarioId
+          await c.save()
+          idsActualizadas.push(c.id)
+        }
+      }
+
+      await trx.commit()
+
+      const verbo = accion === 'APROBAR' ? 'aprobada(s)' : 'pagada(s)'
+      return response.ok({
+        actualizadas: idsActualizadas.length,
+        ids_actualizadas: idsActualizadas,
+        mensaje: `${idsActualizadas.length} comisión(es) ${verbo} exitosamente`,
+      })
+    } catch (err) {
+      await trx.rollback()
+      throw err
+    }
+  }
+
+  /**
+   * GET /comisiones/resumen-por-asesor?tipo=&fecha_inicio=&fecha_fin=
+   * Resumen de comisiones agrupado por asesor (y convenio) para alimentar
+   * la lista expandible de "pagos masivos" del frontend.
+   */
+  public async resumenPorAsesor({ request, response }: HttpContext) {
+    const tipo = request.input('tipo') as string | undefined
+    if (!tipo || !['ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'CONVENIO'].includes(tipo)) {
+      return response.badRequest({
+        message: 'tipo debe ser ASESOR_COMERCIAL, ASESOR_CONVENIO o CONVENIO',
+      })
+    }
+
+    const fechaInicio = request.input('fecha_inicio') as string | undefined
+    const fechaFin = request.input('fecha_fin') as string | undefined
+
+    const query = Database.from('comisiones as c')
+      .join('agentes_captacions as a', 'a.id', 'c.asesor_id')
+      .leftJoin('convenios as conv', 'conv.id', 'c.convenio_id')
+      .where('c.es_config', false)
+
+    if (tipo === 'CONVENIO') {
+      query.whereNotNull('c.convenio_id')
+    } else {
+      query.where('a.tipo', tipo)
+    }
+
+    if (fechaInicio && fechaFin) {
+      query.whereRaw('DATE(c.fecha_calculo) BETWEEN ? AND ?', [fechaInicio, fechaFin])
+    }
+
+    const rows = (await query
+      .select(
+        'a.id as asesor_id',
+        'a.nombre as asesor_nombre',
+        'a.tipo as asesor_tipo',
+        'conv.id as convenio_id',
+        'conv.nombre as convenio_nombre'
+      )
+      .select(Database.raw("COUNT(CASE WHEN c.estado = 'PENDIENTE' THEN 1 END) as pendientes"))
+      .select(Database.raw("COUNT(CASE WHEN c.estado = 'APROBADA' THEN 1 END) as aprobadas"))
+      .select(Database.raw("COUNT(CASE WHEN c.estado = 'PAGADA' THEN 1 END) as pagadas"))
+      .select(
+        Database.raw(
+          "SUM(CASE WHEN c.estado IN ('PENDIENTE','APROBADA') THEN c.monto ELSE 0 END) as total_por_pagar"
+        )
+      )
+      .select(Database.raw("SUM(CASE WHEN c.estado = 'PENDIENTE' THEN c.monto ELSE 0 END) as total_pendiente"))
+      .select(Database.raw("SUM(CASE WHEN c.estado = 'APROBADA' THEN c.monto ELSE 0 END) as total_aprobada"))
+      .groupBy('a.id', 'a.nombre', 'a.tipo', 'conv.id', 'conv.nombre')
+      .havingRaw(
+        "COUNT(CASE WHEN c.estado = 'PENDIENTE' THEN 1 END) + COUNT(CASE WHEN c.estado = 'APROBADA' THEN 1 END) > 0"
+      )
+      .orderBy('total_por_pagar', 'desc')) as any[]
+
+    const asesores = rows.map((r) => ({
+      asesor_id: Number(r.asesor_id),
+      asesor_nombre: r.asesor_nombre,
+      asesor_tipo: r.asesor_tipo,
+      convenio_id: r.convenio_id !== null ? Number(r.convenio_id) : null,
+      convenio_nombre: r.convenio_nombre ?? null,
+      pendientes: Number(r.pendientes),
+      aprobadas: Number(r.aprobadas),
+      pagadas: Number(r.pagadas),
+      total_por_pagar: Number(r.total_por_pagar) || 0,
+      total_pendiente: Number(r.total_pendiente) || 0,
+      total_aprobada: Number(r.total_aprobada) || 0,
+    }))
+
+    return response.ok({ tipo, asesores })
+  }
+
   /**
    * POST /api/comisiones
    */

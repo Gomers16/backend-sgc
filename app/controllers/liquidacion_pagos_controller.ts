@@ -13,8 +13,8 @@ import TramiteLiquidacion from '#models/tramite_liquidacion'
 import LiquidacionPago from '#models/liquidacion_pago'
 
 const TIPO_TRAMITE_LABEL: Record<string, string> = {
-  MATRICULA_REGISTRO: 'MATRICULA / REGISTRO',
-  TRASPASO: 'TRASPASO',
+  MATRICULA_REGISTRO:             'MATRICULA / REGISTRO',
+  TRASPASO:                       'TRASPASO',
   TRASLADO_MATRICULA_REGISTRO:    'TRASLADO MATRICULA / REGISTRO',
   RADICADO_MATRICULA_REGISTRO:    'RADICADO MATRICULA / REGISTRO',
   CAMBIO_COLOR:                   'CAMBIO DE COLOR',
@@ -38,15 +38,9 @@ const formatPeso = (valor: number | null): string =>
 
 function calcularTotal(liq: TramiteLiquidacion): number {
   const campos = [
-    liq.retencion,
-    liq.derechosTraspaso,
-    liq.pazSalvo,
-    liq.levantamientoPrenda,
-    liq.inscripcionPrenda,
-    liq.papeleria,
-    liq.honorarios,
-    liq.impuestoAnioActual,
-    liq.impuestoAniosVencidos,
+    liq.retencion, liq.derechosTraspaso, liq.pazSalvo, liq.levantamientoPrenda,
+    liq.inscripcionPrenda, liq.papeleria, liq.honorarios,
+    liq.impuestoAnioActual, liq.impuestoAniosVencidos,
   ]
   return campos.reduce<number>((sum, v) => sum + (Number(v) || 0), 0)
 }
@@ -126,9 +120,9 @@ export default class LiquidacionPagosController {
         return response.notFound({ message: 'Liquidación no encontrada' })
       }
 
-      const fechaRaw = request.input('fecha') as string | undefined
-      const monto = request.input('monto')
-      const formaPago = request.input('formaPago') as string | undefined
+      const fechaRaw       = request.input('fecha')          as string | undefined
+      const monto          = request.input('monto')
+      const formaPago      = request.input('formaPago')      as string | undefined
       const referenciaPago = request.input('referenciaPago') as string | undefined
 
       if (!fechaRaw || monto == null) {
@@ -231,8 +225,8 @@ export default class LiquidacionPagosController {
       const logoPath = app.makePath('storage/logo_tramites/logo_tramites_centro.png')
       if (existsSync(logoPath)) {
         doc.image(logoPath, 50, 45, { width: 110 })
-        doc.moveDown(4)
       }
+      doc.moveDown(4)
 
       doc
         .font('Helvetica-Bold')

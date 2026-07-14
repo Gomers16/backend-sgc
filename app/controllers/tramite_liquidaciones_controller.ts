@@ -161,8 +161,8 @@ export default class TramiteLiquidacionesController {
       const logoPath = app.makePath('storage/logo_tramites/logo_tramites_centro.png')
       if (existsSync(logoPath)) {
         doc.image(logoPath, 50, 45, { width: 110 })
-        doc.moveDown(4)
       }
+      doc.moveDown(4)
 
       // Título
       doc
