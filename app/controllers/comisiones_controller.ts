@@ -6,6 +6,8 @@ import Database from '@adonisjs/lucid/services/db'
 import Comision from '#models/comision'
 import AgenteCaptacion from '#models/agente_captacion'
 import TurnoRtm from '#models/turno_rtm'
+import Liquidacion, { type LiquidacionTipoOrigen, type LiquidacionTipoPeriodo } from '#models/liquidacion'
+import LiquidacionDetalle from '#models/liquidacion_detalle'
 
 /* ========= Helpers ========= */
 function toNumber(v: any): number {
@@ -288,6 +290,8 @@ export default class ComisionesController {
     const estado = request.input('estado') as string | undefined
     const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
     const placa = request.input('placa') as string | undefined // 🆕
+    const tipoAsesor = request.input('tipoAsesor') as string | undefined // 🆕
+    const tipoCaptacion = request.input('tipoCaptacion') as string | undefined // 🆕
     const sortBy = (request.input('sortBy') || 'id') as string
     const order = (request.input('order') || 'desc') as 'asc' | 'desc'
 
@@ -331,6 +335,19 @@ export default class ComisionesController {
       })
     }
 
+    // 🆕 Filtro por tipo de asesor/convenio (antes solo se aplicaba en el
+    // frontend sobre la página ya paginada, rompiendo la paginación server-side)
+    if (tipoAsesor === 'ASESOR_COMERCIAL' || tipoAsesor === 'ASESOR_CONVENIO') {
+      query.whereHas('asesor', (aq) => aq.where('tipo', tipoAsesor))
+    } else if (tipoAsesor === 'CONVENIO') {
+      query.whereNotNull('convenio_id')
+    }
+
+    // 🆕 Filtro por tipo de captación (independiente de tipoAsesor, para poder
+    // combinarlos: ej. un comercial + solo sus comisiones de convenio)
+    if (tipoCaptacion === 'NUEVO_DIRECTO') query.whereNull('convenio_id')
+    else if (tipoCaptacion === 'CONVENIO') query.whereNotNull('convenio_id')
+
     const SORTABLE = new Set(['id', 'estado', 'fecha_calculo', 'monto', 'asesor_id', 'convenio_id'])
     let sortCol = sortBy === 'generado_at' ? 'fecha_calculo' : sortBy
     if (!SORTABLE.has(sortCol)) sortCol = 'id'
@@ -346,6 +363,193 @@ export default class ComisionesController {
       total: meta.total,
       page: meta.currentPage,
       perPage: meta.perPage,
+    })
+  }
+
+  /**
+   * GET /api/comisiones/resumen
+   * Resumen agregado (sin paginar) por tipo de captación y por estado, con
+   * los mismos filtros que index(). Se pide en paralelo a la lista paginada
+   * para no cargar la agregación en cada página.
+   */
+  public async resumen({ request, response }: HttpContext) {
+    const desde = request.input('desde') as string | undefined
+    const hasta = request.input('hasta') as string | undefined
+    const asesorId = request.input('asesorId') as number | undefined
+    const convenioId = request.input('convenioId') as number | undefined
+    const estado = request.input('estado') as string | undefined
+    const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
+    const placa = request.input('placa') as string | undefined
+    const tipoAsesor = request.input('tipoAsesor') as string | undefined
+    const tipoCaptacion = request.input('tipoCaptacion') as string | undefined // 🆕
+
+    const baseQuery = () => {
+      const q = Database.from('comisiones')
+        .where((qb) => qb.where('es_config', false).orWhereNull('es_config'))
+
+      if (desde) q.where('fecha_calculo', '>=', desde + ' 00:00:00')
+      if (hasta) q.where('fecha_calculo', '<=', hasta + ' 23:59:59')
+      if (asesorId) q.where('asesor_id', asesorId)
+      if (convenioId) q.where('convenio_id', convenioId)
+      if (estado) q.where('estado', estado)
+      if (tipoVehiculo && ['MOTO', 'VEHICULO'].includes(tipoVehiculo.toUpperCase()))
+        q.where('tipo_vehiculo', tipoVehiculo.toUpperCase())
+      if (placa) {
+        const placaNorm = placa.replace(/[\s-]/g, '').toUpperCase()
+        q.whereIn(
+          'captacion_dateo_id',
+          Database.from('captacion_dateos as cd')
+            .join('turnos_rtms as t', 't.id', 'cd.consumido_turno_id')
+            .whereRaw("REPLACE(REPLACE(UPPER(t.placa), '-', ''), ' ', '') = ?", [placaNorm])
+            .select('cd.id')
+        )
+      }
+      if (tipoAsesor === 'ASESOR_COMERCIAL' || tipoAsesor === 'ASESOR_CONVENIO') {
+        q.whereIn(
+          'asesor_id',
+          Database.from('agentes_captacions').where('tipo', tipoAsesor).select('id')
+        )
+      } else if (tipoAsesor === 'CONVENIO') {
+        q.whereNotNull('convenio_id')
+      }
+
+      // 🆕 Igual que tipoAsesor: el backend lo soporta, pero el frontend NO lo
+      // envía en la llamada de las tarjetas de arriba (quedan estáticas ante
+      // este filtro, mismo criterio que ya aplica a `estado`).
+      if (tipoCaptacion === 'NUEVO_DIRECTO') q.whereNull('convenio_id')
+      else if (tipoCaptacion === 'CONVENIO') q.whereNotNull('convenio_id')
+
+      return q
+    }
+
+    // Mismo cálculo de "monto total" que valor_total en mapComisionToDto
+    // (monto_asesor/monto_convenio si existen, si no fallback a monto/base).
+    const MONTO_SQL = 'COALESCE(monto_asesor, monto) + COALESCE(monto_convenio, base)'
+
+    const porTipoRows = (await baseQuery()
+      .select(
+        Database.raw(
+          `CASE WHEN convenio_id IS NULL THEN 'NUEVO_DIRECTO' ELSE 'CONVENIO' END as tipo_captacion`
+        )
+      )
+      .count('* as cantidad')
+      .sum(Database.raw(`(${MONTO_SQL})`) as any, 'monto')
+      .groupBy('tipo_captacion')) as any[]
+
+    const porTipoCaptacion: Record<string, { cantidad: number; monto: number }> = {
+      NUEVO_DIRECTO: { cantidad: 0, monto: 0 },
+      CONVENIO: { cantidad: 0, monto: 0 },
+    }
+    let totalTipoCantidad = 0
+    let totalTipoMonto = 0
+    for (const r of porTipoRows) {
+      const cantidad = Number(r.cantidad)
+      const monto = Number(r.monto) || 0
+      porTipoCaptacion[r.tipo_captacion] = { cantidad, monto }
+      totalTipoCantidad += cantidad
+      totalTipoMonto += monto
+    }
+
+    const porEstadoRows = (await baseQuery()
+      .select('estado')
+      .count('* as cantidad')
+      .sum(Database.raw(`(${MONTO_SQL})`) as any, 'monto')
+      .groupBy('estado')) as any[]
+
+    const porEstado: Record<string, { cantidad: number; monto: number }> = {
+      PENDIENTE: { cantidad: 0, monto: 0 },
+      APROBADA: { cantidad: 0, monto: 0 },
+      PAGADA: { cantidad: 0, monto: 0 },
+      ANULADA: { cantidad: 0, monto: 0 },
+    }
+    let totalEstadoCantidad = 0
+    let totalEstadoMonto = 0
+    for (const r of porEstadoRows) {
+      const cantidad = Number(r.cantidad)
+      const monto = Number(r.monto) || 0
+      porEstado[r.estado] = { cantidad, monto }
+      totalEstadoCantidad += cantidad
+      totalEstadoMonto += monto
+    }
+
+    // 🆕 Resumen de descuentos aplicados por tipo (nombre de catálogo).
+    // `comisiones` no tiene descuento_id propio: el descuento sale del ticket
+    // de caja o del dateo (precedencia ticket > dateo, igual que
+    // mapComisionToDto). Se reutiliza esa misma función por fila para no
+    // duplicar la lógica de resolución en SQL.
+    // Respeta TODOS los filtros activos salvo `estado` (mismo criterio que
+    // "Total Generado": no está anuladas, sin importar el filtro de estado).
+    const descuentosQuery = Comision.query()
+      .where((q) => q.where('es_config', false).orWhereNull('es_config'))
+      .whereNot('estado', 'ANULADA')
+      .preload('dateo', (dq) => {
+        dq.preload('descuento')
+        dq.preload('turno', (tq) => {
+          tq.preload('facturacionTickets', (fq) => fq.preload('descuento'))
+        })
+      })
+
+    if (desde) descuentosQuery.where('fecha_calculo', '>=', desde + ' 00:00:00')
+    if (hasta) descuentosQuery.where('fecha_calculo', '<=', hasta + ' 23:59:59')
+    if (asesorId) descuentosQuery.where('asesor_id', asesorId)
+    if (convenioId) descuentosQuery.where('convenio_id', convenioId)
+    if (tipoVehiculo && ['MOTO', 'VEHICULO'].includes(tipoVehiculo.toUpperCase()))
+      descuentosQuery.where('tipo_vehiculo', tipoVehiculo.toUpperCase())
+    if (placa) {
+      const placaNorm = placa.replace(/[\s-]/g, '').toUpperCase()
+      descuentosQuery.whereHas('dateo', (dq) => {
+        dq.whereHas('turno', (tq) => {
+          tq.whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNorm])
+        })
+      })
+    }
+    if (tipoAsesor === 'ASESOR_COMERCIAL' || tipoAsesor === 'ASESOR_CONVENIO') {
+      descuentosQuery.whereHas('asesor', (aq) => aq.where('tipo', tipoAsesor))
+    } else if (tipoAsesor === 'CONVENIO') {
+      descuentosQuery.whereNotNull('convenio_id')
+    }
+    if (tipoCaptacion === 'NUEVO_DIRECTO') descuentosQuery.whereNull('convenio_id')
+    else if (tipoCaptacion === 'CONVENIO') descuentosQuery.whereNotNull('convenio_id')
+
+    const filasDescuento = await descuentosQuery
+
+    const porDescuentoMap = new Map<
+      number,
+      { descuento_id: number; nombre: string; cantidad: number; monto: number }
+    >()
+    for (const c of filasDescuento) {
+      const dto = mapComisionToDto(c)
+      if (!dto.descuento || !dto.descuento_monto_aplicado) continue
+      const actual = porDescuentoMap.get(dto.descuento.id) ?? {
+        descuento_id: dto.descuento.id,
+        nombre: dto.descuento.nombre,
+        cantidad: 0,
+        monto: 0,
+      }
+      actual.cantidad += 1
+      actual.monto += dto.descuento_monto_aplicado
+      porDescuentoMap.set(dto.descuento.id, actual)
+    }
+    const porDescuento = Array.from(porDescuentoMap.values()).sort((a, b) => b.monto - a.monto)
+    const totalDescuentos = porDescuento.reduce(
+      (acc, r) => ({ cantidad: acc.cantidad + r.cantidad, monto: acc.monto + r.monto }),
+      { cantidad: 0, monto: 0 }
+    )
+
+    return response.ok({
+      por_tipo_captacion: {
+        nuevo_directo: porTipoCaptacion.NUEVO_DIRECTO,
+        convenio: porTipoCaptacion.CONVENIO,
+        total: { cantidad: totalTipoCantidad, monto: totalTipoMonto },
+      },
+      por_estado: {
+        ...porEstado,
+        total: { cantidad: totalEstadoCantidad, monto: totalEstadoMonto },
+      },
+      resumen_descuentos: {
+        total: totalDescuentos,
+        por_tipo: porDescuento,
+      },
     })
   }
 
@@ -704,7 +908,23 @@ export default class ComisionesController {
    * una transacción para que sea todo-o-nada.
    */
   public async pagarMasivo({ request, response, auth }: HttpContext) {
-    const { ids, accion, fecha_pago: fechaPago } = request.only(['ids', 'accion', 'fecha_pago'])
+    const {
+      ids,
+      accion,
+      fecha_pago: fechaPago,
+      origen,
+      tipo_periodo: tipoPeriodoRaw,
+      fecha_inicio: fechaInicioRaw,
+      fecha_fin: fechaFinRaw,
+    } = request.only([
+      'ids',
+      'accion',
+      'fecha_pago',
+      'origen',
+      'tipo_periodo',
+      'fecha_inicio',
+      'fecha_fin',
+    ])
 
     if (!Array.isArray(ids) || ids.length === 0) {
       return response.badRequest({ message: 'ids es requerido y debe ser un arreglo no vacío' })
@@ -724,6 +944,23 @@ export default class ComisionesController {
 
     const usuarioId = auth.user?.id ?? null
     const ahora = DateTime.now()
+
+    // Origen del pago (modal Liquidar / tabla general / panel por asesor):
+    // lo declara el frontend, ya que el backend no puede inferirlo de los
+    // ids solos. Si no llega (llamador desconocido/futuro), se asume el
+    // caso más genérico en vez de romper el pago por un dato de trazabilidad.
+    const ORIGENES_VALIDOS: LiquidacionTipoOrigen[] = [
+      'MODAL_LIQUIDAR',
+      'TABLA_GENERAL',
+      'PANEL_ASESOR',
+    ]
+    const tipoOrigen: LiquidacionTipoOrigen = ORIGENES_VALIDOS.includes(origen)
+      ? origen
+      : 'TABLA_GENERAL'
+    const PERIODOS_VALIDOS = ['DIARIO', 'SEMANAL', 'QUINCENAL', 'MENSUAL']
+    const tipoPeriodo: LiquidacionTipoPeriodo = PERIODOS_VALIDOS.includes(tipoPeriodoRaw)
+      ? tipoPeriodoRaw
+      : null
 
     const trx = await Database.transaction()
     try {
@@ -752,6 +989,8 @@ export default class ComisionesController {
           .where('es_config', false)
           .whereIn('estado', ['PENDIENTE', 'APROBADA'])
 
+        const comisionesRtmPagadas: Comision[] = []
+
         for (const c of comisiones) {
           c.useTransaction(trx)
           if (!c.aprobadoAt) {
@@ -763,6 +1002,57 @@ export default class ComisionesController {
           c.pagadoPor = usuarioId
           await c.save()
           idsActualizadas.push(c.id)
+          if (c.tipoServicio === 'RTM') comisionesRtmPagadas.push(c)
+        }
+
+        // Historial de liquidaciones: un registro por CADA pago ejecutado
+        // (sin importar el origen), pero SOLO sobre comisiones RTM (mismo
+        // alcance que el modal de Liquidar) y SOLO para PAGAR, no APROBAR.
+        // Si el batch pagado no trae ninguna comisión RTM, no se crea evento.
+        if (comisionesRtmPagadas.length > 0) {
+          const detalle = comisionesRtmPagadas.map((c) => ({
+            comisionId: c.id,
+            monto: toNumber(c.montoAsesor) + toNumber(c.montoConvenio),
+          }))
+          const montoTotal = detalle.reduce((acc, d) => acc + d.monto, 0)
+
+          const fechasCalculo = comisionesRtmPagadas.map((c) => c.fechaCalculo)
+          const fechaInicioModal =
+            tipoOrigen === 'MODAL_LIQUIDAR' && fechaInicioRaw
+              ? DateTime.fromISO(String(fechaInicioRaw))
+              : null
+          const fechaFinModal =
+            tipoOrigen === 'MODAL_LIQUIDAR' && fechaFinRaw
+              ? DateTime.fromISO(String(fechaFinRaw))
+              : null
+          const fechaInicio =
+            fechaInicioModal && fechaInicioModal.isValid
+              ? fechaInicioModal
+              : DateTime.min(...fechasCalculo) ?? ahora
+          const fechaFin =
+            fechaFinModal && fechaFinModal.isValid
+              ? fechaFinModal
+              : DateTime.max(...fechasCalculo) ?? ahora
+
+          const liquidacion = new Liquidacion()
+          liquidacion.useTransaction(trx)
+          liquidacion.fechaInicio = fechaInicio
+          liquidacion.fechaFin = fechaFin
+          liquidacion.tipoOrigen = tipoOrigen
+          liquidacion.tipoPeriodo = tipoOrigen === 'MODAL_LIQUIDAR' ? tipoPeriodo : null
+          liquidacion.montoTotal = montoTotal
+          liquidacion.cantidadComisiones = comisionesRtmPagadas.length
+          liquidacion.usuarioId = usuarioId
+          await liquidacion.save()
+
+          await LiquidacionDetalle.createMany(
+            detalle.map((d) => ({
+              liquidacionId: liquidacion.id,
+              comisionId: d.comisionId,
+              monto: d.monto,
+            })),
+            { client: trx }
+          )
         }
       }
 
@@ -795,6 +1085,14 @@ export default class ComisionesController {
 
     const fechaInicio = request.input('fecha_inicio') as string | undefined
     const fechaFin = request.input('fecha_fin') as string | undefined
+    // 🆕 Mismos filtros que index()/resumen(), para que el acordeón por
+    // asesor no ignore lo que ya está filtrando el resto de la pantalla.
+    const estado = request.input('estado') as string | undefined
+    const tipoVehiculo = request.input('tipoVehiculo') as string | undefined
+    const placa = request.input('placa') as string | undefined
+    const asesorId = request.input('asesorId') as number | undefined
+    const convenioId = request.input('convenioId') as number | undefined
+    const tipoCaptacion = request.input('tipoCaptacion') as string | undefined // 🆕
 
     const query = Database.from('comisiones as c')
       .join('agentes_captacions as a', 'a.id', 'c.asesor_id')
@@ -810,6 +1108,23 @@ export default class ComisionesController {
     if (fechaInicio && fechaFin) {
       query.whereRaw('DATE(c.fecha_calculo) BETWEEN ? AND ?', [fechaInicio, fechaFin])
     }
+    if (estado) query.where('c.estado', estado)
+    if (tipoVehiculo && ['MOTO', 'VEHICULO'].includes(tipoVehiculo.toUpperCase()))
+      query.where('c.tipo_vehiculo', tipoVehiculo.toUpperCase())
+    if (placa) {
+      const placaNorm = placa.replace(/[\s-]/g, '').toUpperCase()
+      query.whereIn(
+        'c.captacion_dateo_id',
+        Database.from('captacion_dateos as cd')
+          .join('turnos_rtms as t', 't.id', 'cd.consumido_turno_id')
+          .whereRaw("REPLACE(REPLACE(UPPER(t.placa), '-', ''), ' ', '') = ?", [placaNorm])
+          .select('cd.id')
+      )
+    }
+    if (asesorId) query.where('c.asesor_id', asesorId)
+    if (convenioId) query.where('c.convenio_id', convenioId)
+    if (tipoCaptacion === 'NUEVO_DIRECTO') query.whereNull('c.convenio_id')
+    else if (tipoCaptacion === 'CONVENIO') query.whereNotNull('c.convenio_id')
 
     const rows = (await query
       .select(
@@ -831,7 +1146,10 @@ export default class ComisionesController {
       .select(Database.raw("SUM(CASE WHEN c.estado = 'APROBADA' THEN c.monto ELSE 0 END) as total_aprobada"))
       .groupBy('a.id', 'a.nombre', 'a.tipo', 'conv.id', 'conv.nombre')
       .havingRaw(
-        "COUNT(CASE WHEN c.estado = 'PENDIENTE' THEN 1 END) + COUNT(CASE WHEN c.estado = 'APROBADA' THEN 1 END) > 0"
+        estado
+          ? "COUNT(CASE WHEN c.estado = ? THEN 1 END) > 0"
+          : "COUNT(CASE WHEN c.estado = 'PENDIENTE' THEN 1 END) + COUNT(CASE WHEN c.estado = 'APROBADA' THEN 1 END) > 0",
+        estado ? [estado] : []
       )
       .orderBy('total_por_pagar', 'desc')) as any[]
 

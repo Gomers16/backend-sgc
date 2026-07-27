@@ -797,6 +797,31 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
       ])
 
+    // ⏱ Configuración de horas de exclusividad del dateo (buildReserva)
+    router
+      .get('/captacion-dateos/config/exclusividad', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().exclusividadConfigGet(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ])
+
+    router
+      .post('/captacion-dateos/config/exclusividad', async (ctx) => {
+        const { default: CaptacionDateosController } = await import(
+          '#controllers/captacion_dateos_controller'
+        )
+        return new CaptacionDateosController().exclusividadConfigUpsert(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }),
+      ])
+
     router
       .get('/captacion-dateos/:id', async (ctx) => {
         const { default: CaptacionDateosController } = await import(
@@ -1168,6 +1193,18 @@ router
       .get('/comisiones', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
         return new ComisionesController().index(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'],
+        }),
+      ])
+
+    router
+      .get('/comisiones/resumen', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().resumen(ctx)
       })
       .use([
         middleware.auth(),
@@ -2087,6 +2124,144 @@ router
             '#controllers/reportes_administrativos_controller'
           )
           return new ReportesAdministrativosController().detalleComisiones(ctx)
+        })
+        router.get('/liquidacion-rtm', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().liquidacionRtm(ctx)
+        })
+        router.get('/liquidacion-rtm/excel', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().liquidacionRtmExcel(ctx)
+        })
+        router.get('/historial-liquidaciones/excel', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().historialLiquidacionesExcel(ctx)
+        })
+        router.get('/historial-liquidaciones', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().historialLiquidaciones(ctx)
+        })
+        router.get('/historial-liquidaciones/:id', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().historialLiquidacionDetalle(ctx)
+        })
+        router.get('/trazabilidad-rtm', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().trazabilidadRtm(ctx)
+        })
+        router.get('/trazabilidad-rtm/excel', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().trazabilidadRtmExcel(ctx)
+        })
+        router.get('/meta-mensual/config', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualConfigGet(ctx)
+        })
+        router.post('/meta-mensual/config', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualConfigUpsert(ctx)
+        })
+        router.get('/meta-mensual/resumen', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualResumen(ctx)
+        })
+        router.get('/meta-mensual/diario', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualDiario(ctx)
+        })
+        router.get('/meta-mensual/semanal', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualSemanal(ctx)
+        })
+        router.get('/meta-mensual/proyectado', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualProyectado(ctx)
+        })
+        router.get('/meta-mensual/rango', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualRango(ctx)
+        })
+        router.get('/super-informe/meta-mensual', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaMensualSuperInforme(ctx)
+        })
+        router.get('/meta-comercial/resumen', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialResumen(ctx)
+        })
+        router.get('/meta-comercial/diario', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialDiario(ctx)
+        })
+        router.get('/meta-comercial/semanal', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialSemanal(ctx)
+        })
+        router.get('/meta-comercial/proyectado', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialProyectado(ctx)
+        })
+        router.get('/meta-comercial/detalle-vehiculo', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialDetalleVehiculo(ctx)
+        })
+        router.get('/meta-comercial/ingreso-real-dateo', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialIngresoRealDateo(ctx)
+        })
+        router.get('/super-informe/meta-comercial', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().metaComercialSuperInforme(ctx)
+        })
+        router.get('/super-informe/pdf', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().superInformePdf(ctx)
         })
       })
       .prefix('/reportes-admin')

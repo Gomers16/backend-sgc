@@ -14,6 +14,7 @@ import CaptacionDateo from '#models/captacion_dateo'
 import FacturacionTicket from '#models/facturacion_ticket'
 import AgenteCaptacion from '#models/agente_captacion'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
+import { buildReserva } from '#services/reserva_dateo_service'
 
 // ===== Helpers =====
 const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss')
@@ -28,6 +29,13 @@ const VALID_TIPOS_VEHICULO: TipoVehiculoDB[] = [
 ]
 
 type CanalAtrib = 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
+
+type HistItem = {
+  id: number
+  fechaStr: string
+  clienteNombre: string | null
+  servicioCodigo: string | null
+}
 
 function normalizePlaca(v?: string) {
   return v ? v.replace(/[\s-]/g, '').toUpperCase() : v
@@ -47,34 +55,6 @@ function bloqueoMesesPorServicio(codigo?: string): number {
   const c = (codigo || '').toUpperCase()
   if (c === 'RTM' || c === 'SOAT') return 12
   return 0
-}
-
-function ttlSinConsumir(): number {
-  return Number(process.env.TTL_SIN_CONSUMIR_DIAS ?? 7)
-}
-function ttlPostConsumo(): number {
-  return Number(process.env.TTL_POST_CONSUMO_DIAS ?? 365)
-}
-function buildReserva(d: CaptacionDateo) {
-  const now = new Date()
-  let vigente = false
-  let bloqueaHasta: Date | null = null
-
-  if (d.consumidoTurnoId && d.consumidoAt) {
-    const hasta = new Date(d.consumidoAt.toJSDate().getTime())
-    hasta.setDate(hasta.getDate() + ttlPostConsumo())
-    vigente = now < hasta
-    bloqueaHasta = hasta
-  } else {
-    const created = d.createdAt?.toJSDate()
-    if (created) {
-      const hasta = new Date(created.getTime())
-      hasta.setDate(hasta.getDate() + ttlSinConsumir())
-      vigente = now < hasta
-      bloqueaHasta = hasta
-    }
-  }
-  return { vigente, bloqueaHasta }
 }
 
 const normalizeCanal = (v?: string): CanalAtrib | null => {
@@ -232,91 +212,11 @@ export default class TurnosRtmController {
 
       const turnos = paginatedResult.all()
 
-      // ====== FACTURACIÓN CONFIRMADA ======
-      const turnoIds = turnos.map((t) => t.id)
-      let turnosConFactura = new Set<number>()
-      if (turnoIds.length > 0) {
-        const facturadas = await FacturacionTicket.query()
-          .whereIn('turno_id', turnoIds)
-          .where('estado', 'CONFIRMADA')
-          .select('turno_id')
-
-        turnosConFactura = new Set<number>(
-          facturadas.map((f) => (f as any).turnoId ?? (f as any).turno_id)
-        )
-      }
-
-      // 🔥 HISTORIAL OPTIMIZADO (UNA SOLA CONSULTA)
-      type HistItem = {
-        id: number
-        fechaStr: string
-        clienteNombre: string | null
-        servicioCodigo: string | null
-      }
-
-      const placasUnicas = Array.from(new Set(turnos.map((t) => t.placa)))
-      const historialPorPlaca: Record<string, HistItem[]> = {}
-
-      if (placasUnicas.length > 0) {
-        const rows = await TurnoRtm.query()
-          .whereIn('placa', placasUnicas)
-          .whereNot('estado', 'inactivo')
-          .orderBy('fecha', 'asc')
-          .orderBy('hora_ingreso', 'asc')
-          .preload('cliente')
-          .preload('servicio')
-
-        rows.forEach((r) => {
-          if (!historialPorPlaca[r.placa]) {
-            historialPorPlaca[r.placa] = []
-          }
-          historialPorPlaca[r.placa].push({
-            id: r.id,
-            fechaStr: toMySQLDate(r.fecha as DateTime),
-            clienteNombre: this.getClienteNombre(r.cliente),
-            servicioCodigo: r.servicio ? ((r.servicio as any).codigoServicio ?? null) : null,
-          })
-        })
-      }
-
-      const visitaLabel = (n: number | null): string => {
-        if (!n || n <= 0) return '—'
-        if (n === 1) return 'Primera vez'
-        if (n === 2) return 'Segunda vez'
-        if (n === 3) return 'Tercera vez'
-        return `${n}ª vez`
-      }
-
-      const payload = turnos.map((t) => {
-        const plain = t.serialize()
-        const hist = historialPorPlaca[t.placa] ?? []
-
-        let visitaNumero: number | null = null
-        const ultimasFechas: string[] = []
-        let visitasDetalle: HistItem[] = []
-
-        if (hist.length) {
-          const idxFound = hist.findIndex((h) => h.id === t.id)
-          const idx = idxFound >= 0 ? idxFound : hist.length - 1
-
-          visitaNumero = idx + 1
-          if (idx > 0) ultimasFechas.push(hist[idx - 1].fechaStr)
-          if (idx > 1) ultimasFechas.push(hist[idx - 2].fechaStr)
-
-          visitasDetalle = hist
-        }
-
-        return {
-          ...plain,
-          tieneFacturacion: turnosConFactura.has(t.id),
-          tieneCertificacion: (t.certificaciones ?? []).length > 0,
-
-          visitaVehiculoNumero: visitaNumero,
-          visitaVehiculoTexto: visitaLabel(visitaNumero),
-          visitaVehiculoUltimasFechas: ultimasFechas,
-          visitasVehiculoDetalle: visitasDetalle,
-        }
-      })
+      const camposDerivados = await this.computeCamposDerivados(turnos)
+      const payload = turnos.map((t) => ({
+        ...t.serialize(),
+        ...camposDerivados.get(t.id),
+      }))
 
       return response.ok(payload)
     } catch (error) {
@@ -335,6 +235,106 @@ export default class TurnosRtmController {
     if (partes) return partes
     if (any.razonSocial) return String(any.razonSocial)
     return null
+  }
+
+  /**
+   * Campos derivados que NO vienen directo de la columna `turnos_rtms`: si
+   * tiene facturación CONFIRMADA, y el historial de visitas del vehículo
+   * (mismo cálculo — antes solo vivía en index()). Compartido por index() y
+   * show() para que el modal de detalle de turno se vea idéntico sin
+   * importar si se abre desde Estado de Turnos o desde Comisiones.
+   */
+  private async computeCamposDerivados(turnos: TurnoRtm[]): Promise<Map<number, {
+    tieneFacturacion: boolean
+    tieneCertificacion: boolean
+    visitaVehiculoNumero: number | null
+    visitaVehiculoTexto: string
+    visitaVehiculoUltimasFechas: string[]
+    visitasVehiculoDetalle: HistItem[]
+  }>> {
+    const resultado = new Map<number, {
+      tieneFacturacion: boolean
+      tieneCertificacion: boolean
+      visitaVehiculoNumero: number | null
+      visitaVehiculoTexto: string
+      visitaVehiculoUltimasFechas: string[]
+      visitasVehiculoDetalle: HistItem[]
+    }>()
+    if (turnos.length === 0) return resultado
+
+    // ====== FACTURACIÓN CONFIRMADA ======
+    const turnoIds = turnos.map((t) => t.id)
+    const facturadas = await FacturacionTicket.query()
+      .whereIn('turno_id', turnoIds)
+      .where('estado', 'CONFIRMADA')
+      .select('turno_id')
+    const turnosConFactura = new Set<number>(
+      facturadas.map((f) => (f as any).turnoId ?? (f as any).turno_id)
+    )
+
+    // 🔥 HISTORIAL OPTIMIZADO (UNA SOLA CONSULTA)
+    const placasUnicas = Array.from(new Set(turnos.map((t) => t.placa)))
+    const historialPorPlaca: Record<string, HistItem[]> = {}
+
+    if (placasUnicas.length > 0) {
+      const rows = await TurnoRtm.query()
+        .whereIn('placa', placasUnicas)
+        .whereNot('estado', 'inactivo')
+        .orderBy('fecha', 'asc')
+        .orderBy('hora_ingreso', 'asc')
+        .preload('cliente')
+        .preload('servicio')
+
+      rows.forEach((r) => {
+        if (!historialPorPlaca[r.placa]) {
+          historialPorPlaca[r.placa] = []
+        }
+        historialPorPlaca[r.placa].push({
+          id: r.id,
+          fechaStr: toMySQLDate(r.fecha as DateTime),
+          clienteNombre: this.getClienteNombre(r.cliente),
+          servicioCodigo: r.servicio ? ((r.servicio as any).codigoServicio ?? null) : null,
+        })
+      })
+    }
+
+    const visitaLabel = (n: number | null): string => {
+      if (!n || n <= 0) return '—'
+      if (n === 1) return 'Primera vez'
+      if (n === 2) return 'Segunda vez'
+      if (n === 3) return 'Tercera vez'
+      return `${n}ª vez`
+    }
+
+    turnos.forEach((t) => {
+      const hist = historialPorPlaca[t.placa] ?? []
+
+      let visitaNumero: number | null = null
+      const ultimasFechas: string[] = []
+      let visitasDetalle: HistItem[] = []
+
+      if (hist.length) {
+        const idxFound = hist.findIndex((h) => h.id === t.id)
+        const idx = idxFound >= 0 ? idxFound : hist.length - 1
+
+        visitaNumero = idx + 1
+        if (idx > 0) ultimasFechas.push(hist[idx - 1].fechaStr)
+        if (idx > 1) ultimasFechas.push(hist[idx - 2].fechaStr)
+
+        visitasDetalle = hist
+      }
+
+      resultado.set(t.id, {
+        tieneFacturacion: turnosConFactura.has(t.id),
+        tieneCertificacion: (t.certificaciones ?? []).length > 0,
+        visitaVehiculoNumero: visitaNumero,
+        visitaVehiculoTexto: visitaLabel(visitaNumero),
+        visitaVehiculoUltimasFechas: ultimasFechas,
+        visitasVehiculoDetalle: visitasDetalle,
+      })
+    })
+
+    return resultado
   }
 
   /** GET /turnos/:id */
@@ -364,7 +364,11 @@ export default class TurnosRtmController {
         return response.notFound({ message: 'Turno no encontrado' })
       }
 
-      return response.ok(turno)
+      const camposDerivados = await this.computeCamposDerivados([turno])
+      return response.ok({
+        ...turno.serialize(),
+        ...camposDerivados.get(turno.id),
+      })
     } catch (error) {
       console.error('Error en show turno:', error)
       return response.internalServerError({ message: 'Error al obtener el turno' })
@@ -744,7 +748,7 @@ export default class TurnosRtmController {
       let esAvanceHeredado: boolean = false
 
       if (dateo) {
-        const r = buildReserva(dateo)
+        const r = await buildReserva(dateo)
         if (r.vigente) {
           const cRaw = (dateo as any).canal as string | undefined
           const cNorm = normalizeCanal(cRaw)
@@ -1382,15 +1386,13 @@ export default class TurnosRtmController {
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
       // Hueco global disponible (slot más pequeño liberado por un cancelado)
-      const slotsClamadosSig = Database
-        .from('turnos_rtms')
+      const slotsClamadosSig = Database.from('turnos_rtms')
         .select('reasignado_de_turno_id')
         .where('sede_id', usuarioSolicitante.sedeId)
         .where('fecha', hoy)
         .whereNotNull('reasignado_de_turno_id')
 
-      const huecoGlobalSig = await Database
-        .from('turnos_rtms')
+      const huecoGlobalSig = await Database.from('turnos_rtms')
         .select(Database.raw('ABS(turno_numero) AS slot_libre'))
         .where('sede_id', usuarioSolicitante.sedeId)
         .where('fecha', hoy)
@@ -1431,8 +1433,7 @@ export default class TurnosRtmController {
           sid = s.id
         }
 
-        const huecoSvcSig = await Database
-          .from('turnos_rtms')
+        const huecoSvcSig = await Database.from('turnos_rtms')
           .select(Database.raw('ABS(turno_numero_servicio) AS slot_svc_libre'))
           .where('sede_id', usuarioSolicitante.sedeId)
           .where('fecha', hoy)
@@ -1499,6 +1500,8 @@ export default class TurnosRtmController {
         .preload('servicio')
         .preload('agenteCaptacion')
         .preload('conductor')
+        .preload('facturacionFuncionario')
+        .preload('certificacionFuncionario')
         .whereBetween('fecha', [toMySQLDate(fi), toMySQLDate(ff)])
 
       if (servicioId) {
@@ -1557,9 +1560,13 @@ export default class TurnosRtmController {
         { header: 'Agente', key: 'agente', width: 28 },
         { header: 'Observaciones', key: 'observaciones', width: 40 },
         { header: 'Estado', key: 'estado', width: 12 },
-        { header: 'Usuario', key: 'usuario', width: 26 },
+        { header: 'Responsable Puerta', key: 'usuario', width: 26 },
         { header: 'Sede', key: 'sede', width: 18 },
         { header: 'Conductor', key: 'conductor', width: 28 },
+        { header: 'Hora Facturación', key: 'horaFacturacion', width: 16 },
+        { header: 'Responsable Facturación', key: 'responsableFacturacion', width: 28 },
+        { header: 'Hora Certificación', key: 'horaCertificacion', width: 16 },
+        { header: 'Responsable Certificación', key: 'responsableCertificacion', width: 28 },
       ]
 
       turnos.forEach((t) => {
@@ -1576,6 +1583,26 @@ export default class TurnosRtmController {
         const turnoServicio = isCancelOrInactive ? '' : turnoServicioRaw
 
         const conductor = (t as any).conductor ? `${(t as any).conductor.nombre}` : '-'
+
+        // Mismo mapeo de etapas que getEtapas() en EstadoDeTurnos.vue (Puerta ya
+        // cubierta por Hora Ingreso/Usuario): Certificación no aplica a SOAT, y
+        // los responsables se ocultan si el turno quedó cancelado/inactivo.
+        const esSOAT = (t.servicio?.codigoServicio ?? '').toUpperCase() === 'SOAT'
+        const facturacionFuncionario = (t as any).facturacionFuncionario
+        const certificacionFuncionario = (t as any).certificacionFuncionario
+
+        const horaFacturacion = t.horaFacturacion || '-'
+        const responsableFacturacion =
+          !isCancelOrInactive && facturacionFuncionario
+            ? `${facturacionFuncionario.nombres} ${facturacionFuncionario.apellidos}`
+            : '-'
+
+        const horaCertificacion = esSOAT ? '' : t.horaSalida || '-'
+        const responsableCertificacion = esSOAT
+          ? ''
+          : !isCancelOrInactive && certificacionFuncionario
+            ? `${certificacionFuncionario.nombres} ${certificacionFuncionario.apellidos}`
+            : '-'
 
         worksheet.addRow({
           fecha: fechaExcel,
@@ -1594,6 +1621,10 @@ export default class TurnosRtmController {
           usuario: t.usuario ? `${t.usuario.nombres} ${t.usuario.apellidos}` : '-',
           sede: t.sede ? t.sede.nombre : '-',
           conductor,
+          horaFacturacion,
+          responsableFacturacion,
+          horaCertificacion,
+          responsableCertificacion,
         })
       })
 
