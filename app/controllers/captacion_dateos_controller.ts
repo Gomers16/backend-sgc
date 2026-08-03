@@ -1,4 +1,3 @@
-
 // app/controllers/captacion_dateos_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
@@ -15,6 +14,16 @@ import Descuento from '#models/descuento' // 🆕
 import Servicio from '#models/servicio' // 🆕 servicio del dateo
 import Comision from '#models/comision'
 import { buildReserva, invalidateHorasExclusividadCache } from '#services/reserva_dateo_service'
+import { evaluarContinuidad } from '#services/continuidad_service'
+import {
+  resolveConfigComision,
+  resolveConfigRecurrencia,
+  calcularComision,
+  isRTM,
+  inferTipoVehiculoComision,
+  type CasoComision,
+  type EscenarioCliente,
+} from '#services/comision_calculo_service'
 
 /* ======================= Constantes / Tipos ======================= */
 const CANALES_DB = ['FACHADA', 'ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE', 'REDES'] as const
@@ -466,6 +475,15 @@ export default class CaptacionDateosController {
         .first()
       if (!descuentoExiste) {
         return response.badRequest({ message: 'descuento_id no existe o está inactivo' })
+      }
+      // Comercial dateando CON convenio (CASO 3): solo puede marcar AVANCE,
+      // nunca un descuento informativo (POLICIA/EMPLEADO/OBSEQUIO/etc).
+      const esAvanceDescuento = descuentoExiste.codigo.toUpperCase().includes('AVANCE')
+      if (canal === 'ASESOR_COMERCIAL' && convenioId !== null && !esAvanceDescuento) {
+        return response.badRequest({
+          message:
+            'Un comercial que datea con convenio solo puede marcar AVANCE, no un descuento informativo.',
+        })
       }
       descuentoId = descuentoIdRaw
     }
@@ -939,9 +957,32 @@ export default class CaptacionDateosController {
       }
     }
 
+    // Comercial dateando CON convenio (CASO 3): solo puede marcar AVANCE,
+    // nunca un descuento informativo (POLICIA/EMPLEADO/OBSEQUIO/etc).
+    if (
+      item.descuentoId !== null &&
+      item.canal === 'ASESOR_COMERCIAL' &&
+      item.convenioId !== null
+    ) {
+      const descuentoFinal = await Descuento.find(item.descuentoId)
+      const esAvanceDescuento = descuentoFinal?.codigo.toUpperCase().includes('AVANCE') ?? false
+      if (!esAvanceDescuento) {
+        return response.badRequest({
+          message:
+            'Un comercial que datea con convenio solo puede marcar AVANCE, no un descuento informativo.',
+        })
+      }
+    }
+
     await item.save()
 
-    // Generar comisión PENDIENTE si el dateo quedó EXITOSO y no existe ya una
+    // Generar comisión PENDIENTE si el dateo quedó EXITOSO y no existe ya una.
+    //
+    // NOTA dedup: a diferencia de facturacion_tickets_controller.ts (dedup
+    // por ventana del día calendario), aquí el dedup es "¿existió ALGUNA
+    // VEZ?" — esta ruta se usa para corregir dateos días/semanas después
+    // del turno (evidencia tardía), y un dedup por ventana del día crearía
+    // una comisión duplicada al reeditar el mismo dateo más adelante.
     if (item.resultado === 'EXITOSO' && item.consumidoTurnoId !== null) {
       const yaExisteComision = await Comision.query()
         .where('captacion_dateo_id', item.id)
@@ -954,144 +995,94 @@ export default class CaptacionDateosController {
           .preload('servicio')
           .first()
 
-        if (turnoParaComision) {
-          const tipoServicio = (
-            (turnoParaComision as any).servicio?.codigoServicio ?? 'RTM'
-          ).toUpperCase()
-          const tipoVehiculo: 'MOTO' | 'VEHICULO' = (
-            turnoParaComision as any
-          ).tipoVehiculo?.includes('Motocicleta')
-            ? 'MOTO'
-            : 'VEHICULO'
+        const servicioCodigo = (turnoParaComision as any)?.servicio?.codigoServicio ?? null
+        const servicioNombre = (turnoParaComision as any)?.servicio?.nombreServicio ?? null
 
-          // ── Leer configuración de comisión ──────────────────────────
-          const toNum = (v: any) => {
-            const n = Number(String(v ?? '').replace(/[^\d.-]/g, ''))
-            return Number.isFinite(n) ? n : 0
-          }
-          const tryFindCfg = (aId: number | null, tv: string | null) => {
-            const q = Comision.query().where('es_config', true)
-            if (aId === null) q.whereNull('asesor_id')
-            else q.where('asesor_id', aId)
-            if (tv === null) q.whereNull('tipo_vehiculo')
-            else q.where('tipo_vehiculo', tv)
-            return q.first()
-          }
+        // Mismo gate que facturacion_tickets_controller.ts: solo RTM genera
+        // comisión. Confirmado contra datos reales que las 70 comisiones
+        // históricas (es_config=false) son 100% RTM — no hay regresión.
+        if (turnoParaComision && isRTM(servicioCodigo, servicioNombre)) {
+          const tipoVehiculo = inferTipoVehiculoComision({
+            ticketTipo: null,
+            turnoTipo: (turnoParaComision as any).tipoVehiculo ?? null,
+          })
 
           const asesorId = item.agenteId
-          const asesorConvenioId = item.asesorConvenioId
 
-          let rowComercial: Comision | null = null
-          if (asesorId && tipoVehiculo) rowComercial = await tryFindCfg(asesorId, tipoVehiculo)
-          if (!rowComercial && asesorId) rowComercial = await tryFindCfg(asesorId, null)
-          if (!rowComercial) rowComercial = await tryFindCfg(null, tipoVehiculo)
-          if (!rowComercial) rowComercial = await tryFindCfg(null, null)
-
-          let rowIncentivo: Comision | null = null
-          if (asesorConvenioId) rowIncentivo = await tryFindCfg(asesorConvenioId, tipoVehiculo)
-          if (!rowIncentivo && asesorConvenioId) {
-            const m = await tryFindCfg(asesorConvenioId, 'MOTO')
-            const v = await tryFindCfg(asesorConvenioId, 'VEHICULO')
-            rowIncentivo = m ?? v ?? null
+          // ── Asesor convenio REAL: se deriva del convenio (convenio.asesorConvenioId),
+          // igual que facturacion_tickets_controller.ts — NO del campo item.asesorConvenioId
+          // del dateo, que solo se puebla en self-dateo (canal=ASESOR_CONVENIO) y queda
+          // NULL en Caso 3 (comercial trae cliente a un convenio). Usar item.asesorConvenioId
+          // directamente aquí (como hacía el código anterior) hacía que Caso 3 SIEMPRE
+          // resolviera el incentivo del convenio contra Global, incluso cuando el convenio
+          // tenía su propio valor por tipo de vehículo configurado.
+          let asesorConvenioIdReal: number | null = null
+          if (item.convenioId) {
+            const convenioRow = await Convenio.find(item.convenioId)
+            asesorConvenioIdReal = convenioRow?.asesorConvenioId ?? null
           }
-          if (!rowIncentivo) rowIncentivo = await tryFindCfg(null, tipoVehiculo)
-          if (!rowIncentivo) rowIncentivo = await tryFindCfg(null, null)
+          const esAsesorConvenio =
+            item.canal === 'ASESOR_CONVENIO' || asesorId === asesorConvenioIdReal
 
-          let valorIncentivoPorTipo = 0
-          if (rowIncentivo) {
-            if (tipoVehiculo === 'MOTO') {
-              valorIncentivoPorTipo =
-                rowIncentivo.valorPlacaMoto !== null
-                  ? toNum(rowIncentivo.valorPlacaMoto)
-                  : toNum(rowIncentivo.base)
-            } else {
-              valorIncentivoPorTipo =
-                rowIncentivo.valorPlacaVehiculo !== null
-                  ? toNum(rowIncentivo.valorPlacaVehiculo)
-                  : toNum(rowIncentivo.base)
-            }
-          }
-          const valorIncentivo = rowIncentivo ? toNum(rowIncentivo.base) : 14000
-          const valorDateoNuevo = toNum(rowComercial?.monto)
-          const valorNuevoDirecto = toNum(rowComercial?.valorNuevoDirecto)
+          // ── Config de comisión y recurrencia — misma cascada que
+          // facturacion_tickets_controller.ts, vía comision_calculo_service ──
+          const cfgValues = await resolveConfigComision({
+            asesorId,
+            asesorConvenioId: asesorConvenioIdReal,
+            tipoVehiculo,
+          })
+          const recValues = await resolveConfigRecurrencia(asesorId, tipoVehiculo)
 
-          // ── Leer configuración de recurrencia ───────────────────────
-          const globalCfg = await db
-            .from('configuracion_recurrencia_global')
-            .orderBy('id', 'asc')
-            .first()
-          const esMoto = tipoVehiculo === 'MOTO'
-          let valorRecurrente = Number(
-            esMoto
-              ? (globalCfg?.valor_dateo_recurrencia_moto ??
-                  globalCfg?.valor_dateo_recurrencia ??
-                  4300)
-              : (globalCfg?.valor_dateo_recurrencia_vehiculo ??
-                  globalCfg?.valor_dateo_recurrencia ??
-                  4300)
-          )
-          let valorRecuperacion = Number(
-            esMoto
-              ? (globalCfg?.valor_dateo_recuperacion_moto ??
-                  globalCfg?.valor_dateo_recuperacion ??
-                  8600)
-              : (globalCfg?.valor_dateo_recuperacion_vehiculo ??
-                  globalCfg?.valor_dateo_recuperacion ??
-                  8600)
-          )
-          if (asesorId) {
-            const asesorCfg = await db
-              .from('configuracion_recurrencia_asesores')
-              .where('asesor_id', asesorId)
-              .where('recurrencia_habilitada', true)
+          // ── Continuidad — misma fuente única (continuidad_service) que
+          // usa facturacion_tickets_controller.ts. Antes esta ruta no
+          // distinguía continuidad y siempre pagaba recurrencia si no era
+          // "nuevo"; ahora un asesor convenio recurrente CON continuidad
+          // paga completo, igual que por la ruta de factura ──
+          const estadoContinuidad = await evaluarContinuidad({
+            placa: item.placa ?? '',
+            asesorConvenioId: asesorConvenioIdReal,
+            convenioId: item.convenioId,
+          })
+          const tuvoContinuidad = estadoContinuidad !== 'ROTA'
+
+          // ── Descuento informativo pre-marcado en el dateo. Esta ruta no
+          // tiene paso de caja (no hay ticket de facturación): el origen
+          // siempre es DATEO. Antes esta ruta no leía descuentoId en el
+          // cálculo — un comercial con informativo marcado pagaba completo;
+          // ahora paga $0 igual que por la ruta de factura ──
+          let codigoDescuentoActivo: string | null = null
+          if (item.descuentoId) {
+            const descuentoInfo = await Descuento.query()
+              .where('id', item.descuentoId)
+              .where('activo', true)
               .first()
-            if (asesorCfg?.valor_dateo_recurrencia)
-              valorRecurrente = Number(asesorCfg.valor_dateo_recurrencia)
-            if (asesorCfg?.valor_dateo_recuperacion)
-              valorRecuperacion = Number(asesorCfg.valor_dateo_recuperacion)
+            codigoDescuentoActivo = descuentoInfo?.codigo ?? null
           }
 
-          // ── Calcular montos según caso de negocio ───────────────────
           const esRecurrente = Boolean((turnoParaComision as any).esRecurrente)
           const esRecuperacion = Boolean((turnoParaComision as any).esRecuperacion)
-          const esClienteNuevo = !esRecurrente && !esRecuperacion
-          const esAsesorConvenio = item.canal === 'ASESOR_CONVENIO' || asesorId === asesorConvenioId
+          const escenario: EscenarioCliente = esRecurrente
+            ? 'RECURRENTE'
+            : esRecuperacion
+              ? 'RECUPERACION'
+              : 'NUEVO'
+          const caso: CasoComision = !item.convenioId
+            ? 'SIN_CONVENIO'
+            : esAsesorConvenio
+              ? 'CONVENIO_SELF'
+              : 'CONVENIO_COMERCIAL'
 
-          let montoAsesor = 0
-          let montoConvenio = 0
-          let base = 0
-          let valorNuevoDirectoFinal = 0
-
-          if (!item.convenioId) {
-            // CASO 1: Sin convenio — comercial datea directo
-            montoConvenio = 0
-            base = 0
-            if (esClienteNuevo) {
-              montoAsesor = valorNuevoDirecto
-              valorNuevoDirectoFinal = valorNuevoDirecto
-            } else if (esRecurrente) {
-              montoAsesor = valorRecurrente
-            } else {
-              montoAsesor = valorRecuperacion
-            }
-          } else if (esAsesorConvenio) {
-            // CASO 2: Asesor convenio se datea a sí mismo
-            montoConvenio = 0
-            if (item.esAvance) {
-              montoAsesor = 0
-              base = valorIncentivoPorTipo
-            } else {
-              montoAsesor = esClienteNuevo ? valorIncentivo : valorRecurrente
-              base = valorIncentivo
-            }
-          } else {
-            // CASO 3: Comercial + convenio
-            base = valorIncentivoPorTipo
-            montoAsesor = valorDateoNuevo
-            montoConvenio = item.esAvance
-              ? Math.max(0, valorIncentivoPorTipo - 0)
-              : valorIncentivoPorTipo
-          }
+          const resultadoCalculo = calcularComision({
+            caso,
+            escenario,
+            tuvoContinuidad,
+            esAvance: item.esAvance ?? false,
+            montoAvance: 0,
+            codigoDescuento: codigoDescuentoActivo,
+            origenDescuento: 'DATEO',
+            cfgValues,
+            recValues,
+          })
 
           // ── Crear la comisión ────────────────────────────────────────
           const comision = new Comision()
@@ -1099,14 +1090,16 @@ export default class CaptacionDateosController {
           comision.captacionDateoId = item.id
           comision.asesorId = item.agenteId
           comision.convenioId = item.convenioId
-          comision.asesorSecundarioId = item.asesorConvenioId
-          comision.montoAsesor = String(montoAsesor)
-          comision.montoConvenio = String(montoConvenio)
-          comision.monto = String(montoAsesor)
-          comision.base = String(base)
+          // Igual que facturacion_tickets_controller.ts: secundario solo en Caso 3
+          // (comercial + convenio). En Caso 2 (self-dateo) no aplica (sería el mismo asesor).
+          comision.asesorSecundarioId = caso === 'CONVENIO_COMERCIAL' ? asesorConvenioIdReal : null
+          comision.montoAsesor = String(resultadoCalculo.montoAsesor)
+          comision.montoConvenio = String(resultadoCalculo.montoConvenio)
+          comision.monto = String(resultadoCalculo.monto)
+          comision.base = String(resultadoCalculo.base)
           comision.porcentaje = '0'
-          comision.valorNuevoDirecto = String(valorNuevoDirectoFinal)
-          comision.tipoServicio = tipoServicio as any
+          comision.valorNuevoDirecto = String(resultadoCalculo.valorNuevoDirectoFinal)
+          comision.tipoServicio = 'RTM' as any
           ;(comision as any).tipoVehiculo = tipoVehiculo
           comision.estado = 'PENDIENTE'
           comision.fechaCalculo = DateTime.now()
@@ -1115,7 +1108,13 @@ export default class CaptacionDateosController {
           comision.valorRtmMoto = 0
           comision.valorRtmVehiculo = 0
           comision.esAvance = item.esAvance ?? false
+          if (resultadoCalculo.descuentoMontoAplicado !== null) {
+            comision.descuentoMontoAplicado = resultadoCalculo.descuentoMontoAplicado
+          }
           await comision.save()
+          console.log(
+            `✅ ${resultadoCalculo.reglaAplicada} → asesor $${resultadoCalculo.montoAsesor} | convenio $${resultadoCalculo.montoConvenio}`
+          )
         }
       }
     }

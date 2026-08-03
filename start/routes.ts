@@ -1204,6 +1204,14 @@ router
       .where('id', /^[0-9]+$/)
       .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
+    // Simulador (dry-run) — misma protección que /comisiones/config, no crea nada
+    router
+      .post('/comisiones/simular', async (ctx) => {
+        const { default: ComisionesController } = await import('#controllers/comisiones_controller')
+        return new ComisionesController().simularComision(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
     router
       .get('/comisiones', async (ctx) => {
         const { default: ComisionesController } = await import('#controllers/comisiones_controller')
@@ -1407,6 +1415,26 @@ router
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD'] }),
       ])
+
+    /* =============================== CONTINUIDAD ======================== */
+
+    router
+      .get('/continuidad/buscar', async (ctx) => {
+        const { default: ContinuidadOverridesController } = await import(
+          '#controllers/continuidad_overrides_controller'
+        )
+        return new ContinuidadOverridesController().buscar(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .post('/continuidad/overrides', async (ctx) => {
+        const { default: ContinuidadOverridesController } = await import(
+          '#controllers/continuidad_overrides_controller'
+        )
+        return new ContinuidadOverridesController().store(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
 
     /* =============================== DESCUENTOS ======================== */
 
