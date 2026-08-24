@@ -3368,7 +3368,16 @@ export default class ReportesAdministrativosController {
     }
 
     const rows = (await query
-      .select('ft.id as ticket_id', 'ft.placa', 'ft.tipo_vehiculo', 'ft.fecha_pago', 'ft.total')
+      .select(
+        'ft.id as ticket_id',
+        'ft.placa',
+        'ft.tipo_vehiculo',
+        'ft.fecha_pago',
+        'ft.total',
+        'ft.agente_comercial_nombre',
+        'ft.asesor_convenio_nombre',
+        'ft.convenio_nombre'
+      )
       .orderBy('ft.placa', 'asc')) as any[]
 
     return rows.map((r) => ({
@@ -3377,6 +3386,9 @@ export default class ReportesAdministrativosController {
       tipo_vehiculo: r.tipo_vehiculo,
       fecha_pago: r.fecha_pago,
       monto: Number(r.total) || 0,
+      agente_comercial_nombre: r.agente_comercial_nombre ?? null,
+      asesor_convenio_nombre: r.asesor_convenio_nombre ?? null,
+      convenio_nombre: r.convenio_nombre ?? null,
     }))
   }
 
@@ -3409,7 +3421,6 @@ export default class ReportesAdministrativosController {
           .andOnVal('c.es_config', false)
           .andOnVal('c.estado', '!=', 'ANULADA')
       })
-      .leftJoin('convenios as conv', 'conv.id', 'c.convenio_id')
       .where('ft.estado', 'CONFIRMADA')
       .where('ft.servicio_codigo', 'RTM')
       .where('d.codigo', codigo)
@@ -3426,7 +3437,15 @@ export default class ReportesAdministrativosController {
         'c.monto_asesor',
         'c.monto_convenio',
         'c.regla_aplicada',
-        'conv.nombre as convenio_nombre',
+        // Denormalizados en facturacion_tickets desde la captación (mismo
+        // origen que "Por canal") — a diferencia del convenio_nombre que
+        // antes salía de comisiones->convenios, estos quedan disponibles
+        // aun cuando tiene_comision=false (sin comisión, o anulada sin
+        // reemplazo), que es justamente el caso que esta sección resalta
+        // con los chips "Sin comisión asociada"/"Comisión anulada".
+        'ft.agente_comercial_nombre',
+        'ft.asesor_convenio_nombre',
+        'ft.convenio_nombre',
         Database.raw(
           `EXISTS (
             SELECT 1 FROM comisiones c2
@@ -3452,7 +3471,14 @@ export default class ReportesAdministrativosController {
         monto_asesor: tieneComision ? Number(r.monto_asesor) || 0 : null,
         monto_convenio: tieneComision ? Number(r.monto_convenio) || 0 : null,
         regla_aplicada: tieneComision ? (r.regla_aplicada ?? null) : null,
-        convenio_nombre: tieneComision ? (r.convenio_nombre ?? null) : null,
+        agente_comercial_nombre: r.agente_comercial_nombre ?? null,
+        asesor_convenio_nombre: r.asesor_convenio_nombre ?? null,
+        // convenio_nombre sale de ft (captación), NO de la comisión
+        // resultante: en el caso raro de una comisión reasignada
+        // manualmente a otro asesor/convenio (edición manual en
+        // comisiones_controller.ts), pueden no coincidir. Decisión
+        // aceptada, no un bug — ver discusión en el commit que agregó esto.
+        convenio_nombre: r.convenio_nombre ?? null,
       }
     })
   }
