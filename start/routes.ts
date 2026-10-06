@@ -2317,6 +2317,17 @@ router
         }),
       ])
 
+    // Corrección del resultado (Segunda vez, Entrega C2): solo SUPER_ADMIN/GERENCIA.
+    router
+      .patch('/certificaciones/:turnoId/resultado', async (ctx) => {
+        const { default: CertificacionesController } = await import(
+          '#controllers/certificaciones_controller'
+        )
+        return new CertificacionesController().corregirResultado(ctx)
+      })
+      .where('turnoId', /^[0-9]+$/)
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
     /* =============================== OCR (BACKEND) ===================== */
 
     router.post('/ocr/parse-ticket', async (ctx) => {
@@ -2712,6 +2723,19 @@ router
             '#controllers/reportes_administrativos_controller'
           )
           return new ReportesAdministrativosController().discrepanciasRtmHistorial(ctx)
+        })
+        // Segunda vez (Entrega C2): solo conteos.
+        router.get('/segunda-vez', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().segundaVez(ctx)
+        })
+        router.get('/segunda-vez/excel', async (ctx) => {
+          const { default: ReportesAdministrativosController } = await import(
+            '#controllers/reportes_administrativos_controller'
+          )
+          return new ReportesAdministrativosController().segundaVezExcel(ctx)
         })
       })
       .prefix('/reportes-admin')

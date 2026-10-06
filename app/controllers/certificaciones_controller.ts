@@ -4,9 +4,21 @@ import app from '@adonisjs/core/services/app'
 import { DateTime } from 'luxon'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import db from '@adonisjs/lucid/services/db'
 
 import Certificacion from '#models/certificacion'
 import TurnoRtm from '#models/turno_rtm'
+import CertificacionResultadoCambio from '#models/certificacion_resultado_cambio'
+import {
+  aplicaSegundaVez,
+  camposAlCertificar,
+  conflictoOrigenConHijoActivo,
+  esTurnoSegundaVez,
+  hijoActivoDeOrigen,
+  parseResultadoCertificacion,
+  type ResultadoCertificacion,
+} from '#services/segunda_vez_service'
+import { marcarDateoExitosoAlFinalizarNoRtm } from '#services/reserva_dateo_service'
 
 export default class CertificacionesController {
   /**
@@ -45,87 +57,271 @@ export default class CertificacionesController {
       })
     }
 
-    // ===== 3) Buscar turno =====
-    const turno = await TurnoRtm.findOrFail(turnoId)
-
-    // ===== 4) Preparar carpeta uploads/certificaciones =====
-    const uploadsRoot = app.makePath('uploads')
-    const certDir = path.join(uploadsRoot, 'certificaciones')
-    await fs.mkdir(certDir, { recursive: true })
-
-    // ===== 5) Guardar archivo físicamente =====
-    const fileName = `${Date.now()}_${turno.id}.${imagenFile.extname}`
-    await imagenFile.move(certDir, {
-      name: fileName,
-      overwrite: false,
-    })
-
-    const relativePath = path.join('uploads', 'certificaciones', fileName) // ruta pública o relativa
-
-    // ===== 6) Crear certificación =====
     const usuario = await auth.authenticate().catch(() => null)
 
-    const certificacion = await Certificacion.create({
-      turnoId: turno.id,
-      usuarioId: usuario?.id ?? null,
-      imagenPath: relativePath,
-      observaciones: observaciones?.trim() || null,
-    })
+    // Todo en una transacción con el turno bloqueado (FOR UPDATE): evita que
+    // dos certificaciones simultáneas del mismo turno pasen el chequeo de 409.
+    const trx = await db.transaction()
+    let archivoMovido: string | null = null
 
-    // ===== 7) 🔥 Finalizar el turno, calcular tiempo de servicio y registrar certificación =====
-    const now = DateTime.now().setZone('America/Bogota')
+    try {
+      // ===== 3) Buscar turno (bloqueado) =====
+      const turno = await TurnoRtm.query({ client: trx })
+        .where('id', turnoId)
+        .forUpdate()
+        .preload('servicio')
+        .first()
 
-    // 👇 CALCULAR TIEMPO DE SERVICIO
-    let tiempoServicioStr = ''
-    if (turno.horaIngreso) {
-      // Intentar parsear como HH:mm:ss primero, luego como HH:mm
-      let entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', {
-        zone: 'America/Bogota',
-      })
-      if (!entrada.isValid) {
-        entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm', { zone: 'America/Bogota' })
+      if (!turno) {
+        await trx.rollback()
+        return response.notFound({ message: 'Turno no encontrado' })
       }
 
-      if (entrada.isValid) {
-        // Calcular diferencia entre salida (now) y entrada
-        let diff = now.diff(entrada, ['hours', 'minutes']).toObject()
+      const yaCertificado = await Certificacion.query({ client: trx })
+        .where('turno_id', turno.id)
+        .first()
 
-        // Evitar tiempos negativos
-        if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
-          diff = { hours: 0, minutes: 0 }
-        }
-
-        // Formatear tiempo legible
-        if (diff.hours && diff.hours >= 1) {
-          tiempoServicioStr += `${Math.floor(diff.hours)} h `
-        }
-        tiempoServicioStr += `${Math.round((diff.minutes ?? 0) % 60)} min`
-
-        console.log('✅ [CERTIFICACION] Tiempo calculado:', {
-          turnoId: turno.id,
-          horaIngreso: turno.horaIngreso,
-          horaSalida: now.toFormat('HH:mm:ss'),
-          tiempoServicio: tiempoServicioStr,
+      if (yaCertificado) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'YA_CERTIFICADO',
+          message: 'Este turno ya tiene una certificación registrada.',
+          estado: turno.estado,
         })
-      } else {
-        console.warn('⚠️ [CERTIFICACION] No se pudo parsear hora de ingreso:', turno.horaIngreso)
       }
+
+      // Se certifica un turno 'activo', o uno 'finalizado' sin certificación
+      // (p. ej. finalizado a mano desde Editar turno). Cancelado/inactivo no.
+      if (turno.estado !== 'activo' && turno.estado !== 'finalizado') {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TURNO_NO_ACTIVO',
+          message: `No se puede certificar un turno en estado "${turno.estado}".`,
+          estado: turno.estado,
+        })
+      }
+
+      // ===== 3b) Resultado (Segunda vez): obligatorio solo para RTM/PREV =====
+      const codigoServicio = turno.servicio?.codigoServicio ?? null
+      let resultado: ResultadoCertificacion | null = null
+      if (aplicaSegundaVez(codigoServicio)) {
+        resultado = parseResultadoCertificacion(request.input('resultado'))
+        if (!resultado) {
+          await trx.rollback()
+          return response.unprocessableEntity({
+            code: 'RESULTADO_REQUERIDO',
+            message: 'Debes indicar el resultado de la certificación: APROBADA o RECHAZADA.',
+          })
+        }
+      }
+
+      // ===== 4) Preparar carpeta uploads/certificaciones =====
+      const uploadsRoot = app.makePath('uploads')
+      const certDir = path.join(uploadsRoot, 'certificaciones')
+      await fs.mkdir(certDir, { recursive: true })
+
+      // ===== 5) Guardar archivo físicamente =====
+      const fileName = `${Date.now()}_${turno.id}.${imagenFile.extname}`
+      await imagenFile.move(certDir, {
+        name: fileName,
+        overwrite: false,
+      })
+      archivoMovido = path.join(certDir, fileName)
+
+      const relativePath = path.join('uploads', 'certificaciones', fileName) // ruta pública o relativa
+
+      // ===== 6) Crear certificación =====
+      const certificacion = await Certificacion.create(
+        {
+          turnoId: turno.id,
+          usuarioId: usuario?.id ?? null,
+          imagenPath: relativePath,
+          observaciones: observaciones?.trim() || null,
+          resultado,
+        },
+        { client: trx }
+      )
+
+      // ===== 7) 🔥 Finalizar el turno, calcular tiempo de servicio y registrar certificación =====
+      const now = DateTime.now().setZone('America/Bogota')
+
+      // Si el turno ya estaba finalizado con hora de salida, se conservan su
+      // horaSalida y tiempoServicio; si no, se calculan como siempre.
+      const conservaSalida = turno.estado === 'finalizado' && !!turno.horaSalida
+      const horaSalida = conservaSalida ? turno.horaSalida : now.toFormat('HH:mm:ss')
+      const tiempoServicio = conservaSalida
+        ? turno.tiempoServicio
+        : calcularTiempoServicio(turno, now) || null
+
+      // Segunda vez: resultado + ventana (rechazado_at y +360h con hora del servidor)
+      const segundaVez = camposAlCertificar({
+        codigoServicio,
+        resultado,
+        esSegundaVez: turno.esSegundaVez,
+        ahora: now,
+      })
+
+      // 👇 GUARDAR TODO: estado, hora salida, tiempo servicio y certificador
+      turno.useTransaction(trx)
+      turno.merge({
+        estado: 'finalizado',
+        horaSalida,
+        tiempoServicio, // 🔥 AGREGAR TIEMPO CALCULADO
+        certificacionFuncionarioId: usuario?.id ?? null,
+        ...segundaVez,
+      })
+      await turno.save()
+
+      // Servicio NO RTM (PREV, PERI): su dateo pasa a EXITOSO al certificar,
+      // con resultado APROBADA o RECHAZADA (misma regla que registrarSalida).
+      await marcarDateoExitosoAlFinalizarNoRtm(turno, codigoServicio, trx)
+
+      await trx.commit()
+
+      return response.created({
+        message: 'Certificación registrada y turno finalizado',
+        data: certificacion,
+        turno: turno,
+      })
+    } catch (error) {
+      if (!trx.isCompleted) await trx.rollback()
+      if (archivoMovido) await fs.unlink(archivoMovido).catch(() => {})
+      throw error
+    }
+  }
+
+  /**
+   * PATCH /api/certificaciones/:turnoId/resultado
+   * body: { resultado: 'APROBADA' | 'RECHAZADA', motivo: string (5–255) }
+   * Solo SUPER_ADMIN / GERENCIA (middleware de la ruta). Corrige el resultado
+   * de un turno RTM/PREV finalizado y certificado, con auditoría en
+   * certificacion_resultado_cambios. Los efectos sobre la ventana de segunda
+   * vez salen de camposAlCertificar() — la misma regla que al certificar:
+   *  - → APROBADA: rechazado_at y ventana_segunda_vez_hasta quedan NULL (la
+   *    ventana se anula). 409 si el turno ya tiene una segunda vez activa.
+   *  - → RECHAZADA: ventana de 360 h desde AHORA (hora del servidor), salvo
+   *    que el turno sea una segunda vez (nunca abre ventana).
+   * certificaciones.resultado y turnos_rtms.resultado_certificacion se
+   * actualizan en la misma transacción, con el turno bloqueado (FOR UPDATE;
+   * crear una segunda vez bloquea el mismo origen, así que no hay carrera).
+   */
+  public async corregirResultado({ params, request, auth, response }: HttpContext) {
+    const turnoId = Number(params.turnoId)
+    if (!Number.isInteger(turnoId)) {
+      return response.badRequest({ message: 'turnoId debe ser numérico' })
+    }
+    const resultadoNuevo = parseResultadoCertificacion(request.input('resultado'))
+    if (!resultadoNuevo) {
+      return response.unprocessableEntity({
+        code: 'RESULTADO_REQUERIDO',
+        message: 'Indica el resultado corregido: APROBADA o RECHAZADA.',
+      })
+    }
+    const motivo = String(request.input('motivo') ?? '').trim()
+    if (motivo.length < 5 || motivo.length > 255) {
+      return response.unprocessableEntity({
+        code: 'MOTIVO_REQUERIDO',
+        message: 'El motivo de la corrección es obligatorio (entre 5 y 255 caracteres).',
+      })
     }
 
-    // 👇 GUARDAR TODO: estado, hora salida, tiempo servicio y certificador
-    turno.merge({
-      estado: 'finalizado',
-      horaSalida: now.toFormat('HH:mm:ss'),
-      tiempoServicio: tiempoServicioStr || null, // 🔥 AGREGAR TIEMPO CALCULADO
-      certificacionFuncionarioId: usuario?.id ?? null,
-    })
-    await turno.save()
+    const trx = await db.transaction()
+    try {
+      const turno = await TurnoRtm.query({ client: trx })
+        .where('id', turnoId)
+        .forUpdate()
+        .preload('servicio')
+        .first()
+      if (!turno) {
+        await trx.rollback()
+        return response.notFound({ message: 'Turno no encontrado' })
+      }
 
-    return response.created({
-      message: 'Certificación registrada y turno finalizado',
-      data: certificacion,
-      turno: turno,
-    })
+      const codigoServicio = turno.servicio?.codigoServicio ?? null
+      if (!aplicaSegundaVez(codigoServicio)) {
+        await trx.rollback()
+        return response.unprocessableEntity({
+          code: 'SERVICIO_SIN_RESULTADO',
+          message: `El resultado de certificación solo aplica a RTM y PREV (servicio: ${codigoServicio}).`,
+        })
+      }
+
+      const certificacion = await Certificacion.query({ client: trx })
+        .where('turno_id', turno.id)
+        .orderBy('id', 'desc')
+        .first()
+      if (turno.estado !== 'finalizado' || !certificacion) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TURNO_SIN_CERTIFICACION',
+          message: 'Solo se corrige el resultado de un turno finalizado con certificación.',
+          estado: turno.estado,
+        })
+      }
+
+      const resultadoAnterior = turno.resultadoCertificacion ?? null
+      if (resultadoAnterior === resultadoNuevo) {
+        await trx.rollback()
+        return response.unprocessableEntity({
+          code: 'SIN_CAMBIO',
+          message: `El turno ya tiene resultado ${resultadoNuevo}.`,
+        })
+      }
+
+      // De RECHAZADA a APROBADA con una segunda vez ya creada: no se anula.
+      if (resultadoNuevo === 'APROBADA' && !esTurnoSegundaVez(turno)) {
+        const hijoActivoId = await hijoActivoDeOrigen(turno)
+        if (hijoActivoId) {
+          await trx.rollback()
+          return response.conflict(conflictoOrigenConHijoActivo(hijoActivoId))
+        }
+      }
+
+      const ahora = DateTime.now().setZone('America/Bogota')
+      const campos = camposAlCertificar({
+        codigoServicio,
+        resultado: resultadoNuevo,
+        esSegundaVez: turno.esSegundaVez,
+        ahora,
+      })
+
+      turno.useTransaction(trx)
+      turno.merge(campos)
+      await turno.save()
+
+      certificacion.useTransaction(trx)
+      certificacion.resultado = resultadoNuevo
+      await certificacion.save()
+
+      const usuario = auth.user
+      const cambio = await CertificacionResultadoCambio.create(
+        {
+          turnoId: turno.id,
+          resultadoAnterior,
+          resultadoNuevo,
+          motivo,
+          usuarioId: usuario?.id ?? null,
+        },
+        { client: trx }
+      )
+
+      await trx.commit()
+
+      return response.ok({
+        message: `Resultado corregido: ${resultadoAnterior ?? 'sin resultado'} → ${resultadoNuevo}`,
+        turno: {
+          id: turno.id,
+          resultadoCertificacion: turno.resultadoCertificacion,
+          rechazadoAt: turno.rechazadoAt?.toISO() ?? null,
+          ventanaSegundaVezHasta: turno.ventanaSegundaVezHasta?.toISO() ?? null,
+          esSegundaVez: esTurnoSegundaVez(turno),
+        },
+        cambio,
+      })
+    } catch (error) {
+      if (!trx.isCompleted) await trx.rollback()
+      throw error
+    }
   }
 
   /**
@@ -156,4 +352,45 @@ export default class CertificacionesController {
       data: certificacion,
     }
   }
+}
+
+/** Tiempo de servicio legible entre hora_ingreso y la salida (now). */
+function calcularTiempoServicio(turno: TurnoRtm, now: DateTime): string {
+  // 👇 CALCULAR TIEMPO DE SERVICIO
+  let tiempoServicioStr = ''
+  if (turno.horaIngreso) {
+    // Intentar parsear como HH:mm:ss primero, luego como HH:mm
+    let entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', {
+      zone: 'America/Bogota',
+    })
+    if (!entrada.isValid) {
+      entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm', { zone: 'America/Bogota' })
+    }
+
+    if (entrada.isValid) {
+      // Calcular diferencia entre salida (now) y entrada
+      let diff = now.diff(entrada, ['hours', 'minutes']).toObject()
+
+      // Evitar tiempos negativos
+      if ((diff.hours ?? 0) < 0 || (diff.minutes ?? 0) < 0) {
+        diff = { hours: 0, minutes: 0 }
+      }
+
+      // Formatear tiempo legible
+      if (diff.hours && diff.hours >= 1) {
+        tiempoServicioStr += `${Math.floor(diff.hours)} h `
+      }
+      tiempoServicioStr += `${Math.round((diff.minutes ?? 0) % 60)} min`
+
+      console.log('✅ [CERTIFICACION] Tiempo calculado:', {
+        turnoId: turno.id,
+        horaIngreso: turno.horaIngreso,
+        horaSalida: now.toFormat('HH:mm:ss'),
+        tiempoServicio: tiempoServicioStr,
+      })
+    } else {
+      console.warn('⚠️ [CERTIFICACION] No se pudo parsear hora de ingreso:', turno.horaIngreso)
+    }
+  }
+  return tiempoServicioStr
 }

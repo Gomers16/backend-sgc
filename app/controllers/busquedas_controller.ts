@@ -9,6 +9,7 @@ import Convenio from '#models/convenio'
 import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import TurnoRtm from '#models/turno_rtm'
 import { buildReserva, cerrarDateosViejosPorPlacaTelefono } from '#services/reserva_dateo_service'
+import { haySegundaVezEnCurso, ventanasSegundaVezDePlaca } from '#services/segunda_vez_service'
 
 type CanalSimple = 'FACHADA' | 'ASESOR' | 'TELE' | 'REDES'
 
@@ -187,6 +188,15 @@ export default class BusquedasController {
     // Precalcular última visita (para todos los caminos)
     const ultimaVisita = await getUltimaVisita(placa ?? undefined, cliente?.id ?? undefined)
 
+    // Segunda vez: ventanas de la placa por servicio (RTM/PREV), en cualquier
+    // estado (el front muestra el banner si está ABIERTA y ofrece FORZADA a
+    // SUPER_ADMIN/GERENCIA si no). Solo lectura: el candado se toma en store().
+    const ventanasSegundaVez = placa ? await ventanasSegundaVezDePlaca(placa) : []
+    const segundaVezInfo = {
+      ventanaSegundaVez: ventanasSegundaVez.find((v) => v.estado === 'ABIERTA') ?? null,
+      ventanasSegundaVez,
+    }
+
     let reserva: { vigente: boolean; bloqueaHasta: string | null } | null = null
 
     if (dateo) {
@@ -252,6 +262,7 @@ export default class BusquedasController {
           origenBusqueda: placa ? 'placa' : 'telefono',
           detectadoPorConvenio: (dateo as any).detectadoPorConvenio ?? false,
           ultimaVisita,
+          ...segundaVezInfo,
         })
       }
     }
@@ -273,6 +284,38 @@ export default class BusquedasController {
       let asesorAsignado: AgenteInstance | null = null
       const info = await getAsesorActivoDeConvenio(prospecto.convenioId)
       if (info?.asesor) asesorAsignado = info.asesor
+
+      // Segunda vez abierta o en curso (RTM/PREV): no se crea el dateo
+      // automático ni se cierran dateos viejos — una segunda vez no lleva
+      // dateo, y uno nuevo quedaría PENDIENTE para la placa. Se devuelve el
+      // convenio/asesor solo como sugerencia informativa.
+      if (await haySegundaVezEnCurso(ventanasSegundaVez)) {
+        const asesorSV = asesorAsignado
+          ? { id: asesorAsignado.id, nombre: asesorAsignado.nombre, tipo: asesorAsignado.tipo }
+          : null
+        return response.ok({
+          fuente: 'CONVENIO',
+          dateoId: null,
+          vehiculo: serializeVehiculo(vehiculo),
+          cliente: serializeCliente(cliente),
+          dateoReciente: null,
+          reserva: null,
+          captacionSugerida: { canal: 'ASESOR', agente: asesorSV },
+          convenio: convenio
+            ? {
+                id: convenio.id,
+                nombre: (convenio as any).nombre,
+                codigo: (convenio as any).codigo ?? (convenio as any).codigo_convenio ?? null,
+              }
+            : null,
+          asesorAsignado: asesorSV,
+          origenBusqueda: placa ? 'placa' : 'telefono',
+          detectadoPorConvenio: true,
+          dateoOmitidoPorSegundaVez: true,
+          ultimaVisita,
+          ...segundaVezInfo,
+        })
+      }
 
       // 🆕 Bug fix: cierra dateo(s) viejos en RE_DATEAR de esta misma
       // placa/teléfono antes de crear el nuevo automático — mismo criterio
@@ -353,6 +396,7 @@ export default class BusquedasController {
         origenBusqueda: placa ? 'placa' : 'telefono',
         detectadoPorConvenio: true,
         ultimaVisita,
+        ...segundaVezInfo,
       })
     }
 
@@ -448,6 +492,7 @@ export default class BusquedasController {
       origenBusqueda: placa ? 'placa' : 'telefono',
       detectadoPorConvenio: false,
       ultimaVisita,
+      ...segundaVezInfo,
       asesorDetectado, // 👈 NUEVA LÍNEA
     })
   }
