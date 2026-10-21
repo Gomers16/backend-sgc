@@ -1835,6 +1835,19 @@ router
         }),
       ])
 
+    // 🆕 Historial: exportar a Excel con los mismos filtros del listado
+    router
+      .get('/facturacion/tickets/exportar', async (ctx) => {
+        const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
+        return new Facturacion().exportar(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({
+          roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'OPERATIVO_TURNOS'],
+        }),
+      ])
+
     router
       .get('/facturacion/tickets/:id', async (ctx) => {
         const { default: Facturacion } = await import('#controllers/facturacion_tickets_controller')
@@ -2843,6 +2856,28 @@ router
       })
       .use([middleware.auth()])
 
+    // Estadísticas, exportación y contador de pendientes: solo gerencia.
+    router
+      .get('/tickets/estadisticas', async (ctx) => {
+        const { default: TicketsController } = await import('#controllers/tickets_controller')
+        return new TicketsController().estadisticas(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .get('/tickets/exportar', async (ctx) => {
+        const { default: TicketsController } = await import('#controllers/tickets_controller')
+        return new TicketsController().exportar(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
+    router
+      .get('/tickets/pendientes/contador', async (ctx) => {
+        const { default: TicketsController } = await import('#controllers/tickets_controller')
+        return new TicketsController().contadorPendientes(ctx)
+      })
+      .use([middleware.auth(), middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] })])
+
     router
       .get('/tickets/:id', async (ctx) => {
         const { default: TicketsController } = await import('#controllers/tickets_controller')
@@ -2858,7 +2893,7 @@ router
       })
       .use([middleware.auth()])
 
-    // 🆕 Configuración de ventana de ticket sin penalización (global +
+    // 🆕 Configuración de ventana de ticket con comisión completa (global +
     // override por asesor) — mismo patrón que
     // /captacion-dateos/config/max-redateos.
     router

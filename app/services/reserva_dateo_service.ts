@@ -206,8 +206,9 @@ export async function buscarTurnoSinDateoHoy(
 /**
  * Todo turno SIN dateo vinculado (captacion_dateo_id NULL) requiere un
  * ticket "Excepción de Dateo" para registrar su dateo — sin excepción. Esta
- * función solo determina si ese ticket, al aprobarse, lleva penalización o
- * no: dentro de `minutosVentana` desde turno.horaIngreso = sin penalización.
+ * función solo determina si ese ticket, al aprobarse, necesita la decisión
+ * de comisión de gerencia: dentro de `minutosVentana` desde turno.horaIngreso
+ * = comisión completa, sin decisión.
  * Usada por captacion_dateos_controller.ts::store() (para el código de la
  * respuesta 409) y tickets_excepcion_dateo_controller.ts::crear() (para
  * fijar el snapshot `dentro_ventana` del ticket).
@@ -215,17 +216,30 @@ export async function buscarTurnoSinDateoHoy(
  * Mismo parseo de horaIngreso ('HH:mm:ss' con fallback a 'HH:mm', zona
  * America/Bogota) que ya usan registrarSalida() (turnos_rtms_controller.ts)
  * y confirmar()/applyCommissionHook() (facturacion_tickets_controller.ts).
+ *
+ * La entrada se arma con la FECHA del turno + horaIngreso (antes solo se
+ * usaba la hora y se asumía hoy: un turno de ayer a las 08:00 consultado
+ * hoy a las 07:00 daba 0 minutos y quedaba "dentro de ventana"). Sin fecha
+ * (llamadas viejas) se asume hoy, que es lo que ya pasaba.
  */
 export function dentroVentanaDateoTurno(
-  turno: { horaIngreso: TurnoRtm['horaIngreso'] },
+  turno: { horaIngreso: TurnoRtm['horaIngreso']; fecha?: TurnoRtm['fecha'] | null },
   minutosVentana: number
 ): { dentro: boolean; minutosTotales: number; minutosExceso: number } {
-  let entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm:ss', { zone: 'America/Bogota' })
+  const ahora = DateTime.local().setZone('America/Bogota')
+  const fechaISO = turno.fecha
+    ? turno.fecha.setZone('America/Bogota').toISODate()
+    : ahora.toISODate()
+
+  let entrada = DateTime.fromFormat(`${fechaISO} ${turno.horaIngreso}`, 'yyyy-MM-dd HH:mm:ss', {
+    zone: 'America/Bogota',
+  })
   if (!entrada.isValid) {
-    entrada = DateTime.fromFormat(turno.horaIngreso, 'HH:mm', { zone: 'America/Bogota' })
+    entrada = DateTime.fromFormat(`${fechaISO} ${turno.horaIngreso}`, 'yyyy-MM-dd HH:mm', {
+      zone: 'America/Bogota',
+    })
   }
 
-  const ahora = DateTime.local().setZone('America/Bogota')
   const minutosTotales = Math.max(0, Math.floor(ahora.diff(entrada, 'minutes').minutes))
   const minutosExceso = Math.max(0, minutosTotales - minutosVentana)
   const dentro = minutosTotales <= minutosVentana
@@ -233,12 +247,27 @@ export function dentroVentanaDateoTurno(
   return { dentro, minutosTotales, minutosExceso }
 }
 
+/** Default de la ventana global cuando todavía no hay fila de configuración. */
+export const MINUTOS_VENTANA_TICKET_DEFAULT = 60
+
 /**
- * Minutos de ventana (desde turno.horaIngreso) dentro de los cuales un
- * ticket de "Excepción de Dateo" no lleva penalización. Cascada idéntica a
- * getMaxRedateos(): override por asesor (si existe y no es null) → config
- * global (find-or-create con default 60). Sin cache — mismo criterio que
- * getMaxRedateos(), no es un hot-path.
+ * Ventana global (configuracion_ventana_ticket_global). Solo lectura: sin
+ * fila devuelve el default, no la crea — la fila solo se escribe desde
+ * POST /tickets/config/ventana.
+ */
+export async function getMinutosVentanaGlobal(): Promise<number> {
+  const { default: ConfiguracionVentanaTicketGlobal } = await import(
+    '#models/configuracion_ventana_ticket_global'
+  )
+  const config = await ConfiguracionVentanaTicketGlobal.query().first()
+  return config?.minutosVentana ?? MINUTOS_VENTANA_TICKET_DEFAULT
+}
+
+/**
+ * Minutos de ventana (desde la entrada del turno) dentro de los cuales un
+ * ticket de "Excepción de Dateo" lleva comisión completa sin decisión de
+ * gerencia. Cascada: override por asesor (si existe y no es null) → config
+ * global (lectura con default 60, sin escribir). Sin cache — no es un hot-path.
  */
 export async function getMinutosVentanaTicket(agenteId?: number | null): Promise<number> {
   if (agenteId) {
@@ -253,49 +282,82 @@ export async function getMinutosVentanaTicket(agenteId?: number | null): Promise
     }
   }
 
-  const { default: ConfiguracionVentanaTicketGlobal } = await import(
-    '#models/configuracion_ventana_ticket_global'
-  )
-  let config = await ConfiguracionVentanaTicketGlobal.query().first()
-  if (!config) {
-    config = await ConfiguracionVentanaTicketGlobal.create({ minutosVentana: 60 } as any)
-  }
-  return config.minutosVentana
+  return getMinutosVentanaGlobal()
 }
 
 /**
- * ¿El turno viene de un ticket de Excepción de Dateo APROBADO con "Aprobar
- * sin comisión" (con_comision=false)? Si es así, esa decisión de gerencia
- * debe respetarse en cualquier punto que vuelva a escribir montoAsesor
- * después — facturacion_tickets_controller.ts::applyCommissionHook() (camino
- * diferido, cuando facturación se confirma después de aprobar el ticket) y
- * rep_general_imports_controller.ts::recalcularComisionSiExiste()
- * (reclasificación de recurrencia/recuperación al subir un Rep General
- * posterior) — antes cada uno tenía su propia copia de esta consulta.
+ * Guarda la foto del valor calculado (antes de forzar a $0) en el ticket de
+ * Excepción de Dateo APROBADO del turno. Lo usa applyCommissionHook() (camino
+ * diferido) cuando debeRespetarSinComision() dice que hay algo sin comisión;
+ * aprobar() la escribe directo en el detalle. Ver migración 1799000000000.
+ */
+export async function guardarFotoComisionTicket(
+  turnoId: number,
+  montoAsesor: string | number,
+  montoConvenio: string | number,
+  trx?: TransactionClientContract
+): Promise<void> {
+  const { default: Database } = await import('@adonisjs/lucid/services/db')
+  const q = (trx ?? Database).from('tickets_detalle_excepcion_dateo')
+  await q
+    .where('turno_id', turnoId)
+    .whereIn('ticket_id', (sub: any) =>
+      sub.from('tickets').where('estado', 'APROBADO').select('id')
+    )
+    .update({
+      monto_asesor_calculado: Number(montoAsesor) || 0,
+      monto_convenio_calculado: Number(montoConvenio) || 0,
+    })
+}
+
+/** Qué parte de la comisión se paga en $0 por decisión de gerencia (true = sin comisión). */
+export interface SinComisionTicket {
+  asesor: boolean
+  convenio: boolean
+}
+
+/**
+ * ¿El turno viene de un ticket de Excepción de Dateo APROBADO "sin comisión"
+ * para el asesor y/o el convenio? Esa decisión de gerencia debe respetarse en
+ * cualquier punto que vuelva a escribir monto_asesor/monto_convenio después:
+ * tickets_excepcion_dateo_controller.ts::aprobar(),
+ * facturacion_tickets_controller.ts::applyCommissionHook() (camino diferido)
+ * y rep_general_imports_controller.ts::recalcularComisionSiExiste()
+ * (reclasificación al subir un Rep General posterior).
  *
- * mysql2 devuelve TINYINT(1) como 0/1/null (no boolean real) en una lectura
- * directa de modelo — null (dentro de ventana) también es falsy, así que hay
- * que descartarlo explícitamente antes de negar, si no `Boolean(null)`
- * colaría como "sin comisión" igual que `false`.
+ * Lee con_comision_asesor/con_comision_convenio; si están en NULL pero
+ * con_comision no (ticket aprobado por código que solo conoce esa columna,
+ * p. ej. producción local sobre la misma BD), usa su significado de siempre:
+ * con_comision=0 → asesor sin comisión, convenio cobra.
+ *
+ * mysql2 devuelve TINYINT(1) como 0/1/null: null (dentro de ventana) también
+ * es falsy, por eso se descarta explícitamente antes de negar.
  */
 export async function debeRespetarSinComision(
   turnoId: number | null | undefined
-): Promise<boolean> {
-  if (!turnoId) return false
+): Promise<SinComisionTicket> {
+  const ninguno: SinComisionTicket = { asesor: false, convenio: false }
+  if (!turnoId) return ninguno
 
   const { default: TicketDetalleExcepcionDateo } = await import(
     '#models/ticket_detalle_excepcion_dateo'
   )
-  const detalleTicketExcepcion = await TicketDetalleExcepcionDateo.query()
+  const detalle = await TicketDetalleExcepcionDateo.query()
     .where('turno_id', turnoId)
     .whereHas('ticket', (q) => q.where('estado', 'APROBADO'))
     .first()
+  if (!detalle) return ninguno
 
-  return (
-    !!detalleTicketExcepcion &&
-    detalleTicketExcepcion.conComision !== null &&
-    !Boolean(detalleTicketExcepcion.conComision)
-  )
+  const sinComision = (flag: boolean | number | null | undefined) =>
+    flag !== null && flag !== undefined && Boolean(flag) === false
+
+  if (detalle.conComisionAsesor === null && detalle.conComisionConvenio === null) {
+    return { asesor: sinComision(detalle.conComision), convenio: false }
+  }
+  return {
+    asesor: sinComision(detalle.conComisionAsesor),
+    convenio: sinComision(detalle.conComisionConvenio),
+  }
 }
 
 /**

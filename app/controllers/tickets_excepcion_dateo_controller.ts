@@ -12,16 +12,27 @@ import AgenteCaptacion from '#models/agente_captacion'
 import Convenio from '#models/convenio'
 import Comision from '#models/comision'
 import FacturacionTicket from '#models/facturacion_ticket'
+import Descuento from '#models/descuento'
 
-import { dentroVentanaDateoTurno, getMinutosVentanaTicket } from '#services/reserva_dateo_service'
+import {
+  dentroVentanaDateoTurno,
+  getMinutosVentanaGlobal,
+  getMinutosVentanaTicket,
+} from '#services/reserva_dateo_service'
+import { esEvidenciaValida } from '#services/ticket_acceso_service'
+import { resolverIntentoDateo } from '#services/intento_dateo_service'
+import { resolverDecisionComision } from '#services/decision_comision_ticket_service'
+import { registrarEventoTicket } from '#services/ticket_eventos_service'
 import { evaluarContinuidad } from '#services/continuidad_service'
 import {
   resolveConfigComision,
   resolveConfigRecurrencia,
   calcularComision,
   inferTipoVehiculoComision,
+  decidirCasoComision,
   type CasoComision,
   type EscenarioCliente,
+  type OrigenDescuento,
 } from '#services/comision_calculo_service'
 import { conflictoTurnoSegundaVez, esTurnoSegundaVez } from '#services/segunda_vez_service'
 
@@ -36,21 +47,13 @@ function readOptionalNumber(input: unknown): number | null {
 export default class TicketsExcepcionDateoController {
   /**
    * GET /tickets/config/ventana
-   * Límite global de minutos de ventana sin penalización (fallback cuando no
+   * Límite global de minutos de ventana con comisión completa (fallback cuando no
    * hay override por asesor). Mismo patrón que
-   * captacion_dateos_controller.ts::maxRedateosConfigGet().
+   * captacion_dateos_controller.ts::maxRedateosConfigGet(). Solo lectura:
+   * sin fila devuelve el default (60), no la crea.
    */
   public async ventanaConfigGet({ response }: HttpContext) {
-    const { default: ConfiguracionVentanaTicketGlobal } = await import(
-      '#models/configuracion_ventana_ticket_global'
-    )
-
-    let config = await ConfiguracionVentanaTicketGlobal.query().first()
-    if (!config) {
-      config = await ConfiguracionVentanaTicketGlobal.create({ minutosVentana: 60 } as any)
-    }
-
-    return response.ok({ minutos_ventana: config.minutosVentana })
+    return response.ok({ minutos_ventana: await getMinutosVentanaGlobal() })
   }
 
   /**
@@ -122,6 +125,8 @@ export default class TicketsExcepcionDateoController {
 
     const asesorId = Number(payload.asesor_id)
     if (!asesorId) return response.badRequest({ message: 'asesor_id es requerido' })
+    const asesor = await AgenteCaptacion.find(asesorId)
+    if (!asesor) return response.badRequest({ message: 'asesor_id no existe' })
 
     let minutosVentana: number | null = null
     if (
@@ -132,7 +137,8 @@ export default class TicketsExcepcionDateoController {
       minutosVentana = Math.trunc(Number(payload.minutos_ventana))
       if (!Number.isFinite(minutosVentana) || minutosVentana <= 0) {
         return response.badRequest({
-          message: 'minutos_ventana debe ser un número entero mayor a 0, o null para usar el global',
+          message:
+            'minutos_ventana debe ser un número entero mayor a 0, o null para usar el global',
         })
       }
     }
@@ -171,9 +177,14 @@ export default class TicketsExcepcionDateoController {
 
   /**
    * POST /tickets-excepcion-dateo
-   * Body: { turno_id, convenio_id?, observacion, evidencia_chat_url,
+   * Body: { turno_id, observacion, evidencia_chat_url,
    *         evidencia_grupo_whatsapp_url, evidencia_bloqueo_url,
-   *         evidencia_calamidad_url? }
+   *         evidencia_calamidad_url?,
+   *         // intento de dateo (lo que store() rechazó con REQUIERE_TICKET_DATEO)
+   *         canal?, convenio_id?, servicio_id?, descuento_id?, es_avance?,
+   *         comprobante_avance_url?, telefono? }
+   * El intento se valida con resolverIntentoDateo(), la misma regla de
+   * store(): p. ej. un asesor convenio queda con su convenio aunque no venga.
    * El comercial se resuelve del usuario autenticado (mismo patrón que
    * captacion_dateos_controller.ts::store(), AgenteCaptacion.findBy('usuarioId', ...)).
    * Las evidencias ya vienen subidas (POST /api/uploads/images, una llamada
@@ -184,6 +195,12 @@ export default class TicketsExcepcionDateoController {
       'turno_id',
       'comercial_id',
       'convenio_id',
+      'canal',
+      'servicio_id',
+      'descuento_id',
+      'es_avance',
+      'comprobante_avance_url',
+      'telefono',
       'observacion',
       'evidencia_chat_url',
       'evidencia_grupo_whatsapp_url',
@@ -198,7 +215,8 @@ export default class TicketsExcepcionDateoController {
     if (!observacion) return response.badRequest({ message: 'observacion es requerida' })
 
     const evidenciaChatUrl = (payload.evidencia_chat_url as string | undefined) || null
-    const evidenciaGrupoWhatsappUrl = (payload.evidencia_grupo_whatsapp_url as string | undefined) || null
+    const evidenciaGrupoWhatsappUrl =
+      (payload.evidencia_grupo_whatsapp_url as string | undefined) || null
     const evidenciaBloqueoUrl = (payload.evidencia_bloqueo_url as string | undefined) || null
     const evidenciaCalamidadUrl = (payload.evidencia_calamidad_url as string | undefined) || null
 
@@ -238,16 +256,6 @@ export default class TicketsExcepcionDateoController {
       }
     }
 
-    const turno = await TurnoRtm.find(turnoId)
-    if (!turno) return response.notFound({ message: 'Turno no encontrado' })
-    // Segunda vez: sin dateo ni ticket de excepción de dateo.
-    if (esTurnoSegundaVez(turno)) {
-      return response.conflict(conflictoTurnoSegundaVez('dateo ni ticket de excepción de dateo'))
-    }
-    if (turno.captacionDateoId) {
-      return response.badRequest({ message: 'Este turno ya tiene un dateo vinculado' })
-    }
-
     const tipoTicket = await TipoTicket.findBy('codigo', 'EXCEPCION_DATEO')
     if (!tipoTicket) {
       return response.internalServerError({
@@ -255,28 +263,125 @@ export default class TicketsExcepcionDateoController {
       })
     }
 
-    const yaExistePendiente = await TicketDetalleExcepcionDateo.query()
-      .where('turno_id', turnoId)
-      .whereHas('ticket', (q) => q.where('estado', 'PENDIENTE'))
-      .first()
-    if (yaExistePendiente) {
-      return response.conflict({
-        message: 'Ya existe un ticket pendiente para este turno',
-        ticketId: yaExistePendiente.ticketId,
-      })
+    const convenioId = readOptionalNumber(payload.convenio_id)
+    if (convenioId !== null) {
+      const convenio = await Convenio.find(convenioId)
+      if (!convenio || !convenio.activo) {
+        return response.badRequest({ message: 'convenio_id no existe o está inactivo' })
+      }
     }
 
-    const convenioId = readOptionalNumber(payload.convenio_id)
+    const hoyISO = DateTime.local().setZone('America/Bogota').toISODate()!
 
-    // 🆕 dentro_ventana se calcula y persiste AQUÍ, con la ventana vigente en
-    // este momento (posible override del comercial que crea el ticket) — no
-    // se recalcula después, así un cambio de configuración posterior no
-    // afecta tickets ya creados (ver dentro_ventana en el modelo/migración).
-    const minutosVentana = await getMinutosVentanaTicket(comercial.id)
-    const { dentro, minutosTotales, minutosExceso } = dentroVentanaDateoTurno(turno, minutosVentana)
-
+    // Todo lo que depende del turno corre con el turno bloqueado (FOR
+    // UPDATE): dos crear() simultáneos sobre el mismo turno se serializan y
+    // el segundo ya ve el PENDIENTE del primero.
     const trx = await Database.transaction()
     try {
+      const turno = await TurnoRtm.query({ client: trx }).where('id', turnoId).forUpdate().first()
+      if (!turno) {
+        await trx.rollback()
+        return response.notFound({ message: 'Turno no encontrado' })
+      }
+      // Segunda vez: sin dateo ni ticket de excepción de dateo.
+      if (esTurnoSegundaVez(turno)) {
+        await trx.rollback()
+        return response.conflict(conflictoTurnoSegundaVez('dateo ni ticket de excepción de dateo'))
+      }
+      if (turno.fecha.setZone('America/Bogota').toISODate() !== hoyISO) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TICKET_TURNO_OTRO_DIA',
+          message: 'Solo se puede crear el ticket para un turno de hoy.',
+        })
+      }
+      if (!['activo', 'finalizado'].includes(turno.estado)) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TICKET_TURNO_ESTADO_INVALIDO',
+          message: `El turno está ${turno.estado}: solo se acepta un turno activo o finalizado.`,
+        })
+      }
+      if (turno.captacionDateoId) {
+        await trx.rollback()
+        return response.badRequest({ message: 'Este turno ya tiene un dateo vinculado' })
+      }
+
+      const yaExistePendiente = await TicketDetalleExcepcionDateo.query({ client: trx })
+        .where('turno_id', turnoId)
+        .whereHas('ticket', (q) => q.where('estado', 'PENDIENTE'))
+        .first()
+      if (yaExistePendiente) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TICKET_PENDIENTE_EXISTENTE',
+          message: 'Ya existe un ticket pendiente para este turno',
+          ticketId: yaExistePendiente.ticketId,
+        })
+      }
+
+      // Solo imágenes subidas por POST /api/media/upload que existan en disco.
+      const evidenciaInvalida = (
+        [
+          ['evidencia_chat_url', evidenciaChatUrl],
+          ['evidencia_grupo_whatsapp_url', evidenciaGrupoWhatsappUrl],
+          ['evidencia_bloqueo_url', evidenciaBloqueoUrl],
+          ['evidencia_calamidad_url', evidenciaCalamidadUrl],
+        ] as const
+      ).find(([, url]) => url !== null && !esEvidenciaValida(url))
+      if (evidenciaInvalida) {
+        await trx.rollback()
+        return response.badRequest({
+          code: 'EVIDENCIA_INVALIDA',
+          message: `${evidenciaInvalida[0]} no es una imagen subida al sistema`,
+        })
+      }
+
+      const resIntento = await resolverIntentoDateo({
+        agenteId: comercial.id,
+        canal: (payload.canal as string | undefined) || null,
+        convenioId,
+        descuentoId: readOptionalNumber(payload.descuento_id),
+        servicioId: readOptionalNumber(payload.servicio_id) ?? turno.servicioId,
+        esAvance: payload.es_avance === true || payload.es_avance === 'true',
+        comprobanteAvanceUrl: (payload.comprobante_avance_url as string | undefined) || null,
+      })
+      if (!resIntento.ok) {
+        await trx.rollback()
+        return response
+          .status(resIntento.status)
+          .send({ code: 'INTENTO_DATEO_INVALIDO', message: resIntento.message })
+      }
+      const intento = resIntento.intento
+      if (intento.servicioIdEfectivo !== turno.servicioId) {
+        await trx.rollback()
+        return response.badRequest({
+          code: 'INTENTO_DATEO_INVALIDO',
+          message: 'El servicio del dateo no coincide con el del turno',
+        })
+      }
+      if (intento.comprobanteAvanceUrl && !esEvidenciaValida(intento.comprobanteAvanceUrl)) {
+        await trx.rollback()
+        return response.badRequest({
+          code: 'EVIDENCIA_INVALIDA',
+          message: 'comprobante_avance_url no es una imagen subida al sistema',
+        })
+      }
+      const telefono =
+        String(payload.telefono ?? '')
+          .replace(/\D/g, '')
+          .slice(0, 20) || null
+
+      // dentro_ventana se calcula y persiste AQUÍ, con la ventana vigente en
+      // este momento (posible override del comercial que crea el ticket) — no
+      // se recalcula después, así un cambio de configuración posterior no
+      // afecta tickets ya creados (ver dentro_ventana en el modelo/migración).
+      const minutosVentana = await getMinutosVentanaTicket(comercial.id)
+      const { dentro, minutosTotales, minutosExceso } = dentroVentanaDateoTurno(
+        turno,
+        minutosVentana
+      )
+
       const ticket = await Ticket.create(
         {
           tipoTicketId: tipoTicket.id,
@@ -294,7 +399,14 @@ export default class TicketsExcepcionDateoController {
           turnoId: turno.id,
           placa: turno.placa,
           comercialId: comercial.id,
-          convenioId,
+          convenioId: intento.convenioId,
+          convenioIdOriginal: intento.convenioId,
+          canal: intento.canal,
+          servicioId: intento.servicioIdEfectivo,
+          descuentoId: intento.descuentoId,
+          esAvance: intento.esAvance,
+          comprobanteAvanceUrl: intento.comprobanteAvanceUrl,
+          telefono,
           horaIngreso: turno.horaIngreso,
           horaIntentoDateo: DateTime.now(),
           minutosTotales,
@@ -309,6 +421,19 @@ export default class TicketsExcepcionDateoController {
         { client: trx }
       )
 
+      await registrarEventoTicket(trx, {
+        ticketId: ticket.id,
+        tipo: 'CREADO',
+        usuarioId: auth.user!.id,
+        datos: {
+          dentro_ventana: dentro,
+          minutos_exceso: minutosExceso,
+          comercial_id: comercial.id,
+          convenio_id: intento.convenioId,
+          canal: intento.canal,
+        },
+      })
+
       await trx.commit()
       return response.created({ ticket: ticket.serialize(), detalle: detalle.serialize() })
     } catch (error) {
@@ -319,51 +444,81 @@ export default class TicketsExcepcionDateoController {
 
   /**
    * PATCH /tickets-excepcion-dateo/:id/aprobar
-   * Body: { con_comision: boolean } — solo requerido/relevante fuera de
-   * ventana (dentroVentana=false); dentro de ventana se ignora, la comisión
-   * siempre es completa.
+   * Body: {
+   *   con_comision_asesor: boolean, con_comision_convenio?: boolean
+   *       — dentro y fuera de ventana. Combinaciones válidas por caso en
+   *       decision_comision_ticket_service.ts (Caso 1 sin flag de convenio,
+   *       Caso 2 flags iguales, Caso 3 las 4). Dentro de ventana un body sin
+   *       flags (frontend anterior) = comisión completa. `con_comision` sola
+   *       se sigue aceptando como flag del asesor (frontend anterior).
+   *   convenio_id?: number | null — opcional: gerencia corrige el convenio
+   *                            del intento (null = sin convenio). El original
+   *                            queda en convenio_id_original.
+   * }
    *
-   * Plantilla estructural: comisiones_controller.ts::store() (transacción,
-   * crear/vincular dateo, marcar EXITOSO condicionalmente, generar comisión).
-   * El cálculo del monto de comisión (caso/escenario/continuidad + llamada a
+   * El dateo se crea con el intento guardado en el ticket (canal, convenio,
+   * servicio, descuento, avance, teléfono). Tickets anteriores a la Fase 3
+   * (canal NULL) resuelven el intento con el comercial del ticket, igual que
+   * store(): un asesor convenio queda con su convenio (Caso 2).
+   *
+   * El cálculo de la comisión (caso/escenario/continuidad/descuento +
    * calcularComision()) replica el criterio de
-   * facturacion_tickets_controller.ts::applyCommissionHook() — duplicado
-   * aquí a propósito. Ese archivo sí se tocó en esta fase, pero solo para
-   * respetar con_comision=false en su camino de comisión DIFERIDA (ver
-   * forzarSinComisionPorTicket ahí) — el cálculo en sí sigue duplicado.
+   * facturacion_tickets_controller.ts::applyCommissionHook(); el caso sale de
+   * decidirCasoComision(), compartida por ambos.
    */
   public async aprobar({ params, request, response, auth }: HttpContext) {
-    const ticket = await Ticket.find(params.id)
-    if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
-    if (ticket.estado !== 'PENDIENTE') {
-      return response.badRequest({ message: 'Solo se pueden aprobar tickets PENDIENTES' })
-    }
-
-    const detalle = await TicketDetalleExcepcionDateo.findBy('ticketId', ticket.id)
-    if (!detalle) return response.notFound({ message: 'Detalle del ticket no encontrado' })
-
-    // dentro_ventana quedó fijado AL CREAR el ticket (snapshot de la ventana
-    // configurada en ese momento) — no se recalcula acá. mysql2 devuelve
-    // TINYINT(1) como 0/1 (no boolean real) — Boolean() en vez de === true,
-    // si no la comparación estricta siempre da false.
-    const dentroVentana = Boolean(detalle.dentroVentana)
-
-    // con_comision solo es relevante fuera de ventana — dentro de ventana la
-    // comisión siempre es completa, sin que gerencia decida nada, así que se
-    // ignora aunque venga en el body.
-    let conComision: boolean | null = null
-    if (!dentroVentana) {
-      const raw = request.input('con_comision')
-      if (typeof raw !== 'boolean') {
-        return response.badRequest({
-          message: 'con_comision es requerido (true/false) cuando el ticket está fuera de ventana',
-        })
-      }
-      conComision = raw
-    }
-
+    // El ticket se bloquea (FOR UPDATE) antes de mirar su estado: dos
+    // aprobaciones simultáneas se serializan y la segunda ve APROBADO → 409.
     const trx = await Database.transaction()
     try {
+      const ticket = await Ticket.query({ client: trx }).where('id', params.id).forUpdate().first()
+      if (!ticket) {
+        await trx.rollback()
+        return response.notFound({ message: 'Ticket no encontrado' })
+      }
+      if (ticket.estado !== 'PENDIENTE') {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TICKET_YA_RESUELTO',
+          message: 'Solo se pueden aprobar tickets PENDIENTES',
+          estado: ticket.estado,
+        })
+      }
+
+      const detalle = await TicketDetalleExcepcionDateo.query({ client: trx })
+        .where('ticket_id', ticket.id)
+        .first()
+      if (!detalle) {
+        await trx.rollback()
+        return response.notFound({ message: 'Detalle del ticket no encontrado' })
+      }
+
+      // dentro_ventana quedó fijado AL CREAR el ticket (snapshot de la ventana
+      // configurada en ese momento) — no se recalcula acá. mysql2 devuelve
+      // TINYINT(1) como 0/1 (no boolean real) — Boolean() en vez de === true.
+      const dentroVentana = Boolean(detalle.dentroVentana)
+
+      // La decisión se valida del todo cuando se conoce el caso (más abajo);
+      // acá solo se corta temprano si falta el flag del asesor fuera de
+      // ventana (dentro, sin flags = comisión completa).
+      const flagsComision = {
+        conComisionAsesor: request.input('con_comision_asesor'),
+        conComisionConvenio: request.input('con_comision_convenio'),
+        conComision: request.input('con_comision'),
+      }
+      if (
+        !dentroVentana &&
+        typeof flagsComision.conComisionAsesor !== 'boolean' &&
+        typeof flagsComision.conComision !== 'boolean'
+      ) {
+        await trx.rollback()
+        return response.badRequest({
+          code: 'COMBINACION_COMISION_INVALIDA',
+          message:
+            'con_comision_asesor es requerido (true/false) cuando el ticket está fuera de ventana',
+        })
+      }
+
       // 1. Carga el turno del ticket.
       const turno = await TurnoRtm.query({ client: trx }).where('id', detalle.turnoId).first()
       if (!turno) {
@@ -386,25 +541,63 @@ export default class TicketsExcepcionDateoController {
         return response.notFound({ message: 'Comercial del ticket no encontrado' })
       }
 
-      let convenio: Convenio | null = null
-      if (detalle.convenioId) {
-        convenio = await Convenio.find(detalle.convenioId, { client: trx })
+      // 2. Intento de dateo: el guardado al crear, salvo que el ticket sea
+      // anterior a la Fase 3 (canal NULL) o gerencia corrija el convenio — en
+      // esos casos se vuelve a resolver/validar con la misma regla de store().
+      const corrigeConvenio = Object.prototype.hasOwnProperty.call(request.all(), 'convenio_id')
+      const convenioIdCorregido = corrigeConvenio
+        ? readOptionalNumber(request.input('convenio_id'))
+        : null
+      if (corrigeConvenio && convenioIdCorregido !== null) {
+        const conv = await Convenio.find(convenioIdCorregido, { client: trx })
+        if (!conv || !conv.activo) {
+          await trx.rollback()
+          return response.badRequest({ message: 'convenio_id no existe o está inactivo' })
+        }
       }
 
-      // 2. Crea el captacion_dateo (servicioId = turno.servicioId, obligatorio
-      // para que dateoAplicaAServicio() lo valide correctamente en cualquier
-      // lectura futura — mismo criterio que comisiones_controller.ts::store()).
-      const canal = String(comercial.tipo ?? '').toUpperCase().includes('CONVENIO')
-        ? 'ASESOR_CONVENIO'
-        : 'ASESOR_COMERCIAL'
+      const esAvanceGuardado = Boolean(detalle.esAvance)
+      let canal = detalle.canal
+      let convenioId = detalle.convenioId
+      let asesorConvenioIdDateo: number | null =
+        detalle.canal === 'ASESOR_CONVENIO' ? comercial.id : null
+      if (!detalle.canal || corrigeConvenio) {
+        const res = await resolverIntentoDateo({
+          agenteId: comercial.id,
+          canal: detalle.canal,
+          convenioId: corrigeConvenio ? convenioIdCorregido : detalle.convenioId,
+          descuentoId: detalle.descuentoId,
+          servicioId: detalle.servicioId ?? turno.servicioId,
+          esAvance: esAvanceGuardado,
+          comprobanteAvanceUrl: detalle.comprobanteAvanceUrl,
+        })
+        if (!res.ok) {
+          await trx.rollback()
+          return response
+            .status(res.status)
+            .send({ code: 'INTENTO_DATEO_INVALIDO', message: res.message })
+        }
+        canal = res.intento.canal
+        convenioId = res.intento.convenioId
+        asesorConvenioIdDateo = res.intento.asesorConvenioId
+      }
 
+      const convenio = convenioId ? await Convenio.find(convenioId, { client: trx }) : null
+
+      // 3. Crea el captacion_dateo (servicioId = el del turno si el ticket no
+      // lo trae, obligatorio para que dateoAplicaAServicio() lo valide).
       const dateo = await CaptacionDateo.create(
         {
           canal: canal as any,
           agenteId: comercial.id,
-          convenioId: detalle.convenioId,
+          convenioId,
+          asesorConvenioId: asesorConvenioIdDateo,
           placa: turno.placa,
-          servicioId: turno.servicioId,
+          telefono: detalle.telefono,
+          servicioId: detalle.servicioId ?? turno.servicioId,
+          descuentoId: detalle.descuentoId,
+          esAvance: esAvanceGuardado,
+          comprobanteAvanceUrl: esAvanceGuardado ? detalle.comprobanteAvanceUrl : null,
           origen: 'UI',
           resultado: 'EN_PROCESO',
           consumidoTurnoId: turno.id,
@@ -414,27 +607,37 @@ export default class TicketsExcepcionDateoController {
         { client: trx }
       )
 
-      // 3. Vinculación retroactiva.
+      // 4. Vinculación retroactiva.
       turno.captacionDateoId = dateo.id
       await turno.save()
 
-      // 4. ¿Ya existe un facturacion_ticket CONFIRMADA para este turno?
+      // 5. ¿Ya existe un facturacion_ticket CONFIRMADA para este turno?
       const facturacionConfirmada = await FacturacionTicket.query({ client: trx })
         .where('turno_id', turno.id)
         .where('estado', 'CONFIRMADA')
         .first()
 
-      // Caso (1/2/3) — mismo criterio que applyCommissionHook().
       const asesorConvenioIdReal = convenio?.asesorConvenioId ?? null
-      const caso: CasoComision = !detalle.convenioId
-        ? 'SIN_CONVENIO'
-        : !dateo.agenteId || dateo.agenteId === asesorConvenioIdReal || dateo.canal === 'ASESOR_CONVENIO'
-          ? 'CONVENIO_SELF'
-          : 'CONVENIO_COMERCIAL'
+      const caso: CasoComision = decidirCasoComision({
+        convenioId: dateo.convenioId,
+        agenteId: dateo.agenteId,
+        canal: dateo.canal,
+        asesorConvenioIdDelConvenio: asesorConvenioIdReal,
+      })
+
+      const resDecision = resolverDecisionComision({ dentroVentana, caso, ...flagsComision })
+      if (!resDecision.ok) {
+        await trx.rollback()
+        return response.badRequest({
+          code: 'COMBINACION_COMISION_INVALIDA',
+          message: resDecision.message,
+          caso,
+        })
+      }
+      const decision = resDecision.decision
 
       // Escenario — turno.esRecurrente/esRecuperacion ya vienen calculados
-      // desde la creación del turno (historial del cliente), independiente
-      // del dateo — mismo campo que lee applyCommissionHook().
+      // desde la creación del turno (historial del cliente).
       const esClienteRecurrente = Boolean(turno.esRecurrente)
       const esClienteRecuperacion = Boolean(turno.esRecuperacion)
       const escenario: EscenarioCliente = esClienteRecurrente
@@ -448,7 +651,7 @@ export default class TicketsExcepcionDateoController {
       const estadoContinuidad = await evaluarContinuidad({
         placa: turno.placa,
         asesorConvenioId: asesorConvenioIdReal,
-        convenioId: detalle.convenioId,
+        convenioId: dateo.convenioId,
         excluirTurnoId: turno.id,
       })
       const tuvoContinuidad = estadoContinuidad !== 'ROTA'
@@ -460,16 +663,41 @@ export default class TicketsExcepcionDateoController {
       })
       const recValues = await resolveConfigRecurrencia(dateo.agenteId, tipoVehiculoComision)
 
-      // Sin avance ni descuento informativo — conceptos que no existen en el
-      // flujo de "Excepción de Dateo".
+      // Descuento y avance — mismo criterio que applyCommissionHook(): manda
+      // el descuento de caja si lo hay; si no, el pre-marcado en el dateo.
+      const descuentoIdActivo = facturacionConfirmada?.descuentoId ?? dateo.descuentoId ?? null
+      const origenDescuento: OrigenDescuento =
+        facturacionConfirmada?.descuentoId && !dateo.descuentoId ? 'CAJA' : 'DATEO'
+      const descuentoActivo = descuentoIdActivo
+        ? await Descuento.query({ client: trx })
+            .where('id', descuentoIdActivo)
+            .where('activo', true)
+            .first()
+        : null
+      const codigoDescuento = descuentoActivo?.codigo ?? null
+      // Avance solo aplica con convenio (Caso 1 nunca lo usa).
+      const esAvance = caso !== 'SIN_CONVENIO' && esAvanceGuardado
+      let montoAvance = 0
+      if (esAvance && descuentoActivo) {
+        const montoExplicito = Number(facturacionConfirmada?.descuentoMontoAplicado ?? 0)
+        montoAvance =
+          montoExplicito > 0
+            ? montoExplicito
+            : Number(
+                tipoVehiculoComision === 'MOTO'
+                  ? ((descuentoActivo as any).valorMoto ?? 0)
+                  : ((descuentoActivo as any).valorCarro ?? 0)
+              )
+      }
+
       const resultadoComision = calcularComision({
         caso,
         escenario,
         tuvoContinuidad,
-        esAvance: false,
-        montoAvance: 0,
-        codigoDescuento: null,
-        origenDescuento: null,
+        esAvance,
+        montoAvance,
+        codigoDescuento,
+        origenDescuento,
         cfgValues,
         recValues,
       })
@@ -487,7 +715,7 @@ export default class TicketsExcepcionDateoController {
           comisionConvenioId = null
           comisionAsesorSecundarioId = null
         } else if (caso === 'CONVENIO_SELF') {
-          comisionAsesorId = asesorConvenioIdReal
+          comisionAsesorId = asesorConvenioIdReal ?? dateo.agenteId
           comisionConvenioId = dateo.convenioId
           comisionAsesorSecundarioId = null
         } else {
@@ -514,23 +742,42 @@ export default class TicketsExcepcionDateoController {
         c.montoConvenio = String(resultadoComision.montoConvenio)
         c.valorNuevoDirecto = String(resultadoComision.valorNuevoDirectoFinal)
         c.reglaAplicada = resultadoComision.reglaAplicada
-        c.esAvance = false
-        // Fuera de ventana + "Aprobar sin comisión": se calcula la comisión
+        c.esAvance = esAvance
+        c.descuentoCodigoAplicado = codigoDescuento
+        c.descuentoObservacionCaja = facturacionConfirmada.descuentoObservacion ?? null
+        if (resultadoComision.descuentoMontoAplicado !== null) {
+          c.descuentoMontoAplicado = resultadoComision.descuentoMontoAplicado
+        }
+        // "Sin comisión" (dentro o fuera de ventana): se calcula la comisión
         // normal con el motor de siempre y se fuerza a 0 recién acá, justo
-        // antes de guardar — montoConvenio queda intacto (si hay convenio,
-        // cobra su parte normal; si no hay, ya es $0 de por sí).
-        if (!dentroVentana && conComision === false) c.montoAsesor = '0'
+        // antes de guardar, solo la parte que gerencia decidió.
+        // `monto` queda con el valor del motor: es lo que se dejó de pagar.
+        if (decision.asesor === false || decision.convenio === false) {
+          // Foto del valor calculado para el "dejado de pagar" exacto.
+          detalle.montoAsesorCalculado = c.montoAsesor
+          detalle.montoConvenioCalculado = c.montoConvenio
+        }
+        if (decision.asesor === false) c.montoAsesor = '0'
+        if (decision.convenio === false) c.montoConvenio = '0'
         await c.save()
         comisionCreada = c
       }
-      // Si NO existe facturación confirmada: no se toca más el dateo/comisión
-      // aquí. facturacion_tickets_controller.ts::applyCommissionHook() relee
-      // turno.captacionDateoId en vivo cuando el ticket de facturación se
-      // confirme más adelante (confirmado en investigación previa).
+      // Si NO existe facturación confirmada: applyCommissionHook() relee
+      // turno.captacionDateoId cuando el ticket de facturación se confirme y
+      // toma descuento/avance del dateo recién creado.
 
-      // 5. Cierra el ticket.
+      // 6. Cierra el ticket.
       detalle.useTransaction(trx)
-      detalle.conComision = dentroVentana ? null : conComision
+      detalle.conComisionAsesor = decision.asesor
+      detalle.conComisionConvenio = decision.convenio
+      // Transición: producción local (misma BD) todavía lee con_comision.
+      detalle.conComision = decision.asesor
+      if (!detalle.canal) {
+        // Ticket anterior a la Fase 3: el convenio con el que llegó.
+        detalle.convenioIdOriginal = detalle.convenioId
+      }
+      detalle.canal = canal
+      detalle.convenioId = convenioId
       detalle.aprobadoPorId = auth.user!.id
       detalle.aprobadoAt = DateTime.now()
       await detalle.save()
@@ -540,6 +787,33 @@ export default class TicketsExcepcionDateoController {
       ticket.resueltoAt = DateTime.now()
       await ticket.save()
 
+      const convenioCorregido =
+        corrigeConvenio && (detalle.convenioIdOriginal ?? null) !== (convenioId ?? null)
+      if (convenioCorregido) {
+        await registrarEventoTicket(trx, {
+          ticketId: ticket.id,
+          tipo: 'CONVENIO_CORREGIDO',
+          usuarioId: auth.user!.id,
+          datos: {
+            convenio_anterior_id: detalle.convenioIdOriginal,
+            convenio_nuevo_id: convenioId,
+          },
+        })
+      }
+      await registrarEventoTicket(trx, {
+        ticketId: ticket.id,
+        tipo: 'APROBADO',
+        usuarioId: auth.user!.id,
+        datos: {
+          caso,
+          dentro_ventana: dentroVentana,
+          con_comision_asesor: decision.asesor,
+          con_comision_convenio: decision.convenio,
+          comision_id: comisionCreada?.id ?? null,
+          dateo_id: dateo.id,
+        },
+      })
+
       await trx.commit()
 
       return response.ok({
@@ -547,8 +821,12 @@ export default class TicketsExcepcionDateoController {
         detalle: detalle.serialize(),
         dateoId: dateo.id,
         comisionId: comisionCreada?.id ?? null,
+        caso,
         dentroVentana,
-        conComision: dentroVentana ? null : conComision,
+        conComision: decision.asesor,
+        conComisionAsesor: decision.asesor,
+        conComisionConvenio: decision.convenio,
+        convenioCorregido,
       })
     } catch (error) {
       await trx.rollback()
@@ -565,17 +843,32 @@ export default class TicketsExcepcionDateoController {
     const motivo = (request.input('motivo') as string | undefined)?.trim()
     if (!motivo) return response.badRequest({ message: 'motivo es requerido' })
 
-    const ticket = await Ticket.find(params.id)
-    if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
-    if (ticket.estado !== 'PENDIENTE') {
-      return response.badRequest({ message: 'Solo se pueden rechazar tickets PENDIENTES' })
-    }
-
-    const detalle = await TicketDetalleExcepcionDateo.findBy('ticketId', ticket.id)
-    if (!detalle) return response.notFound({ message: 'Detalle del ticket no encontrado' })
-
+    // Mismo bloqueo que aprobar(): un rechazo y una aprobación simultáneos
+    // no pueden resolver el mismo ticket dos veces.
     const trx = await Database.transaction()
     try {
+      const ticket = await Ticket.query({ client: trx }).where('id', params.id).forUpdate().first()
+      if (!ticket) {
+        await trx.rollback()
+        return response.notFound({ message: 'Ticket no encontrado' })
+      }
+      if (ticket.estado !== 'PENDIENTE') {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TICKET_YA_RESUELTO',
+          message: 'Solo se pueden rechazar tickets PENDIENTES',
+          estado: ticket.estado,
+        })
+      }
+
+      const detalle = await TicketDetalleExcepcionDateo.query({ client: trx })
+        .where('ticket_id', ticket.id)
+        .first()
+      if (!detalle) {
+        await trx.rollback()
+        return response.notFound({ message: 'Detalle del ticket no encontrado' })
+      }
+
       detalle.useTransaction(trx)
       detalle.motivoRechazo = motivo
       detalle.rechazadoPorId = auth.user!.id
@@ -587,6 +880,13 @@ export default class TicketsExcepcionDateoController {
       ticket.resueltoAt = DateTime.now()
       await ticket.save()
 
+      await registrarEventoTicket(trx, {
+        ticketId: ticket.id,
+        tipo: 'RECHAZADO',
+        usuarioId: auth.user!.id,
+        datos: { motivo },
+      })
+
       await trx.commit()
       return response.ok({ ticket: ticket.serialize(), detalle: detalle.serialize() })
     } catch (error) {
@@ -594,5 +894,4 @@ export default class TicketsExcepcionDateoController {
       throw error
     }
   }
-
 }

@@ -2,6 +2,11 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 import db from '@adonisjs/lucid/services/db'
+import {
+  conflictoSinComisionTicket,
+  registrarExcepcionSinComision,
+  resolverConflictoSinComision,
+} from '#services/ticket_comision_origen_service'
 import app from '@adonisjs/core/services/app'
 import fs from 'node:fs/promises'
 import CaptacionDateo, { Canal, Origen } from '#models/captacion_dateo'
@@ -9,7 +14,6 @@ import CaptacionDateoRedateo from '#models/captacion_dateo_redateo'
 import AgenteCaptacion from '#models/agente_captacion'
 import Convenio from '#models/convenio'
 import TurnoRtm from '#models/turno_rtm'
-import AsesorConvenioAsignacion from '#models/asesor_convenio_asignacion'
 import Prospecto from '#models/prospecto'
 import Descuento from '#models/descuento' // 🆕
 import Servicio from '#models/servicio' // 🆕 servicio del dateo
@@ -37,6 +41,7 @@ import {
   type EscenarioCliente,
 } from '#services/comision_calculo_service'
 import { whereTurnoDaVigencia } from '#services/segunda_vez_service'
+import { resolverIntentoDateo } from '#services/intento_dateo_service'
 import {
   consecutivoDescuentoDeTickets,
   consecutivosDescuentoPorTurno,
@@ -886,50 +891,54 @@ export default class CaptacionDateosController {
    * POST /captacion-dateos
    */
   public async store({ request, response, auth }: HttpContext) {
-    let agenteId = readOptionalNumber(
+    let agenteIdEntrada = readOptionalNumber(
       (request.input('agente_id') ?? request.input('agenteId')) as unknown
     )
-
-    let agente: AgenteCaptacion | null = null
-
-    if (agenteId === null && auth.user) {
-      agente = await AgenteCaptacion.findBy('usuarioId', auth.user.id)
-      if (agente) {
-        agenteId = agente.id
-      }
+    if (agenteIdEntrada === null && auth.user) {
+      const agentePropio = await AgenteCaptacion.findBy('usuarioId', auth.user.id)
+      if (agentePropio) agenteIdEntrada = agentePropio.id
     }
 
-    let canalRaw = String(request.input('canal') || '').toUpperCase()
-    if (!canalRaw) canalRaw = 'ASESOR'
-
-    let canal: CanalDb
-
-    if (canalRaw === 'ASESOR') {
-      if (!agente && agenteId !== null) {
-        agente = await AgenteCaptacion.find(agenteId)
-      }
-
-      const tipo = (agente?.tipo || '').toUpperCase()
-      if (tipo === 'ASESOR_CONVENIO') {
-        canal = 'ASESOR_CONVENIO'
-      } else {
-        canal = 'ASESOR_COMERCIAL'
-      }
-    } else if ((CANALES_DB as readonly string[]).includes(canalRaw)) {
-      canal = canalRaw as CanalDb
-    } else {
-      return response.badRequest({ message: 'canal inválido' })
-    }
-
-    let convenioId = readOptionalNumber(
-      (request.input('convenio_id') ?? request.input('convenioId')) as unknown
+    const esAvanceEntrada = Boolean(
+      request.input('es_avance') === true ||
+        request.input('es_avance') === 'true' ||
+        request.input('esAvance') === true ||
+        request.input('esAvance') === 'true'
     )
-    let convenio: Convenio | null = null
 
-    if (convenioId !== null) {
-      convenio = await Convenio.find(convenioId)
-      if (!convenio) return response.badRequest({ message: 'convenio_id no existe' })
+    // Canal, agente, convenio, descuento, servicio y avance: misma
+    // resolución/validación que crear() del ticket de Excepción de Dateo
+    // (intento_dateo_service.ts).
+    const resIntento = await resolverIntentoDateo({
+      agenteId: agenteIdEntrada,
+      canal: (request.input('canal') as string | undefined) ?? null,
+      convenioId: readOptionalNumber(
+        (request.input('convenio_id') ?? request.input('convenioId')) as unknown
+      ),
+      descuentoId: readOptionalNumber(
+        (request.input('descuento_id') ?? request.input('descuentoId')) as unknown
+      ),
+      servicioId: readOptionalNumber(
+        (request.input('servicio_id') ?? request.input('servicioId')) as unknown
+      ),
+      esAvance: esAvanceEntrada,
+      comprobanteAvanceUrl:
+        (request.input('comprobante_avance_url') as string | undefined) ?? null,
+    })
+    if (!resIntento.ok) {
+      return response.status(resIntento.status).send({ message: resIntento.message })
     }
+    const intento = resIntento.intento
+    const agenteId = intento.agenteId
+    const canal: CanalDb = intento.canal
+    const convenioId = intento.convenioId
+    const asesorConvenioId = intento.asesorConvenioId
+    const descuentoId = intento.descuentoId
+    const servicioDateoId = intento.servicioId
+    const servicioDateo = intento.servicio
+    const servicioDateoIdEfectivo = intento.servicioIdEfectivo
+    const esAvance = intento.esAvance
+    const comprobanteAvanceUrl = intento.comprobanteAvanceUrl
 
     const placa = normalizePlaca(request.input('placa') as string | undefined)
     const telefono = normalizePhone(request.input('telefono') as string | undefined)
@@ -948,64 +957,13 @@ export default class CaptacionDateosController {
       (request.input('imagen_origen_id') as string | number | undefined) ?? null
     const imagenSubidaPor = readOptionalNumber(request.input('imagen_subida_por') as unknown)
 
-    // 🆕 Descuento informativo pre-marcado por el comercial
-    const descuentoIdRaw = readOptionalNumber(
-      (request.input('descuento_id') ?? request.input('descuentoId')) as unknown
-    )
-    let descuentoId: number | null = null
-    if (descuentoIdRaw !== null) {
-      const descuentoExiste = await Descuento.query()
-        .where('id', descuentoIdRaw)
-        .where('activo', true)
-        .first()
-      if (!descuentoExiste) {
-        return response.badRequest({ message: 'descuento_id no existe o está inactivo' })
-      }
-      // Comercial dateando CON convenio (CASO 3): solo puede marcar AVANCE,
-      // nunca un descuento informativo (POLICIA/EMPLEADO/OBSEQUIO/etc).
-      const esAvanceDescuento = descuentoExiste.codigo.toUpperCase().includes('AVANCE')
-      if (canal === 'ASESOR_COMERCIAL' && convenioId !== null && !esAvanceDescuento) {
-        return response.badRequest({
-          message:
-            'Un comercial que datea con convenio solo puede marcar AVANCE, no un descuento informativo.',
-        })
-      }
-      descuentoId = descuentoIdRaw
-    }
-
-    // 🆕 Servicio para el que se datéa (opcional, default = RTM)
-    const servicioDateoId = readOptionalNumber(
-      (request.input('servicio_id') ?? request.input('servicioId')) as unknown
-    )
-    let servicioDateo: Servicio | null = null
-    if (servicioDateoId !== null) {
-      servicioDateo = await Servicio.find(servicioDateoId)
-      if (!servicioDateo) {
-        return response.badRequest({ message: 'servicio_id no existe' })
-      }
-    }
-    // 🆕 Mismo default que codigoServicioDateo más abajo ('RTM' si no viene
-    // servicio_id explícito) pero resuelto a id — lo necesita el filtro de
-    // exclusividad de abajo, que compara contra captacion_dateos.servicio_id.
-    let servicioDateoIdEfectivo: number | null = servicioDateo?.id ?? null
-    if (servicioDateoIdEfectivo === null) {
-      const servicioRtmDefault = await Servicio.query().where('codigo_servicio', 'RTM').first()
-      servicioDateoIdEfectivo = servicioRtmDefault?.id ?? null
-      // 🆕 Guardar también la instancia (no solo el id) cuando cae al default
-      // de RTM — el mensaje de "dateo activo" de más abajo necesita
-      // servicioDateo.nombreServicio, no solo el id.
-      servicioDateo = servicioDateo ?? servicioRtmDefault
-    }
-
-    // 🆕 Código del servicio del dateo — hoisted aquí (antes vivía más abajo,
-    // junto a VALIDACIÓN 2/RTM_VIGENTE) porque ahora también lo necesita el
-    // chequeo de "dateo activo" (exclusividad), que corre antes en el método.
-    const codigoServicioDateo = (servicioDateo?.codigoServicio ?? 'RTM').toUpperCase()
+    // 🆕 Código del servicio del dateo — lo necesitan el chequeo de "dateo
+    // activo" (exclusividad) y VALIDACIÓN 2/RTM_VIGENTE.
+    const codigoServicioDateo = intento.codigoServicio
     const esDateoParaRtm = codigoServicioDateo === 'RTM'
 
-    // 🆕 Rol privilegiado y flag de confirmación — hoisted por el mismo
-    // motivo: los usa tanto el chequeo de "dateo activo" (nuevo) como
-    // VALIDACIÓN 2/RTM_VIGENTE (ya existente, más abajo).
+    // 🆕 Rol privilegiado y flag de confirmación — los usan tanto el chequeo
+    // de "dateo activo" como VALIDACIÓN 2/RTM_VIGENTE, más abajo.
     await auth.user!.load('rol')
     const rolNombreExcepcion = auth.user!.rol?.nombre ?? ''
     const esPrivilegiado = ['SUPER_ADMIN', 'GERENCIA'].includes(rolNombreExcepcion)
@@ -1013,120 +971,12 @@ export default class CaptacionDateosController {
     const confirmarExcepcion =
       request.input('confirmar_excepcion') === true ||
       request.input('confirmar_excepcion') === 'true'
-    // ========== 🆕 AVANCE ==========
-    /**
-     * es_avance:
-     *   - Si es ASESOR_CONVENIO quien datéa → comprobante no es obligatorio (él mismo pide el avance)
-     *   - Si es ASESOR_COMERCIAL quien datéa → comprobante_avance_url ES OBLIGATORIO
-     */
-    const esAvance = Boolean(
-      request.input('es_avance') === true ||
-        request.input('es_avance') === 'true' ||
-        request.input('esAvance') === true ||
-        request.input('esAvance') === 'true'
-    )
-
-    let comprobanteAvanceUrl: string | null =
-      (request.input('comprobante_avance_url') as string | undefined) ?? null
-
-    if (esAvance && canal === 'ASESOR_COMERCIAL' && !comprobanteAvanceUrl) {
-      return response.badRequest({
-        message:
-          'comprobante_avance_url es obligatorio cuando el asesor comercial solicita un avance en nombre del convenio.',
-      })
-    }
-
-    // Si el canal no es de asesor, avance no aplica
-    if (esAvance && canal !== 'ASESOR_COMERCIAL' && canal !== 'ASESOR_CONVENIO') {
-      return response.badRequest({
-        message: 'es_avance solo aplica para canal ASESOR_COMERCIAL o ASESOR_CONVENIO.',
-      })
-    }
-    // ========== FIN AVANCE ==========
 
     if (!ORIGENES.includes(origen)) {
       return response.badRequest({ message: 'origen inválido (UI | WHATSAPP | IMPORT)' })
     }
     if (!placa) {
       return response.badRequest({ message: 'La placa es obligatoria' })
-    }
-
-    if (
-      (canal === 'ASESOR_COMERCIAL' || canal === 'ASESOR_CONVENIO' || canal === 'TELE') &&
-      agenteId === null
-    ) {
-      return response.badRequest({ message: 'agente_id es requerido para canal ASESOR/TELE' })
-    }
-
-    if (agenteId !== null && !agente) {
-      agente = await AgenteCaptacion.find(agenteId)
-      if (!agente) return response.badRequest({ message: 'agente_id no existe' })
-    }
-
-    let asesorConvenioId: number | null = null
-
-    if (agente && agente.tipo === 'ASESOR_CONVENIO') {
-      canal = 'ASESOR_CONVENIO'
-
-      // 🔥 Normalizar nombre: quitar múltiples espacios, trim, uppercase
-      const nombreNormalizado = agente.nombre.trim().replace(/\s+/g, ' ').toUpperCase()
-
-      console.log(`🔍 Buscando convenio para asesor: "${nombreNormalizado}"`)
-
-      // 🔥 Buscar TODOS los convenios activos y comparar en JavaScript
-      const conveniosActivos = await Convenio.query().where('activo', true).select(['id', 'nombre'])
-
-      console.log(`📊 Se encontraron ${conveniosActivos.length} convenios activos`)
-
-      const convenioDelAsesor = conveniosActivos.find((c) => {
-        const nombreConvenioNormalizado = c.nombre.trim().replace(/\s+/g, ' ').toUpperCase()
-
-        const coincide =
-          nombreConvenioNormalizado === nombreNormalizado ||
-          nombreConvenioNormalizado.startsWith(nombreNormalizado)
-
-        if (coincide) {
-          console.log(`✅ Convenio encontrado: "${c.nombre}" (ID: ${c.id})`)
-        }
-
-        return coincide
-      })
-
-      if (!convenioDelAsesor) {
-        console.error(`❌ No se encontró convenio para: "${nombreNormalizado}"`)
-        return response.unprocessableEntity({
-          message: `El asesor convenio "${agente.nombre}" no tiene un convenio asociado activo. Verifica que exista un convenio que comience con "${agente.nombre}".`,
-        })
-      }
-
-      if (convenioId !== null && convenioId !== convenioDelAsesor.id) {
-        return response.forbidden({
-          message:
-            'No puede datear para un convenio distinto al que tiene asociado como asesor convenio.',
-        })
-      }
-
-      convenioId = convenioDelAsesor.id
-      convenio = await Convenio.find(convenioDelAsesor.id) // Cargar el convenio completo
-      asesorConvenioId = agente.id
-
-      console.log(`✅ Convenio asignado: ID ${convenioId}, Asesor ID ${asesorConvenioId}`)
-    } else if (agente && canal === 'ASESOR_COMERCIAL') {
-      if (convenioId !== null) {
-        const asignacion = await AsesorConvenioAsignacion.query()
-          .where('asesor_id', agente.id)
-          .where('convenio_id', convenioId)
-          .where('activo', true)
-          .whereNull('fecha_fin')
-          .first()
-
-        if (!asignacion) {
-          return response.forbidden({
-            message:
-              'Este asesor comercial no tiene asignado el convenio seleccionado. No puede datear para él.',
-          })
-        }
-      }
     }
 
     // 🆕 hoyISO hoisted aquí (antes se calculaba solo dentro de VALIDACIÓN 1,
@@ -1160,6 +1010,24 @@ export default class CaptacionDateosController {
         minutosExceso,
         dentroVentana: dentro,
         minutosVentana,
+        // Intento ya validado: DateoCreate.vue lo pasa al ticket (crear() lo
+        // vuelve a validar) y aprobar() crea el dateo con él. Los nombres son
+        // solo para el resumen que muestra la vista del ticket.
+        intento: {
+          canal,
+          agente_id: agenteId,
+          agente_nombre: intento.agente?.nombre ?? null,
+          convenio_id: convenioId,
+          convenio_nombre: intento.convenio?.nombre ?? null,
+          convenio_establecimiento: intento.convenio?.establecimiento ?? null,
+          servicio_id: servicioDateoIdEfectivo,
+          servicio_nombre: servicioDateo?.nombreServicio ?? null,
+          descuento_id: descuentoId,
+          descuento_nombre: intento.descuento?.nombre ?? null,
+          es_avance: esAvance,
+          comprobante_avance_url: comprobanteAvanceUrl,
+          telefono,
+        },
       })
     }
 
@@ -1426,7 +1294,8 @@ export default class CaptacionDateosController {
   /**
    * PUT /captacion-dateos/:id
    */
-  public async update({ params, request, response }: HttpContext) {
+  public async update(ctx: HttpContext) {
+    const { params, request, response } = ctx
     const item = await CaptacionDateo.find(params.id)
     if (!item) return response.notFound({ message: 'Dateo no encontrado' })
 
@@ -1649,149 +1518,193 @@ export default class CaptacionDateosController {
       }
     }
 
-    await item.save()
+    // 🆕 El dateo y la comisión que se genere van en una transacción: si la
+    // comisión contradice un ticket "sin comisión" y no hay confirmación de
+    // gerencia, no se escribe nada (ni el dateo).
+    const trx = await db.transaction()
+    try {
+      item.useTransaction(trx)
+      await item.save()
 
-    // Generar comisión PENDIENTE si el dateo quedó EXITOSO y no existe ya una.
-    //
-    // NOTA dedup: a diferencia de facturacion_tickets_controller.ts (dedup
-    // por ventana del día calendario), aquí el dedup es "¿existió ALGUNA
-    // VEZ?" — esta ruta se usa para corregir dateos días/semanas después
-    // del turno (evidencia tardía), y un dedup por ventana del día crearía
-    // una comisión duplicada al reeditar el mismo dateo más adelante.
-    if (item.resultado === 'EXITOSO' && item.consumidoTurnoId !== null) {
-      const yaExisteComision = await Comision.query()
-        .where('captacion_dateo_id', item.id)
-        .where('es_config', false)
-        .first()
-
-      if (!yaExisteComision) {
-        const turnoParaComision = await TurnoRtm.query()
-          .where('id', item.consumidoTurnoId)
-          .preload('servicio')
+      // Generar comisión PENDIENTE si el dateo quedó EXITOSO y no existe ya una.
+      //
+      // NOTA dedup: a diferencia de facturacion_tickets_controller.ts (dedup
+      // por ventana del día calendario), aquí el dedup es "¿existió ALGUNA
+      // VEZ?" — esta ruta se usa para corregir dateos días/semanas después
+      // del turno (evidencia tardía), y un dedup por ventana del día crearía
+      // una comisión duplicada al reeditar el mismo dateo más adelante.
+      if (item.resultado === 'EXITOSO' && item.consumidoTurnoId !== null) {
+        const yaExisteComision = await Comision.query()
+          .where('captacion_dateo_id', item.id)
+          .where('es_config', false)
           .first()
 
-        const servicioCodigo = (turnoParaComision as any)?.servicio?.codigoServicio ?? null
-        const servicioNombre = (turnoParaComision as any)?.servicio?.nombreServicio ?? null
+        if (!yaExisteComision) {
+          const turnoParaComision = await TurnoRtm.query()
+            .where('id', item.consumidoTurnoId)
+            .preload('servicio')
+            .first()
 
-        // Mismo gate que facturacion_tickets_controller.ts: solo RTM genera
-        // comisión. Confirmado contra datos reales que las 70 comisiones
-        // históricas (es_config=false) son 100% RTM — no hay regresión.
-        if (turnoParaComision && isRTM(servicioCodigo, servicioNombre)) {
-          const tipoVehiculo = inferTipoVehiculoComision({
-            ticketTipo: null,
-            turnoTipo: (turnoParaComision as any).tipoVehiculo ?? null,
-          })
+          const servicioCodigo = (turnoParaComision as any)?.servicio?.codigoServicio ?? null
+          const servicioNombre = (turnoParaComision as any)?.servicio?.nombreServicio ?? null
 
-          const asesorId = item.agenteId
+          // Mismo gate que facturacion_tickets_controller.ts: solo RTM genera
+          // comisión. Confirmado contra datos reales que las 70 comisiones
+          // históricas (es_config=false) son 100% RTM — no hay regresión.
+          if (turnoParaComision && isRTM(servicioCodigo, servicioNombre)) {
+            const tipoVehiculo = inferTipoVehiculoComision({
+              ticketTipo: null,
+              turnoTipo: (turnoParaComision as any).tipoVehiculo ?? null,
+            })
 
-          // ── Asesor convenio REAL: se deriva del convenio (convenio.asesorConvenioId),
-          // igual que facturacion_tickets_controller.ts — NO del campo item.asesorConvenioId
-          // del dateo, que solo se puebla en self-dateo (canal=ASESOR_CONVENIO) y queda
-          // NULL en Caso 3 (comercial trae cliente a un convenio). Usar item.asesorConvenioId
-          // directamente aquí (como hacía el código anterior) hacía que Caso 3 SIEMPRE
-          // resolviera el incentivo del convenio contra Global, incluso cuando el convenio
-          // tenía su propio valor por tipo de vehículo configurado.
-          let asesorConvenioIdReal: number | null = null
-          if (item.convenioId) {
-            const convenioRow = await Convenio.find(item.convenioId)
-            asesorConvenioIdReal = convenioRow?.asesorConvenioId ?? null
+            const asesorId = item.agenteId
+
+            // ── Asesor convenio REAL: se deriva del convenio (convenio.asesorConvenioId),
+            // igual que facturacion_tickets_controller.ts — NO del campo item.asesorConvenioId
+            // del dateo, que solo se puebla en self-dateo (canal=ASESOR_CONVENIO) y queda
+            // NULL en Caso 3 (comercial trae cliente a un convenio). Usar item.asesorConvenioId
+            // directamente aquí (como hacía el código anterior) hacía que Caso 3 SIEMPRE
+            // resolviera el incentivo del convenio contra Global, incluso cuando el convenio
+            // tenía su propio valor por tipo de vehículo configurado.
+            let asesorConvenioIdReal: number | null = null
+            if (item.convenioId) {
+              const convenioRow = await Convenio.find(item.convenioId)
+              asesorConvenioIdReal = convenioRow?.asesorConvenioId ?? null
+            }
+            const esAsesorConvenio =
+              item.canal === 'ASESOR_CONVENIO' || asesorId === asesorConvenioIdReal
+
+            // ── Config de comisión y recurrencia — misma cascada que
+            // facturacion_tickets_controller.ts, vía comision_calculo_service ──
+            const cfgValues = await resolveConfigComision({
+              asesorId,
+              asesorConvenioId: asesorConvenioIdReal,
+              tipoVehiculo,
+            })
+            const recValues = await resolveConfigRecurrencia(asesorId, tipoVehiculo)
+
+            // ── Continuidad — misma fuente única (continuidad_service) que
+            // usa facturacion_tickets_controller.ts. Antes esta ruta no
+            // distinguía continuidad y siempre pagaba recurrencia si no era
+            // "nuevo"; ahora un asesor convenio recurrente CON continuidad
+            // paga completo, igual que por la ruta de factura ──
+            // Con trx: ve el dateo ya guardado arriba en esta misma transacción.
+            const estadoContinuidad = await evaluarContinuidad(
+              {
+                placa: item.placa ?? '',
+                asesorConvenioId: asesorConvenioIdReal,
+                convenioId: item.convenioId,
+              },
+              trx
+            )
+            const tuvoContinuidad = estadoContinuidad !== 'ROTA'
+
+            // ── Descuento informativo pre-marcado en el dateo. Esta ruta no
+            // tiene paso de caja (no hay ticket de facturación): el origen
+            // siempre es DATEO. Antes esta ruta no leía descuentoId en el
+            // cálculo — un comercial con informativo marcado pagaba completo;
+            // ahora paga $0 igual que por la ruta de factura ──
+            let codigoDescuentoActivo: string | null = null
+            if (item.descuentoId) {
+              const descuentoInfo = await Descuento.query()
+                .where('id', item.descuentoId)
+                .where('activo', true)
+                .first()
+              codigoDescuentoActivo = descuentoInfo?.codigo ?? null
+            }
+
+            const esRecurrente = Boolean((turnoParaComision as any).esRecurrente)
+            const esRecuperacion = Boolean((turnoParaComision as any).esRecuperacion)
+            const escenario: EscenarioCliente = esRecurrente
+              ? 'RECURRENTE'
+              : esRecuperacion
+                ? 'RECUPERACION'
+                : 'NUEVO'
+            const caso: CasoComision = !item.convenioId
+              ? 'SIN_CONVENIO'
+              : esAsesorConvenio
+                ? 'CONVENIO_SELF'
+                : 'CONVENIO_COMERCIAL'
+
+            const resultadoCalculo = calcularComision({
+              caso,
+              escenario,
+              tuvoContinuidad,
+              esAvance: item.esAvance ?? false,
+              montoAvance: 0,
+              codigoDescuento: codigoDescuentoActivo,
+              origenDescuento: 'DATEO',
+              cfgValues,
+              recValues,
+            })
+
+            // ── Crear la comisión ────────────────────────────────────────
+            const comision = new Comision()
+            comision.esConfig = false
+            comision.captacionDateoId = item.id
+            comision.asesorId = item.agenteId
+            comision.convenioId = item.convenioId
+            // Igual que facturacion_tickets_controller.ts: secundario solo en Caso 3
+            // (comercial + convenio). En Caso 2 (self-dateo) no aplica (sería el mismo asesor).
+            comision.asesorSecundarioId =
+              caso === 'CONVENIO_COMERCIAL' ? asesorConvenioIdReal : null
+            comision.montoAsesor = String(resultadoCalculo.montoAsesor)
+            comision.montoConvenio = String(resultadoCalculo.montoConvenio)
+            comision.monto = String(resultadoCalculo.monto)
+            comision.base = String(resultadoCalculo.base)
+            comision.porcentaje = '0'
+            comision.valorNuevoDirecto = String(resultadoCalculo.valorNuevoDirectoFinal)
+            comision.tipoServicio = 'RTM' as any
+            ;(comision as any).tipoVehiculo = tipoVehiculo
+            comision.estado = 'PENDIENTE'
+            comision.fechaCalculo = DateTime.now()
+            comision.metaRtm = 0
+            comision.porcentajeComisionMeta = '0'
+            comision.valorRtmMoto = 0
+            comision.valorRtmVehiculo = 0
+            comision.esAvance = item.esAvance ?? false
+            if (resultadoCalculo.descuentoMontoAplicado !== null) {
+              comision.descuentoMontoAplicado = resultadoCalculo.descuentoMontoAplicado
+            }
+            const montosComision = {
+              montoAsesor: Number(resultadoCalculo.montoAsesor),
+              montoConvenio: Number(resultadoCalculo.montoConvenio),
+            }
+            const conflicto = await conflictoSinComisionTicket(
+              item.consumidoTurnoId,
+              montosComision
+            )
+            const excepcion = await resolverConflictoSinComision(ctx, conflicto)
+            if (excepcion.bloqueado) {
+              await trx.rollback()
+              return
+            }
+            comision.useTransaction(trx)
+            await comision.save()
+            if (excepcion.confirmada && conflicto) {
+              const u: any = ctx.auth.user
+              await registrarExcepcionSinComision(trx, {
+                conflicto,
+                comisionId: comision.id,
+                usuarioId: u.id,
+                usuarioNombre: [u.nombres, u.apellidos].filter(Boolean).join(' ') || u.correo,
+                accion: 'comisión generada al editar el dateo',
+                montos: montosComision,
+              })
+            }
+            console.log(
+              `✅ ${resultadoCalculo.reglaAplicada} → asesor $${resultadoCalculo.montoAsesor} | convenio $${resultadoCalculo.montoConvenio}`
+            )
           }
-          const esAsesorConvenio =
-            item.canal === 'ASESOR_CONVENIO' || asesorId === asesorConvenioIdReal
-
-          // ── Config de comisión y recurrencia — misma cascada que
-          // facturacion_tickets_controller.ts, vía comision_calculo_service ──
-          const cfgValues = await resolveConfigComision({
-            asesorId,
-            asesorConvenioId: asesorConvenioIdReal,
-            tipoVehiculo,
-          })
-          const recValues = await resolveConfigRecurrencia(asesorId, tipoVehiculo)
-
-          // ── Continuidad — misma fuente única (continuidad_service) que
-          // usa facturacion_tickets_controller.ts. Antes esta ruta no
-          // distinguía continuidad y siempre pagaba recurrencia si no era
-          // "nuevo"; ahora un asesor convenio recurrente CON continuidad
-          // paga completo, igual que por la ruta de factura ──
-          const estadoContinuidad = await evaluarContinuidad({
-            placa: item.placa ?? '',
-            asesorConvenioId: asesorConvenioIdReal,
-            convenioId: item.convenioId,
-          })
-          const tuvoContinuidad = estadoContinuidad !== 'ROTA'
-
-          // ── Descuento informativo pre-marcado en el dateo. Esta ruta no
-          // tiene paso de caja (no hay ticket de facturación): el origen
-          // siempre es DATEO. Antes esta ruta no leía descuentoId en el
-          // cálculo — un comercial con informativo marcado pagaba completo;
-          // ahora paga $0 igual que por la ruta de factura ──
-          let codigoDescuentoActivo: string | null = null
-          if (item.descuentoId) {
-            const descuentoInfo = await Descuento.query()
-              .where('id', item.descuentoId)
-              .where('activo', true)
-              .first()
-            codigoDescuentoActivo = descuentoInfo?.codigo ?? null
-          }
-
-          const esRecurrente = Boolean((turnoParaComision as any).esRecurrente)
-          const esRecuperacion = Boolean((turnoParaComision as any).esRecuperacion)
-          const escenario: EscenarioCliente = esRecurrente
-            ? 'RECURRENTE'
-            : esRecuperacion
-              ? 'RECUPERACION'
-              : 'NUEVO'
-          const caso: CasoComision = !item.convenioId
-            ? 'SIN_CONVENIO'
-            : esAsesorConvenio
-              ? 'CONVENIO_SELF'
-              : 'CONVENIO_COMERCIAL'
-
-          const resultadoCalculo = calcularComision({
-            caso,
-            escenario,
-            tuvoContinuidad,
-            esAvance: item.esAvance ?? false,
-            montoAvance: 0,
-            codigoDescuento: codigoDescuentoActivo,
-            origenDescuento: 'DATEO',
-            cfgValues,
-            recValues,
-          })
-
-          // ── Crear la comisión ────────────────────────────────────────
-          const comision = new Comision()
-          comision.esConfig = false
-          comision.captacionDateoId = item.id
-          comision.asesorId = item.agenteId
-          comision.convenioId = item.convenioId
-          // Igual que facturacion_tickets_controller.ts: secundario solo en Caso 3
-          // (comercial + convenio). En Caso 2 (self-dateo) no aplica (sería el mismo asesor).
-          comision.asesorSecundarioId = caso === 'CONVENIO_COMERCIAL' ? asesorConvenioIdReal : null
-          comision.montoAsesor = String(resultadoCalculo.montoAsesor)
-          comision.montoConvenio = String(resultadoCalculo.montoConvenio)
-          comision.monto = String(resultadoCalculo.monto)
-          comision.base = String(resultadoCalculo.base)
-          comision.porcentaje = '0'
-          comision.valorNuevoDirecto = String(resultadoCalculo.valorNuevoDirectoFinal)
-          comision.tipoServicio = 'RTM' as any
-          ;(comision as any).tipoVehiculo = tipoVehiculo
-          comision.estado = 'PENDIENTE'
-          comision.fechaCalculo = DateTime.now()
-          comision.metaRtm = 0
-          comision.porcentajeComisionMeta = '0'
-          comision.valorRtmMoto = 0
-          comision.valorRtmVehiculo = 0
-          comision.esAvance = item.esAvance ?? false
-          if (resultadoCalculo.descuentoMontoAplicado !== null) {
-            comision.descuentoMontoAplicado = resultadoCalculo.descuentoMontoAplicado
-          }
-          await comision.save()
-          console.log(
-            `✅ ${resultadoCalculo.reglaAplicada} → asesor $${resultadoCalculo.montoAsesor} | convenio $${resultadoCalculo.montoConvenio}`
-          )
         }
       }
+      await trx.commit()
+    } catch (error) {
+      // Un fallo del rollback no debe tapar el error original.
+      try {
+        if (!trx.isCompleted) await trx.rollback()
+      } catch {}
+      throw error
     }
 
     const out = item.serialize() as any

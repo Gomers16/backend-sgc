@@ -9,6 +9,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import Database from '@adonisjs/lucid/services/db'
+import type { ModelQueryBuilderContract } from '@adonisjs/lucid/types/model'
+import ExcelJS from 'exceljs'
 import FacturacionTicket, { type FactEstado } from '#models/facturacion_ticket'
 import CaptacionDateo from '#models/captacion_dateo'
 import TurnoRtm from '#models/turno_rtm'
@@ -16,18 +18,27 @@ import Servicio from '#models/servicio'
 import Comision from '#models/comision'
 import Descuento from '#models/descuento' // 🆕
 import FacturacionConsecutivoDescuentoCambio from '#models/facturacion_consecutivo_descuento_cambio'
+import FacturacionDescuentoEdicion from '#models/facturacion_descuento_edicion'
 import { evaluarContinuidad } from '#services/continuidad_service'
-import { debeRespetarSinComision } from '#services/reserva_dateo_service'
+import { debeRespetarSinComision, guardarFotoComisionTicket } from '#services/reserva_dateo_service'
 import {
   resolveConfigComision,
   resolveConfigRecurrencia,
-  calcularComision,
   isRTM,
   inferTipoVehiculoComision,
+  decidirCasoComision,
   type EscenarioCliente,
   type OrigenDescuento,
 } from '#services/comision_calculo_service'
 import { conflictoTurnoSegundaVez, turnoIdEsSegundaVez } from '#services/segunda_vez_service'
+import { buscarConvenioDelAsesorConvenio } from '#services/intento_dateo_service'
+import {
+  construirComisionRTM,
+  notaEdicionFactura,
+  planearRecalculoComision,
+  resolverDescuentoComision,
+  type PlanComisionEdicion,
+} from '#services/comision_ticket_service'
 
 /** Carpeta para subir tickets (local). */
 const UPLOAD_BASE_DIR = app.makePath('uploads/tickets')
@@ -39,6 +50,13 @@ const DUP_WINDOW_MINUTES = 60
 const CONSECUTIVO_DESCUENTO_RE = /^[A-Z0-9-]{1,30}$/
 /** Índice único sobre la columna generada consecutivo_descuento_confirmado. */
 const UQ_CONSECUTIVO_DESCUENTO = 'uq_fact_consecutivo_descuento_confirmado'
+
+/** Historial (listado / exportar). */
+const ZONA_BOGOTA = 'America/Bogota'
+const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/
+const EXPORTAR_MAX_FILAS = 20000
+/** Fecha que muestra la columna "Fecha pago" del historial (con sus respaldos). */
+const SQL_FECHA_HISTORIAL = 'COALESCE(fecha_pago, confirmado_at, created_at)'
 
 /* ============================== Tipos DTO / Snapshots ============================== */
 
@@ -206,6 +224,13 @@ interface TicketDTO {
   // 🆕
   descuentoAplicado?: DescuentoAplicadoDTO | null
   confirmedBy?: { id: number; nombres?: string | null; apellidos?: string | null } | null
+  // 🆕 Edición del descuento en el Historial: estado actual del descuento
+  descuentoId: number | null
+  descuentoMontoAplicado: number | null
+  autorizadoPorId: number | null
+  descuentoObservacion: string | null
+  documentosPoliciaCompletos: boolean
+  documentosPoliciaFaltantes: string[]
 }
 
 /* ============================== Controlador ============================== */
@@ -232,38 +257,11 @@ export default class FacturacionTicketsController {
   /** GET /facturacion/tickets */
   public async index({ request }: HttpContext) {
     const q = FacturacionTicket.query().orderBy('created_at', 'desc')
-
-    const desde = request.input('desde') as string | undefined
-    const hasta = request.input('hasta') as string | undefined
-    const sedeId = toIntOrNull(request.input('sede_id'))
-    const agenteId = toIntOrNull(request.input('agente_id'))
-    const placa =
-      (request.input('placa') as string | undefined)?.toUpperCase()?.replace(/\s+/g, '') || null
-    const estado = request.input('estado') as FactEstado | undefined
-    const turnoId = toIntOrNull(request.input('turno_id'))
-    const dateoId = toIntOrNull(request.input('dateo_id'))
-    const vendedor = request.input('vendedor') as string | undefined
-
-    if (desde) {
-      const d = DateTime.fromISO(desde).toSQL()
-      if (d) q.where('created_at', '>=', d)
-    }
-    if (hasta) {
-      const h = DateTime.fromISO(hasta).toSQL()
-      if (h) q.where('created_at', '<=', h)
-    }
-    if (sedeId) q.where('sede_id', sedeId)
-    if (agenteId) q.where('agente_id', agenteId)
-    if (placa) q.where('placa', placa)
-    if (estado) q.where('estado', estado)
-    if (turnoId) q.where('turno_id', turnoId)
-    if (dateoId) q.where('dateo_id', dateoId)
-    if (vendedor && vendedor.trim().length >= 2)
-      q.whereILike('vendedor_text', `%${vendedor.trim()}%`)
+    aplicarFiltrosLista(q, request)
 
     const page = Number(request.input('page') || 1)
     const limit = Math.min(Number(request.input('limit') || 20), 100)
-    const pag = await q.paginate(page, limit)
+    const [pag, resumen] = await Promise.all([q.paginate(page, limit), resumenLista(request)])
 
     const { meta, data } = pag.toJSON()
     const rows = data.map((t: any) => ({
@@ -285,9 +283,75 @@ export default class FacturacionTicketsController {
       descuento_id: t.descuentoId ?? null,
       descuento_monto_aplicado: t.descuentoMontoAplicado ?? null,
       consecutivo_descuento: t.consecutivoDescuento ?? null,
+      // 🆕 Historial: fecha que muestra la columna "Fecha pago" cuando no hay fecha_pago
+      confirmado_at: t.confirmadoAt ?? null,
+      created_at: t.createdAt ?? null,
     }))
 
-    return { meta, data: rows }
+    return { meta, data: rows, resumen }
+  }
+
+  /**
+   * GET /facturacion/tickets/exportar — mismo filtro que el listado, en Excel.
+   */
+  public async exportar({ request, response }: HttpContext) {
+    const q = FacturacionTicket.query().orderBy('created_at', 'desc').preload('descuento')
+    aplicarFiltrosLista(q, request)
+    const tickets = await q.limit(EXPORTAR_MAX_FILAS)
+
+    const workbook = new ExcelJS.Workbook()
+    const ws = workbook.addWorksheet('Facturación')
+    ws.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Estado', key: 'estado', width: 16 },
+      { header: 'Placa', key: 'placa', width: 10 },
+      { header: 'Fecha pago', key: 'fecha_pago', width: 19 },
+      { header: 'Total factura', key: 'total', width: 14 },
+      { header: 'Total sin descuento', key: 'total_sin_descuento', width: 14 },
+      { header: 'Descuento', key: 'descuento', width: 26 },
+      { header: 'Monto descuento', key: 'monto_descuento', width: 14 },
+      { header: 'Consec. descuento', key: 'consecutivo_descuento', width: 18 },
+      { header: 'Servicio', key: 'servicio', width: 30 },
+      { header: 'Sede', key: 'sede', width: 18 },
+      { header: 'Vendedor', key: 'vendedor', width: 28 },
+      { header: 'Prefijo', key: 'prefijo', width: 10 },
+      { header: 'Consecutivo factura', key: 'consecutivo', width: 16 },
+    ]
+    ws.getRow(1).font = { bold: true }
+    for (const t of tickets) {
+      const fecha = t.fechaPago ?? t.confirmadoAt ?? t.createdAt
+      ws.addRow({
+        id: t.id,
+        estado: t.estado,
+        placa: t.placa,
+        fecha_pago: fecha ? fecha.setZone(ZONA_BOGOTA).toFormat('yyyy-MM-dd HH:mm') : '',
+        total: Number(t.totalFactura ?? t.total ?? 0),
+        total_sin_descuento: t.totalSinDescuento ? Number(t.totalSinDescuento) : null,
+        descuento: t.descuento?.nombre ?? '',
+        monto_descuento: t.descuentoMontoAplicado ? Number(t.descuentoMontoAplicado) : null,
+        consecutivo_descuento: t.consecutivoDescuento ?? '',
+        servicio: t.servicioNombre ?? '',
+        sede: t.sedeNombre ?? '',
+        vendedor: t.vendedorText ?? '',
+        prefijo: t.prefijo ?? '',
+        consecutivo: t.consecutivo ?? '',
+      })
+    }
+    for (const k of ['total', 'total_sin_descuento', 'monto_descuento']) {
+      ws.getColumn(k).numFmt = '"$"#,##0'
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer()
+    const sufijo =
+      [request.input('fecha_pago_desde'), request.input('fecha_pago_hasta')]
+        .filter((v) => typeof v === 'string' && FECHA_RE.test(v))
+        .join('_') || 'todos'
+    response.header(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response.header('Content-Disposition', `attachment; filename="Facturacion_${sufijo}.xlsx"`)
+    return response.send(buffer)
   }
 
   /** GET /facturacion/tickets/:id */
@@ -627,9 +691,19 @@ export default class FacturacionTicketsController {
   }
 
   /** PATCH /facturacion/tickets/:id */
-  public async update({ params, request, response }: HttpContext) {
+  public async update({ params, request, response, auth }: HttpContext) {
     const ticket = await FacturacionTicket.find(params.id)
     if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
+
+    // 🆕 Edición del descuento de un ticket ya CONFIRMADA (Historial): solo
+    // con motivo_edicion / solo_previsualizar; sin ellos el PATCH sigue igual.
+    const body = request.all()
+    if (
+      ticket.estado === 'CONFIRMADA' &&
+      ('motivo_edicion' in body || 'solo_previsualizar' in body)
+    ) {
+      return this.editarDescuentoConfirmado(ticket.id, { request, response, auth })
+    }
 
     const up = request.only([
       'placa',
@@ -1185,6 +1259,19 @@ export default class FacturacionTicketsController {
 
     if (!dateo) return
 
+    // Dateo de asesor convenio sin convenio (solo pudo nacer de un ticket de
+    // Excepción de Dateo anterior a la Fase 3 de Tickets): se resuelve su
+    // convenio con la misma regla de store(), si no pagaría como Caso 1.
+    if (!dateo.convenioId && dateo.canal === 'ASESOR_CONVENIO' && dateo.agente) {
+      const convenioDelAsesor = await buscarConvenioDelAsesorConvenio(dateo.agente)
+      if (convenioDelAsesor) {
+        dateo.convenioId = convenioDelAsesor.id
+        dateo.asesorConvenioId = dateo.agenteId
+        await dateo.save()
+        await dateo.load('convenio', (q) => q.preload('asesorConvenio'))
+      }
+    }
+
     // 🔍 LOG DIAGNÓSTICO AVANCE — leer flag esAvance del dateo
     console.log(
       'dateo.esAvance:',
@@ -1230,69 +1317,8 @@ export default class FacturacionTicketsController {
     // ── Leer valores recurrente/recuperación ──
     const recValues = await resolveConfigRecurrencia(dateo.agenteId, tipoVehiculoComision)
 
-    // 🆕 ── Detectar si hay descuento informativo ──
-    // Prioridad: ticket (aplicado en caja) > dateo (pre-marcado por el comercial)
-    const descuentoIdActivo = ticket.descuentoId ?? (dateo as any).descuentoId ?? null
-    // Distinguir origen: caja (ticket.descuentoId) vs dateo pre-marcado
-    const descuentoOrigenCaja = !!ticket.descuentoId && !(dateo as any).descuentoId
-    let tieneInformativo = false
-    let esInformativoPolicia = false
-    let esInformativoEmpleado = false // 🆕
-    let esAvancePropietario = false // 🆕 CAMBIO 1
-    let esObsequio = false // 🆕 CAMBIO NUEVO
-    // Código del descuento activo (o null) — usado por comision_calculo_service.calcularComision()
-    let codigoDescuentoActivo: string | null = null
-    if (descuentoIdActivo) {
-      const descuentoInfo = await Descuento.query()
-        .where('id', descuentoIdActivo)
-        .where('activo', true)
-        .first()
-      tieneInformativo = descuentoInfo !== null
-      codigoDescuentoActivo = descuentoInfo?.codigo ?? null
-      esInformativoPolicia = descuentoInfo?.codigo === 'INFORMATIVO_POLICIA'
-      esInformativoEmpleado = descuentoInfo?.codigo === 'INFORMATIVO_EMPLEADO' // 🆕
-      esAvancePropietario = descuentoInfo?.codigo === 'AVANCE_PROPIETARIO' // 🆕 CAMBIO 2
-      esObsequio = descuentoInfo?.codigo === 'INFORMATIVO_OBSEQUIO' // 🆕 CAMBIO NUEVO
-      console.log(
-        `🏷️ Descuento informativo: ${tieneInformativo ? `${descuentoInfo!.nombre} (ID ${descuentoIdActivo})` : 'NO'} | esPolicia: ${esInformativoPolicia} | esEmpleado: ${esInformativoEmpleado} | esAvancePropietario: ${esAvancePropietario} | esObsequio: ${esObsequio} | origenCaja: ${descuentoOrigenCaja}`
-      )
-    } else {
-      console.log('🏷️ Descuento informativo: NO')
-    }
-
-    // ══════════════════════════════════════════════════════════
-    // 🆕 AVANCE — detectar y resolver monto según tipo vehículo
-    // ══════════════════════════════════════════════════════════
-    const esAvance = Boolean((dateo as any).esAvance ?? (dateo as any).es_avance ?? false)
-
-    // Monto real del AVANCE:
-    // 1. Si la cajera ingresó un monto explícito (descuentoMontoAplicado > 0) → usar ese
-    // 2. Si no → auto-resolver desde tabla descuentos según tipo de vehículo
-    //    MOTO    → descuento.valorMoto
-    //    VEHICULO → descuento.valorCarro
-    let montoAvance = 0
-    if (esAvance && descuentoIdActivo) {
-      const montoExplicito = Number(ticket.descuentoMontoAplicado ?? 0)
-      if (montoExplicito > 0) {
-        montoAvance = montoExplicito
-        console.log(`🆕 AVANCE monto explícito (cajera): $${montoAvance}`)
-      } else {
-        // Auto-resolver desde la tabla descuentos por tipo de vehículo
-        const descuentoRow = await Descuento.query()
-          .where('id', descuentoIdActivo)
-          .where('activo', true)
-          .first()
-        if (descuentoRow) {
-          const esMoto = tipoVehiculoComision === 'MOTO'
-          montoAvance = esMoto
-            ? Number((descuentoRow as any).valorMoto ?? (descuentoRow as any).valor_moto ?? 0)
-            : Number((descuentoRow as any).valorCarro ?? (descuentoRow as any).valor_carro ?? 0)
-          console.log(
-            `🆕 AVANCE auto-resuelto desde descuento "${descuentoRow.nombre}" | tipo: ${tipoVehiculoComision ?? 'desconocido'} | monto: $${montoAvance}`
-          )
-        }
-      }
-    }
+    const descuento = await resolverDescuentoComision(ticket, dateo, tipoVehiculoComision)
+    const { descuentoOrigenCaja, esAvance, montoAvance } = descuento
 
     console.log(`🆕 esAvance: ${esAvance} | montoAvance: $${montoAvance}`)
     // ══════════════════════════════════════════════════════════
@@ -1334,25 +1360,28 @@ export default class FacturacionTicketsController {
     }
 
     // ── Verificar duplicado ──
+    const caso = decidirCasoComision({
+      convenioId: dateo.convenioId,
+      agenteId: dateo.agenteId,
+      canal: dateo.canal,
+      asesorConvenioIdDelConvenio: asesorConvenioIdReal,
+    })
+
     const startDay = now.startOf('day').toSQL()
     const endDay = now.endOf('day').toSQL()
 
-    // 🆕 Si este dateo vino de un ticket de Excepción de Dateo APROBADO con
-    // "Aprobar sin comisión" (con_comision=false), esa decisión de gerencia
-    // debe respetarse también en este camino diferido — igual que
-    // tickets_excepcion_dateo_controller.ts::aprobar() ya hace cuando la
-    // facturación estaba confirmada al momento de aprobar el ticket. Sin
-    // esto, un ticket "sin comisión" terminaría pagando comisión completa en
-    // cuanto facturación se confirmara después, sin que nadie lo decidiera.
+    // 🆕 Si este dateo vino de un ticket de Excepción de Dateo APROBADO "sin
+    // comisión" (asesor y/o convenio), esa decisión de gerencia debe
+    // respetarse también en este camino diferido — igual que
+    // tickets_excepcion_dateo_controller.ts::aprobar() cuando la facturación
+    // ya estaba confirmada al aprobar. Se calcula normal y SOLO después se
+    // fuerza a 0 la parte que corresponda.
     // Lectura simple, fuera de la transacción de abajo (no modifica nada).
-    let forzarSinComisionPorTicket = false
-    if (turnoActual?.id) {
-      forzarSinComisionPorTicket = await debeRespetarSinComision(turnoActual.id)
-      if (forzarSinComisionPorTicket) {
-        console.log(
-          `🎫 Turno ${turnoActual.id} viene de ticket de Excepción de Dateo APROBADO SIN comisión — se fuerza montoAsesor=0`
-        )
-      }
+    const sinComisionTicket = await debeRespetarSinComision(turnoActual?.id ?? null)
+    if (sinComisionTicket.asesor || sinComisionTicket.convenio) {
+      console.log(
+        `🎫 Turno ${turnoActual?.id} viene de ticket de Excepción de Dateo APROBADO sin comisión — asesor: ${sinComisionTicket.asesor} | convenio: ${sinComisionTicket.convenio}`
+      )
     }
 
     const trx = await Database.transaction()
@@ -1375,157 +1404,39 @@ export default class FacturacionTicketsController {
         return
       }
 
-      // ════════════════════════════════════════════════════
-      //  CASO 1: SIN CONVENIO — Comercial datea directo
-      // ════════════════════════════════════════════════════
-      if (!dateo.convenioId) {
-        if (!dateo.agenteId) {
-          console.warn('⚠️ Sin convenio y sin asesor')
-          await trx.rollback()
-          return
-        }
-
-        const c = new Comision()
-        c.captacionDateoId = dateo.id
-        c.asesorId = dateo.agenteId
-        c.convenioId = null
-        c.tipoServicio = 'RTM'
-        c.estado = 'PENDIENTE'
-        c.fechaCalculo = now
-        c.calculadoPor = usuarioId
-        c.porcentaje = '0'
-        c.asesorSecundarioId = null
-        c.montoConvenio = '0'
-        c.esAvance = false // Sin convenio: avance no aplica
-        c.descuentoCodigoAplicado = codigoDescuentoActivo
-        c.descuentoObservacionCaja = ticket.descuentoObservacion ?? null
-        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
-
-        const resultadoCaso1 = calcularComision({
-          caso: 'SIN_CONVENIO',
-          escenario,
-          tuvoContinuidad,
-          esAvance: false,
-          montoAvance: 0,
-          codigoDescuento: codigoDescuentoActivo,
-          origenDescuento,
-          cfgValues,
-          recValues,
-        })
-        c.base = String(resultadoCaso1.base)
-        c.monto = String(resultadoCaso1.monto)
-        c.montoAsesor = String(resultadoCaso1.montoAsesor)
-        c.valorNuevoDirecto = String(resultadoCaso1.valorNuevoDirectoFinal)
-        c.reglaAplicada = resultadoCaso1.reglaAplicada
-        console.log(`✅ ${resultadoCaso1.reglaAplicada} → $${resultadoCaso1.monto}`)
-
-        if (forzarSinComisionPorTicket) c.montoAsesor = '0'
-
-        await c.useTransaction(trx).save()
-      } else if (
-        !dateo.agenteId ||
-        dateo.agenteId === asesorConvenioIdReal ||
-        dateo.canal === 'ASESOR_CONVENIO'
-      ) {
-        // ═══════════════════════════════════════════════════════════
-        // CASO 2: Asesor convenio se datea a sí mismo
-        // El dinero va SIEMPRE a montoAsesor (él es asesor Y convenio)
-        // montoConvenio SIEMPRE es $0
-        // ═══════════════════════════════════════════════════════════
-        const c = new Comision()
-        c.captacionDateoId = dateo.id
-        c.asesorId = asesorConvenioIdReal
-        c.convenioId = dateo.convenioId
-        c.tipoServicio = 'RTM'
-        c.estado = 'PENDIENTE'
-        c.fechaCalculo = now
-        c.calculadoPor = usuarioId
-        c.porcentaje = '0'
-        c.asesorSecundarioId = null
-        c.valorNuevoDirecto = '0'
-        c.montoConvenio = '0' // Siempre $0 en CASO 2
-        c.esAvance = esAvance
-        c.descuentoCodigoAplicado = codigoDescuentoActivo
-        c.descuentoObservacionCaja = ticket.descuentoObservacion ?? null
-        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
-
-        const resultadoCaso2 = calcularComision({
-          caso: 'CONVENIO_SELF',
-          escenario,
-          tuvoContinuidad,
-          esAvance,
-          montoAvance,
-          codigoDescuento: codigoDescuentoActivo,
-          origenDescuento,
-          cfgValues,
-          recValues,
-        })
-        c.base = String(resultadoCaso2.base)
-        c.monto = String(resultadoCaso2.monto)
-        c.montoAsesor = String(resultadoCaso2.montoAsesor)
-        if (resultadoCaso2.descuentoMontoAplicado !== null) {
-          c.descuentoMontoAplicado = resultadoCaso2.descuentoMontoAplicado
-        }
-        c.reglaAplicada = resultadoCaso2.reglaAplicada
-        console.log(
-          `✅ ${resultadoCaso2.reglaAplicada} → asesor cobra $${resultadoCaso2.montoAsesor}`
-        )
-
-        if (forzarSinComisionPorTicket) c.montoAsesor = '0'
-
-        await c.useTransaction(trx).save()
-
-        // ════════════════════════════════════════════════════
-        //  CASO 3: CON CONVENIO — Comercial datea
-        // ════════════════════════════════════════════════════
-      } else {
-        if (!dateo.agenteId) {
-          console.warn('⚠️ Con convenio pero sin asesor comercial')
-          await trx.rollback()
-          return
-        }
-
-        const c = new Comision()
-        c.captacionDateoId = dateo.id
-        c.asesorId = dateo.agenteId
-        c.convenioId = dateo.convenioId
-        c.tipoServicio = 'RTM'
-        c.estado = 'PENDIENTE'
-        c.fechaCalculo = now
-        c.calculadoPor = usuarioId
-        c.porcentaje = '0'
-        c.asesorSecundarioId = asesorConvenioIdReal
-        c.valorNuevoDirecto = '0'
-        c.esAvance = esAvance
-        c.descuentoCodigoAplicado = codigoDescuentoActivo
-        c.descuentoObservacionCaja = ticket.descuentoObservacion ?? null
-        if (tipoVehiculoComision) (c as any).tipoVehiculo = tipoVehiculoComision
-
-        const resultadoCaso3 = calcularComision({
-          caso: 'CONVENIO_COMERCIAL',
-          escenario,
-          tuvoContinuidad,
-          esAvance,
-          montoAvance,
-          codigoDescuento: codigoDescuentoActivo,
-          origenDescuento,
-          cfgValues,
-          recValues,
-        })
-        c.base = String(resultadoCaso3.base)
-        c.monto = String(resultadoCaso3.monto)
-        c.montoAsesor = String(resultadoCaso3.montoAsesor)
-        c.montoConvenio = String(resultadoCaso3.montoConvenio)
-        if (resultadoCaso3.descuentoMontoAplicado !== null) {
-          c.descuentoMontoAplicado = resultadoCaso3.descuentoMontoAplicado
-        }
-        c.reglaAplicada = resultadoCaso3.reglaAplicada
-        console.log(
-          `✅ ${resultadoCaso3.reglaAplicada} → comercial $${resultadoCaso3.montoAsesor} | convenio $${resultadoCaso3.montoConvenio}`
-        )
-        if (forzarSinComisionPorTicket) c.montoAsesor = '0'
-        await c.useTransaction(trx).save()
+      const c = construirComisionRTM({
+        caso,
+        dateo,
+        ticket,
+        escenario,
+        tuvoContinuidad,
+        descuento,
+        origenDescuento,
+        cfgValues,
+        recValues,
+        asesorConvenioIdReal,
+        tipoVehiculoComision,
+        now,
+        usuarioId,
+      })
+      if (!c) {
+        await trx.rollback()
+        return
       }
+
+      if (sinComisionTicket.asesor || sinComisionTicket.convenio) {
+        // construirComisionRTM() siempre asigna los dos montos.
+        await guardarFotoComisionTicket(
+          turnoActual!.id,
+          c.montoAsesor ?? '0',
+          c.montoConvenio ?? '0',
+          trx
+        )
+      }
+      if (sinComisionTicket.asesor) c.montoAsesor = '0'
+      if (sinComisionTicket.convenio) c.montoConvenio = '0'
+
+      await c.useTransaction(trx).save()
 
       if (dateo.resultado !== 'EXITOSO') {
         dateo.resultado = 'EXITOSO'
@@ -1592,6 +1503,190 @@ export default class FacturacionTicketsController {
     if (usuario) {
       const nombre = [usuario.nombres, usuario.apellidos].filter(Boolean).join(' ')
       ticket.funcionarioNombre = nombre || ticket.funcionarioNombre || null
+    }
+  }
+
+  /**
+   * PATCH /facturacion/tickets/:id con motivo_edicion (ticket CONFIRMADA).
+   * body: descuento_id (null = quitar), descuento_monto_aplicado,
+   *       autorizado_por_id, descuento_observacion, consecutivo_descuento,
+   *       motivo_edicion (5–255), solo_previsualizar (no escribe nada),
+   *       confirmar_comision_pagada (obligatorio si la comisión está PAGADA
+   *       o en una liquidación).
+   * Solo SUPER_ADMIN / GERENCIA (403 para los demás). Recalcula el total desde
+   * total_sin_descuento y la comisión del dateo del turno (PENDIENTE,
+   * APROBADA, o PAGADA/en liquidación con confirmación; ANULADA no), alinea
+   * los campos de descuento de caja del dateo y de la comisión, agrega una
+   * nota en comisiones.observacion y deja registro en
+   * facturacion_descuento_ediciones, todo en una transacción. Las
+   * liquidaciones emitidas no se tocan.
+   */
+  private async editarDescuentoConfirmado(
+    ticketId: number,
+    { request, response, auth }: Pick<HttpContext, 'request' | 'response' | 'auth'>
+  ) {
+    const rol = String((auth.user as any)?.rol?.nombre ?? '')
+      .toUpperCase()
+      .trim()
+    if (!ROLES_EDICION_DESCUENTO.includes(rol)) {
+      return response.forbidden({
+        code: 'EDICION_DESCUENTO_SIN_PERMISO',
+        message: 'Solo SUPER_ADMIN o GERENCIA editan el descuento de un ticket confirmado.',
+      })
+    }
+
+    const esVerdadero = (v: unknown) => [true, 'true', 1, '1'].includes(v as any)
+    const soloPrevisualizar = esVerdadero(request.input('solo_previsualizar'))
+    const confirmarComisionPagada = esVerdadero(request.input('confirmar_comision_pagada'))
+    const motivo = String(request.input('motivo_edicion') ?? '').trim()
+    if (!soloPrevisualizar) {
+      if (motivo.length < MOTIVO_EDICION_MIN) {
+        return response.unprocessableEntity({
+          code: 'MOTIVO_REQUERIDO',
+          message: `Escribe el motivo de la edición (mínimo ${MOTIVO_EDICION_MIN} caracteres).`,
+        })
+      }
+      if (motivo.length > 255) {
+        return response.unprocessableEntity({
+          code: 'MOTIVO_MUY_LARGO',
+          message: 'El motivo admite máximo 255 caracteres.',
+        })
+      }
+    }
+    const body = request.only(CAMPOS_EDICION_DESCUENTO) as Record<string, unknown>
+
+    if (soloPrevisualizar) {
+      const ticket = await FacturacionTicket.find(ticketId)
+      if (!ticket) return response.notFound({ message: 'Ticket no encontrado' })
+      const r = await planearEdicionDescuento(ticket, body)
+      if (!r.ok) return response.status(r.status).send(r.error)
+      return { previsualizacion: true, ...r.resumen }
+    }
+
+    const trx = await Database.transaction()
+    try {
+      const ticket = await FacturacionTicket.query({ client: trx })
+        .where('id', ticketId)
+        .forUpdate()
+        .first()
+      if (!ticket || ticket.estado !== 'CONFIRMADA') {
+        await trx.rollback()
+        return ticket
+          ? response.conflict({ code: 'TICKET_NO_CONFIRMADO', estado: ticket.estado })
+          : response.notFound({ message: 'Ticket no encontrado' })
+      }
+
+      const r = await planearEdicionDescuento(ticket, body, trx)
+      if (!r.ok) {
+        await trx.rollback()
+        return response.status(r.status).send(r.error)
+      }
+      const { antes, despues, comision } = r.resumen
+      // PAGADA o en una liquidación: el dinero ya salió; se exige confirmarlo.
+      if (comision.requiereConfirmacionPago && !confirmarComisionPagada) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'COMISION_PAGADA_SIN_CONFIRMAR',
+          message: comision.mensaje,
+          comision,
+        })
+      }
+
+      ticket.useTransaction(trx)
+      await ticket.save()
+
+      // Snapshot de caja en el dateo, alineado con el ticket editado (mismos
+      // campos que escribe applyCommissionHook al confirmar).
+      if (r.planComision.dateoId) {
+        await CaptacionDateo.query({ client: trx })
+          .where('id', r.planComision.dateoId)
+          .update({
+            descuento_caja_id: ticket.descuentoId ?? null,
+            descuento_caja_observacion: ticket.descuentoId
+              ? (ticket.descuentoObservacion ?? null)
+              : null,
+            descuento_caja_aplicado_at: ticket.descuentoId
+              ? DateTime.now().toSQL({ includeOffset: false })
+              : null,
+          })
+      }
+
+      const recalculada =
+        comision.accion === 'RECALCULADA' || comision.accion === 'AJUSTADA_TRAS_PAGO'
+      if (recalculada && r.planComision.cambios) {
+        const c = await Comision.query({ client: trx })
+          .where('id', comision.comisionId!)
+          .forUpdate()
+          .firstOrFail()
+        c.merge(r.planComision.cambios as Partial<Comision>)
+        const u = auth.user as any
+        const nota = notaEdicionFactura({
+          ticketId: ticket.id,
+          motivo,
+          antes: comision.antes!,
+          despues: comision.despues!,
+          diferencia: comision.diferencia,
+          trasPago: comision.accion === 'AJUSTADA_TRAS_PAGO',
+          usuario:
+            [u?.nombres, u?.apellidos].filter(Boolean).join(' ') || `usuario #${u?.id ?? '—'}`,
+          fecha: DateTime.now(),
+        })
+        c.observacion = c.observacion ? `${c.observacion}\n${nota}` : nota
+        await c.useTransaction(trx).save()
+        const foto = r.planComision.fotoTicket
+        if (foto) {
+          await guardarFotoComisionTicket(foto.turnoId, foto.montoAsesor, foto.montoConvenio, trx)
+        }
+      }
+
+      const edicion = await FacturacionDescuentoEdicion.create(
+        {
+          facturacionTicketId: ticket.id,
+          descuentoIdAnterior: antes.descuento?.id ?? null,
+          descuentoIdNuevo: despues.descuento?.id ?? null,
+          descuentoNombreAnterior: antes.descuento?.nombre ?? null,
+          descuentoNombreNuevo: despues.descuento?.nombre ?? null,
+          montoAnterior: antes.monto,
+          montoNuevo: despues.monto,
+          totalAnterior: antes.total,
+          totalNuevo: despues.total,
+          consecutivoAnterior: antes.consecutivoDescuento,
+          consecutivoNuevo: despues.consecutivoDescuento,
+          autorizadoPorIdAnterior: antes.autorizadoPorId,
+          autorizadoPorIdNuevo: despues.autorizadoPorId,
+          observacionAnterior: antes.observacion,
+          observacionNueva: despues.observacion,
+          motivo,
+          comisionId: comision.comisionId,
+          comisionEstado: comision.estado,
+          comisionAccion: comision.accion,
+          comisionMensaje: comision.mensaje ? comision.mensaje.slice(0, 255) : null,
+          comisionMontoAnterior: comision.antes?.monto ?? null,
+          comisionMontoNuevo: comision.despues?.monto ?? null,
+          comisionMontoAsesorAnterior: comision.antes?.montoAsesor ?? null,
+          comisionMontoAsesorNuevo: comision.despues?.montoAsesor ?? null,
+          comisionMontoConvenioAnterior: comision.antes?.montoConvenio ?? null,
+          comisionMontoConvenioNuevo: comision.despues?.montoConvenio ?? null,
+          usuarioId: auth.user?.id ?? null,
+        },
+        { client: trx }
+      )
+
+      await trx.commit()
+      return response.ok({
+        message: 'Descuento del ticket actualizado.',
+        ...r.resumen,
+        edicion,
+        ticket: await this.getTicketDTOById(ticket.id),
+      })
+    } catch (error) {
+      if (!trx.isCompleted) await trx.rollback()
+      const valor = nullIfEmpty(request.input('consecutivo_descuento'))?.toUpperCase()
+      if (esErrorUnicoConsecutivoDescuento(error) && valor) {
+        const otro = await buscarConsecutivoDescuentoConfirmado(valor, ticketId)
+        return response.conflict(conflictoConsecutivoDescuento(valor, otro))
+      }
+      throw error
     }
   }
 
@@ -1802,6 +1897,114 @@ function digestSHA256(buffer: Buffer): string {
   return h.digest('hex')
 }
 
+/* ============================== Historial: filtros ============================== */
+
+type ListaQuery = ModelQueryBuilderContract<typeof FacturacionTicket, any>
+
+/** Texto para LIKE: sin comodines del usuario. */
+function likeSeguro(v: string): string {
+  return v.replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+
+/**
+ * Filtros del listado de facturación (GET /facturacion/tickets y /exportar).
+ * Conserva los parámetros de siempre (desde/hasta sobre created_at, placa
+ * exacta, vendedor, estado, sede, agente, turno, dateo) y agrega los del
+ * historial:
+ * - fecha_pago_desde / fecha_pago_hasta (YYYY-MM-DD, America/Bogota) sobre la
+ *   fecha que muestra la columna "Fecha pago" (fecha_pago → confirmado_at → created_at).
+ * - placa_contiene: parcial, sin importar mayúsculas ni espacios.
+ * - descuento_id: id del descuento, o "ninguno" para tickets sin descuento.
+ * - consecutivo_descuento (+ consecutivo_descuento_exacto=1): parcial por defecto.
+ * - servicio_id: incluye tickets viejos sin servicio_id con el mismo código.
+ */
+function aplicarFiltrosLista(q: ListaQuery, request: HttpContext['request']) {
+  const desde = request.input('desde') as string | undefined
+  const hasta = request.input('hasta') as string | undefined
+  const sedeId = toIntOrNull(request.input('sede_id'))
+  const agenteId = toIntOrNull(request.input('agente_id'))
+  const placa =
+    (request.input('placa') as string | undefined)?.toUpperCase()?.replace(/\s+/g, '') || null
+  const estado = request.input('estado') as FactEstado | undefined
+  const turnoId = toIntOrNull(request.input('turno_id'))
+  const dateoId = toIntOrNull(request.input('dateo_id'))
+  const vendedor = request.input('vendedor') as string | undefined
+
+  if (desde) {
+    const d = DateTime.fromISO(desde).toSQL()
+    if (d) q.where('created_at', '>=', d)
+  }
+  if (hasta) {
+    const h = DateTime.fromISO(hasta).toSQL()
+    if (h) q.where('created_at', '<=', h)
+  }
+  if (sedeId) q.where('sede_id', sedeId)
+  if (agenteId) q.where('agente_id', agenteId)
+  if (placa) q.where('placa', placa)
+  if (estado) q.where('estado', estado)
+  if (turnoId) q.where('turno_id', turnoId)
+  if (dateoId) q.where('dateo_id', dateoId)
+  if (vendedor && vendedor.trim().length >= 2)
+    q.whereILike('vendedor_text', `%${likeSeguro(vendedor.trim())}%`)
+
+  // 🆕 Historial
+  const fpDesde = String(request.input('fecha_pago_desde') ?? '')
+  const fpHasta = String(request.input('fecha_pago_hasta') ?? '')
+  // Las fechas se guardan en hora de Bogotá (conexión con timezone -05:00).
+  if (FECHA_RE.test(fpDesde)) q.whereRaw(`${SQL_FECHA_HISTORIAL} >= ?`, [`${fpDesde} 00:00:00`])
+  if (FECHA_RE.test(fpHasta)) q.whereRaw(`${SQL_FECHA_HISTORIAL} <= ?`, [`${fpHasta} 23:59:59`])
+
+  const placaContiene = String(request.input('placa_contiene') ?? '')
+    .toUpperCase()
+    .replace(/\s+/g, '')
+  if (placaContiene) {
+    q.whereRaw(`REPLACE(UPPER(placa), ' ', '') LIKE ?`, [`%${likeSeguro(placaContiene)}%`])
+  }
+
+  const descuento = String(request.input('descuento_id') ?? '').trim()
+  if (descuento === 'ninguno') q.whereNull('descuento_id')
+  else if (toIntOrNull(descuento)) q.where('descuento_id', toIntOrNull(descuento)!)
+
+  const consecutivo = String(request.input('consecutivo_descuento') ?? '')
+    .toUpperCase()
+    .replace(/\s+/g, '')
+  if (consecutivo) {
+    const exacto = ['1', 'true'].includes(String(request.input('consecutivo_descuento_exacto')))
+    if (exacto) q.where('consecutivo_descuento', consecutivo)
+    else q.whereILike('consecutivo_descuento', `%${likeSeguro(consecutivo)}%`)
+  }
+
+  const servicioId = toIntOrNull(request.input('servicio_id'))
+  if (servicioId) {
+    q.where((w) => {
+      w.where('servicio_id', servicioId).orWhere((v) => {
+        v.whereNull('servicio_id').whereIn(
+          'servicio_codigo',
+          Database.from('servicios').select('codigo_servicio').where('id', servicioId)
+        )
+      })
+    })
+  }
+}
+
+/** Línea resumen del historial con los mismos filtros (sin paginar). */
+async function resumenLista(request: HttpContext['request']) {
+  const q = FacturacionTicket.query()
+  aplicarFiltrosLista(q, request)
+  const [fila] = await q
+    .select(
+      Database.raw('COUNT(*) AS cantidad'),
+      Database.raw('COALESCE(SUM(COALESCE(total_factura, total, 0)), 0) AS total_facturado'),
+      Database.raw('COALESCE(SUM(COALESCE(descuento_monto_aplicado, 0)), 0) AS total_descuento')
+    )
+    .pojo<{ cantidad: number; total_facturado: string; total_descuento: string }>()
+  return {
+    cantidad: Number(fila?.cantidad ?? 0),
+    total_facturado: Number(fila?.total_facturado ?? 0),
+    total_descuento: Number(fila?.total_descuento ?? 0),
+  }
+}
+
 function toIntOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
   const n = Number(v)
@@ -1889,6 +2092,214 @@ function esErrorUnicoConsecutivoDescuento(err: unknown): boolean {
   const e = err as { errno?: number; code?: string; sqlMessage?: string; message?: string }
   const esDup = e?.errno === 1062 || e?.code === 'ER_DUP_ENTRY'
   return esDup && String(e.sqlMessage ?? e.message ?? '').includes(UQ_CONSECUTIVO_DESCUENTO)
+}
+
+/* ===================== 🆕 Edición del descuento (ticket CONFIRMADA) ===================== */
+
+const ROLES_EDICION_DESCUENTO = ['SUPER_ADMIN', 'GERENCIA']
+const MOTIVO_EDICION_MIN = 5
+const CAMPOS_EDICION_DESCUENTO = [
+  'descuento_id',
+  'descuento_monto_aplicado',
+  'autorizado_por_id',
+  'descuento_observacion',
+  'consecutivo_descuento',
+]
+/** Monto fijo según configuración (igual que CODIGOS_MONTO_FIJO del frontend). */
+const CODIGOS_DESCUENTO_MONTO_FIJO = new Set([
+  'INFORMATIVO_POLICIA',
+  'INFORMATIVO_EMPLEADO',
+  'AVANCE_PROPIETARIO',
+])
+
+interface EstadoDescuentoTicket {
+  descuento: { id: number; codigo: string; nombre: string } | null
+  monto: number | null
+  total: number | null
+  totalSinDescuento: number | null
+  consecutivoDescuento: string | null
+  autorizadoPorId: number | null
+  observacion: string | null
+}
+
+type ResultadoEdicionDescuento =
+  | {
+      ok: true
+      resumen: {
+        ticketId: number
+        antes: EstadoDescuentoTicket
+        despues: EstadoDescuentoTicket
+        comision: Omit<PlanComisionEdicion, 'cambios' | 'fotoTicket' | 'dateoId'> & {
+          enLiquidacion: boolean
+        }
+      }
+      planComision: PlanComisionEdicion
+    }
+  | { ok: false; status: number; error: Record<string, unknown> }
+
+const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v))
+
+function estadoDescuentoTicket(
+  t: FacturacionTicket,
+  descuento: Descuento | null
+): EstadoDescuentoTicket {
+  return {
+    descuento: descuento
+      ? { id: descuento.id, codigo: descuento.codigo, nombre: descuento.nombre }
+      : null,
+    monto: numOrNull(t.descuentoMontoAplicado),
+    total: numOrNull(t.totalFactura ?? t.total),
+    totalSinDescuento: numOrNull(t.totalSinDescuento),
+    consecutivoDescuento: t.consecutivoDescuento ?? null,
+    autorizadoPorId: t.autorizadoPorId ?? null,
+    observacion: t.descuentoObservacion ?? null,
+  }
+}
+
+/**
+ * Valida la edición del descuento y la deja aplicada EN MEMORIA sobre el
+ * ticket (sin guardar), con el total recalculado desde total_sin_descuento y
+ * el plan para la comisión. Lo que no venga en el body queda como está.
+ * Sin descuento no hay monto, autorizador, observación ni consecutivo.
+ */
+async function planearEdicionDescuento(
+  ticket: FacturacionTicket,
+  body: Record<string, unknown>,
+  trx?: TransactionClientContract
+): Promise<ResultadoEdicionDescuento> {
+  const fallo = (status: number, error: Record<string, unknown>) =>
+    ({ ok: false, status, error }) as const
+
+  const descuentoAnterior = ticket.descuentoId
+    ? await Descuento.find(ticket.descuentoId, { client: trx })
+    : null
+  const antes = estadoDescuentoTicket(ticket, descuentoAnterior)
+
+  const descuentoId = 'descuento_id' in body ? toIntOrNull(body.descuento_id) : ticket.descuentoId
+  let descuento: Descuento | null = null
+  if (descuentoId) {
+    descuento = await Descuento.query({ client: trx })
+      .where('id', descuentoId)
+      .where('activo', true)
+      .first()
+    // El descuento que ya tenía el ticket se puede conservar aunque hoy esté inactivo.
+    if (!descuento && descuentoId === ticket.descuentoId) descuento = descuentoAnterior
+    if (!descuento) return fallo(400, { message: 'descuento_id no existe o está inactivo' })
+    if (descuento.codigo === 'INFORMATIVO_POLICIA' && !ticket.documentosPoliciaCargados) {
+      return fallo(400, {
+        message: 'Para aplicar el descuento INFORMATIVO_POLICIA se deben subir los 3 documentos',
+        documentos_faltantes: ticket.documentosPoliciaFaltantes,
+      })
+    }
+  }
+
+  let monto = 0
+  let autorizadoPorId: number | null = null
+  let observacion: string | null = null
+  let consecutivo: string | null = null
+  if (descuento) {
+    const montoRaw =
+      'descuento_monto_aplicado' in body ? body.descuento_monto_aplicado : antes.monto
+    monto = montoRaw === null || montoRaw === undefined || montoRaw === '' ? 0 : Number(montoRaw)
+    if (!Number.isFinite(monto) || monto < 0) {
+      return fallo(422, { code: 'MONTO_INVALIDO', message: 'El monto del descuento no es válido.' })
+    }
+    // Máximo por tipo de vehículo, solo si el descuento o el monto cambian
+    // (un ticket viejo no se bloquea porque después cambió la configuración).
+    if (descuento.id !== antes.descuento?.id || monto !== (antes.monto ?? 0)) {
+      const esMoto =
+        inferTipoVehiculoComision({ ticketTipo: ticket.tipoVehiculoSnapshot, turnoTipo: null }) ===
+        'MOTO'
+      const maximo = Number((esMoto ? descuento.valorMoto : descuento.valorCarro) ?? 0)
+      if (CODIGOS_DESCUENTO_MONTO_FIJO.has(descuento.codigo) && monto !== maximo) {
+        return fallo(422, {
+          code: 'MONTO_FIJO',
+          message: `${descuento.nombre} tiene monto fijo de $${maximo}.`,
+          maximo,
+        })
+      }
+      if (monto > maximo) {
+        return fallo(422, {
+          code: 'MONTO_SUPERA_MAXIMO',
+          message: `El monto supera el máximo de ${descuento.nombre} ($${maximo}).`,
+          maximo,
+        })
+      }
+    }
+
+    autorizadoPorId =
+      'autorizado_por_id' in body ? toIntOrNull(body.autorizado_por_id) : antes.autorizadoPorId
+    observacion =
+      'descuento_observacion' in body ? nullIfEmpty(body.descuento_observacion) : antes.observacion
+
+    const parsed = parseConsecutivoDescuento(
+      'consecutivo_descuento' in body ? body.consecutivo_descuento : antes.consecutivoDescuento
+    )
+    if (!parsed.ok) return fallo(422, errorConsecutivoDescuentoInvalido())
+    if (!parsed.valor) {
+      return fallo(422, {
+        code: 'CONSECUTIVO_DESCUENTO_REQUERIDO',
+        message: 'El ticket queda con descuento: digita el consecutivo del descuento.',
+      })
+    }
+    consecutivo = parsed.valor
+    if (consecutivo !== antes.consecutivoDescuento) {
+      const otro = await buscarConsecutivoDescuentoConfirmado(consecutivo, ticket.id, trx)
+      if (otro) return fallo(409, conflictoConsecutivoDescuento(consecutivo, otro))
+    }
+  }
+
+  // Como en la confirmación: un descuento en $0 se guarda sin monto (NULL).
+  const montoGuardado = monto > 0 ? monto : null
+  const sinCambio =
+    (descuento?.id ?? null) === (antes.descuento?.id ?? null) &&
+    (montoGuardado ?? 0) === (antes.monto ?? 0) &&
+    autorizadoPorId === antes.autorizadoPorId &&
+    observacion === antes.observacion &&
+    consecutivo === antes.consecutivoDescuento
+  if (sinCambio) {
+    return fallo(422, {
+      code: 'SIN_CAMBIO',
+      message: 'El descuento del ticket no cambia: no hay nada que guardar.',
+    })
+  }
+
+  // Total: desde total_sin_descuento (o total actual + descuento anterior).
+  const base = antes.totalSinDescuento ?? (antes.total ?? 0) + (antes.monto ?? 0)
+  const totalNuevo = montoGuardado ? Math.max(0, base - montoGuardado) : base
+
+  ticket.descuentoId = descuento?.id ?? null
+  ticket.descuentoMontoAplicado = montoGuardado
+  ticket.autorizadoPorId = autorizadoPorId
+  ticket.descuentoObservacion = observacion
+  ticket.consecutivoDescuento = consecutivo
+  ticket.totalSinDescuento = montoGuardado ? base : null
+  ticket.totalFactura = totalNuevo
+  ticket.total = totalNuevo
+
+  const planComision = await planearRecalculoComision(ticket, trx)
+  const comision = {
+    accion: planComision.accion,
+    mensaje: planComision.mensaje,
+    comisionId: planComision.comisionId,
+    estado: planComision.estado,
+    antes: planComision.antes,
+    despues: planComision.despues,
+    diferencia: planComision.diferencia,
+    liquidacionIds: planComision.liquidacionIds,
+    enLiquidacion: planComision.liquidacionIds.length > 0,
+    requiereConfirmacionPago: planComision.requiereConfirmacionPago,
+  }
+  return {
+    ok: true,
+    resumen: {
+      ticketId: ticket.id,
+      antes,
+      despues: estadoDescuentoTicket(ticket, descuento),
+      comision,
+    },
+    planComision,
+  }
 }
 
 function canConfirm(t: FacturacionTicket, _hard: boolean): boolean {
@@ -2098,6 +2509,12 @@ function buildTicketDTO(ticket: FacturacionTicket): TicketDTO {
     turno: turnoDTO,
     dateo: dateoEnriquecido,
     descuentoAplicado: null,
+    descuentoId: pick('descuentoId', 'descuento_id'),
+    descuentoMontoAplicado: pick('descuentoMontoAplicado', 'descuento_monto_aplicado'),
+    autorizadoPorId: pick('autorizadoPorId', 'autorizado_por_id'),
+    descuentoObservacion: pick('descuentoObservacion', 'descuento_observacion'),
+    documentosPoliciaCompletos: ticket.documentosPoliciaCargados,
+    documentosPoliciaFaltantes: ticket.documentosPoliciaFaltantes,
   }
 }
 
