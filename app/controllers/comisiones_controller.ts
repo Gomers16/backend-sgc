@@ -22,11 +22,17 @@ import {
   ticketsOrigenPorDateo,
 } from '#services/ticket_comision_origen_service'
 import { consecutivoDescuentoDeTickets } from '#services/consecutivo_descuento_service'
-import { ajustesEdicionFacturaPorComision } from '#services/comision_ticket_service'
+import {
+  TEXTO_CASO,
+  ajustesEdicionFacturaPorComision,
+  casoDeComisionGuardada,
+  desgloseDeComisionGuardada,
+} from '#services/comision_ticket_service'
 import {
   resolveConfigComision,
   resolveConfigRecurrencia,
   calcularComision,
+  CODIGO_DESCUENTO_AVANCE,
   type CasoComision,
   type EscenarioCliente,
 } from '#services/comision_calculo_service'
@@ -199,6 +205,11 @@ function mapComisionToDto(c: Comision) {
     monto_convenio: montoConvenioRaw,
     es_avance: esAvance,
     base: baseIncentivo,
+
+    // 🆕 Caso (por cómo quedó guardada) y la regla con la que se calculó.
+    caso: casoDeComisionGuardada(c),
+    caso_texto: TEXTO_CASO[casoDeComisionGuardada(c)],
+    regla_aplicada: c.reglaAplicada ?? null,
 
     tiene_desglose: tieneDesglose,
     desglose: tieneDesglose
@@ -792,6 +803,9 @@ export default class ComisionesController {
     }
 
     const ajustes = await ajustesEdicionFacturaPorComision([comision.id])
+    // 🆕 Quién cobra y cuánto según el motor, con la factura del turno (mismo
+    // cálculo que la edición de facturas).
+    const motor = await desgloseDeComisionGuardada(comision)
 
     const result = {
       ...dto,
@@ -805,6 +819,9 @@ export default class ComisionesController {
       anulado_at: comision.anuladoAt?.toISO() ?? null,
       anulado_por: comision.anuladoPor ?? null,
       observacion: comision.observacion ?? null,
+      desglose_motor: motor.desglose,
+      desglose_factura_id: motor.facturaId,
+      desglose_motivo: motor.motivo,
     }
 
     return response.ok(result)
@@ -1458,6 +1475,8 @@ export default class ComisionesController {
       comision.estado = 'PENDIENTE'
       comision.fechaCalculo = DateTime.now()
       ;(comision as any).esAvance = Boolean(payload.es_avance)
+      // Creada a mano: no pasa por el motor; queda dicho en la regla.
+      comision.reglaAplicada = 'Manual · creada a mano en Comisiones (montos digitados)'
 
       const descuentoObservacion = payload.descuento_observacion
         ? String(payload.descuento_observacion).trim()
@@ -1706,19 +1725,15 @@ export default class ComisionesController {
       return response.badRequest({ message: 'escenario debe ser NUEVO, RECURRENTE o RECUPERACION' })
 
     const conConvenio = Boolean(payload.conConvenio)
+    // esAvance (sin código) se simula como un descuento AVANCE en la factura.
     const esAvance = actor === 'COMERCIAL' && !conConvenio ? false : Boolean(payload.esAvance)
     const tuvoContinuidad =
       actor === 'CONVENIO' && !conConvenio ? Boolean(payload.tuvoContinuidad) : true
 
+    // origenDescuento se acepta pero ya no cambia el cálculo: manda el código
+    // final de la factura (convenioSinComisionPorDescuento).
     const codigoDescuento = payload.codigoDescuento ? String(payload.codigoDescuento) : null
-    let origenDescuento: 'DATEO' | 'CAJA' | null = null
     if (codigoDescuento) {
-      const origenRaw = String(payload.origenDescuento || '').toUpperCase()
-      if (!['DATEO', 'CAJA'].includes(origenRaw))
-        return response.badRequest({
-          message: 'origenDescuento debe ser DATEO o CAJA cuando hay descuento',
-        })
-      origenDescuento = origenRaw as 'DATEO' | 'CAJA'
       const descuentoExiste = await Descuento.query()
         .where('codigo', codigoDescuento)
         .where('activo', true)
@@ -1762,10 +1777,9 @@ export default class ComisionesController {
       caso,
       escenario: escenario as EscenarioCliente,
       tuvoContinuidad,
-      esAvance,
       montoAvance: 0,
       codigoDescuento,
-      origenDescuento,
+      codigoDescuentoFinal: codigoDescuento ?? (esAvance ? CODIGO_DESCUENTO_AVANCE : null),
       cfgValues,
       recValues,
     })

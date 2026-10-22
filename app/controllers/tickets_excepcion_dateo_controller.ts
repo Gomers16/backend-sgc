@@ -30,9 +30,9 @@ import {
   calcularComision,
   inferTipoVehiculoComision,
   decidirCasoComision,
+  esDescuentoFinalAvance,
   type CasoComision,
   type EscenarioCliente,
-  type OrigenDescuento,
 } from '#services/comision_calculo_service'
 import { conflictoTurnoSegundaVez, esTurnoSegundaVez } from '#services/segunda_vez_service'
 
@@ -666,8 +666,6 @@ export default class TicketsExcepcionDateoController {
       // Descuento y avance — mismo criterio que applyCommissionHook(): manda
       // el descuento de caja si lo hay; si no, el pre-marcado en el dateo.
       const descuentoIdActivo = facturacionConfirmada?.descuentoId ?? dateo.descuentoId ?? null
-      const origenDescuento: OrigenDescuento =
-        facturacionConfirmada?.descuentoId && !dateo.descuentoId ? 'CAJA' : 'DATEO'
       const descuentoActivo = descuentoIdActivo
         ? await Descuento.query({ client: trx })
             .where('id', descuentoIdActivo)
@@ -675,8 +673,16 @@ export default class TicketsExcepcionDateoController {
             .first()
         : null
       const codigoDescuento = descuentoActivo?.codigo ?? null
-      // Avance solo aplica con convenio (Caso 1 nunca lo usa).
-      const esAvance = caso !== 'SIN_CONVENIO' && esAvanceGuardado
+      // Descuento final: el de la factura confirmada; sin factura todavía,
+      // el del intento (applyCommissionHook lo recalcula al confirmar). Con
+      // convenio, cualquier descuento final deja al convenio en $0; Avance
+      // solo decide el monto de avance. La marca es_avance es informativa.
+      const codigoDescuentoFinal = facturacionConfirmada
+        ? facturacionConfirmada.descuentoId
+          ? codigoDescuento
+          : null
+        : codigoDescuento
+      const esAvance = esDescuentoFinalAvance({ caso, codigoDescuentoFinal })
       let montoAvance = 0
       if (esAvance && descuentoActivo) {
         const montoExplicito = Number(facturacionConfirmada?.descuentoMontoAplicado ?? 0)
@@ -694,10 +700,9 @@ export default class TicketsExcepcionDateoController {
         caso,
         escenario,
         tuvoContinuidad,
-        esAvance,
         montoAvance,
         codigoDescuento,
-        origenDescuento,
+        codigoDescuentoFinal,
         cfgValues,
         recValues,
       })

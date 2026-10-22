@@ -29,13 +29,13 @@ import Database from '@adonisjs/lucid/services/db'
 import {
   calcularComision,
   decidirCasoComision,
+  esDescuentoFinalAvance,
   inferTipoVehiculoComision,
   resolveConfigComision,
   resolveConfigRecurrencia,
   type ConfigComisionResuelta,
   type ConfigRecurrenciaResuelta,
   type EscenarioCliente,
-  type OrigenDescuento,
 } from '#services/comision_calculo_service'
 import { evaluarContinuidad } from '#services/continuidad_service'
 import {
@@ -270,13 +270,11 @@ export async function estadisticasTickets(f: FiltrosTickets) {
       'cd.convenio_id',
       'cd.canal',
       'cd.descuento_id',
-      'cd.es_avance',
       'ds.codigo as descuento_codigo',
       'ds.valor_carro',
       'ds.valor_moto',
       'cv.asesor_convenio_id',
       'c.id as comision_id',
-      'c.es_avance as c_es_avance',
       'c.descuento_codigo_aplicado as c_descuento_codigo'
     )
     .select(
@@ -328,12 +326,10 @@ export async function estadisticasTickets(f: FiltrosTickets) {
     }
 
     const enProceso = r.comision_id === null || r.comision_id === undefined
-    const esAvance = caso !== 'SIN_CONVENIO' && Boolean(enProceso ? r.es_avance : r.c_es_avance)
     const codigoDescuento: string | null = enProceso
       ? (r.descuento_codigo ?? null)
       : (r.c_descuento_codigo ?? null)
-    const origenDescuento: OrigenDescuento =
-      !enProceso && codigoDescuento && !r.descuento_id ? 'CAJA' : 'DATEO'
+    const esAvance = esDescuentoFinalAvance({ caso, codigoDescuentoFinal: codigoDescuento })
     const montoAvance =
       esAvance && r.descuento_id ? n(tipoVehiculo === 'MOTO' ? r.valor_moto : r.valor_carro) : 0
 
@@ -341,10 +337,9 @@ export async function estadisticasTickets(f: FiltrosTickets) {
       caso,
       escenario,
       tuvoContinuidad,
-      esAvance,
       montoAvance,
       codigoDescuento,
-      origenDescuento,
+      codigoDescuentoFinal: codigoDescuento,
       cfgValues: await cacheCfg.get(kCfg)!,
       recValues: await cacheRec.get(kRec)!,
     })
