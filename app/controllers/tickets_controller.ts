@@ -6,6 +6,11 @@ import TicketComentario from '#models/ticket_comentario'
 import TicketDetalleExcepcionDateo from '#models/ticket_detalle_excepcion_dateo'
 import Database from '@adonisjs/lucid/services/db'
 import { puedeVerTicket, ROLES_RESOLUTORES_TICKET } from '#services/ticket_acceso_service'
+import {
+  observacionMencionaConvenio,
+  convenioAsignadoAlAsesor,
+} from '#services/convenio_ticket_service'
+import { comisionDelTicketExcepcion } from '#services/comision_ticket_excepcion_service'
 import ExcelJS from 'exceljs'
 import {
   aplicarFiltrosTickets,
@@ -244,6 +249,22 @@ export default class TicketsController {
         .first()
       out.detalle = detalle ? detalle.serialize() : null
       out.caso_comision = detalle ? await casoComisionDelTicket(detalle) : null
+      // Avisos del convenio al aprobar: la observación dice "convenio" y el
+      // ticket no tiene; o el convenio no está asignado al comercial
+      // (null = no aplica: sin convenio o asesor convenio).
+      out.observacion_menciona_convenio = detalle
+        ? observacionMencionaConvenio(detalle.observacion)
+        : false
+      out.convenio_asignado =
+        detalle && detalle.convenioId !== null && detalle.canal !== 'ASESOR_CONVENIO'
+          ? await convenioAsignadoAlAsesor(detalle.comercialId, detalle.convenioId)
+          : null
+      // Corrección posterior del convenio: solo con la comisión PENDIENTE y
+      // fuera de liquidaciones (o sin comisión todavía). null = sin dateo.
+      out.comision_ticket =
+        detalle && ticket.estado === 'APROBADO'
+          ? await comisionDelTicketExcepcion(detalle.turnoId)
+          : null
     }
 
     // Línea de tiempo (ticket_eventos + lo que falte, armado desde el ticket).
