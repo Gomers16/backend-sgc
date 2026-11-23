@@ -1,4 +1,5 @@
 // app/controllers/agentes_captacion_controller.ts
+import { aplicarSede, sedeParaEscritura } from '#services/sede_scope'
 import type { HttpContext } from '@adonisjs/core/http'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
@@ -111,7 +112,7 @@ export default class AgentesCaptacionController {
 
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.usuario_id', userId)
-      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
+      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id') // sede: usuario y contrato del agente (raíz AgenteCaptacion con mixin)
       .leftJoin('contratos', function () {
         this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
           'contratos.estado',
@@ -165,7 +166,7 @@ export default class AgentesCaptacionController {
     const order: 'asc' | 'desc' = orderRaw === 'desc' ? 'desc' : 'asc'
 
     const qbuilder = AgenteCaptacion.query()
-      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
+      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id') // sede: usuario y contrato del agente (raíz AgenteCaptacion con mixin)
       .leftJoin('contratos', function () {
         this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
           'contratos.estado',
@@ -216,7 +217,7 @@ export default class AgentesCaptacionController {
   public async show({ params, response, auth }: HttpContext) {
     const row = await AgenteCaptacion.query()
       .where('agentes_captacions.id', params.id)
-      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
+      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id') // sede: usuario y contrato del agente (raíz AgenteCaptacion con mixin)
       .leftJoin('contratos', function () {
         this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
           'contratos.estado',
@@ -244,6 +245,7 @@ export default class AgentesCaptacionController {
         return response.unauthorized({ message: 'Usuario no autenticado' })
       }
 
+      // sede: el agente del PROPIO usuario (identidad)
       const userAgenteRow = await db
         .from('agentes_captacions')
         .where('usuario_id', auth.user.id)
@@ -277,9 +279,10 @@ export default class AgentesCaptacionController {
       return response.unauthorized({ message: 'No autenticado' })
     }
 
-    const row = await AgenteCaptacion.query()
+    // Multi-sede: el agente del PROPIO usuario es identidad (se ve en cualquier sede activa).
+    const row = await AgenteCaptacion.querySinSede()
       .where('agentes_captacions.usuario_id', auth.user.id)
-      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
+      .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id') // sede: usuario y contrato del agente propio (identidad, ver arriba)
       .leftJoin('contratos', function () {
         this.on('contratos.usuario_id', '=', 'usuarios.id').andOnVal(
           'contratos.estado',
@@ -310,6 +313,7 @@ export default class AgentesCaptacionController {
 
   /** POST /agentes-captacion */
   public async store({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     let {
       tipo,
       nombre,
@@ -349,6 +353,24 @@ export default class AgentesCaptacionController {
       if (exists) return response.conflict({ message: 'Documento ya existe' })
     }
 
+    // Multi-sede: el agente nace en la sede activa; su usuario tiene que ser
+    // de esa misma sede (trabajar en 2 sedes = 2 agentes).
+    if (usuarioId) {
+      // sede: usuario por id, para comparar su sede con la activa
+      const usuarioAgente = await db
+        .from('usuarios')
+        .where('id', usuarioId)
+        .select('sede_id')
+        .first()
+      const sedeActiva = sedeParaEscritura()
+      if (sedeActiva && usuarioAgente && Number(usuarioAgente.sede_id) !== sedeActiva) {
+        return response.conflict({
+          code: 'USUARIO_OTRA_SEDE',
+          message: 'El usuario del agente es de otra sede.',
+        })
+      }
+    }
+
     const created = await AgenteCaptacion.create({
       tipo,
       nombre: String(nombre).trim(),
@@ -364,6 +386,7 @@ export default class AgentesCaptacionController {
 
   /** PUT /agentes-captacion/:id */
   public async update({ params, request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const item = await AgenteCaptacion.find(params.id)
     if (!item) return response.notFound({ message: 'Agente no encontrado' })
 
@@ -434,9 +457,11 @@ export default class AgentesCaptacionController {
 
   /** DELETE /agentes-captacion/:id */
   public async destroy({ params, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const item = await AgenteCaptacion.find(params.id)
     if (!item) return response.notFound({ message: 'Agente no encontrado' })
 
+    // sede: dateos del agente (ya validado en la sede activa)
     const [{ total }] = await db
       .from('captacion_dateos')
       .where('agente_id', params.id)
@@ -515,7 +540,7 @@ export default class AgentesCaptacionController {
     const q = String(request.input('q', '') || '').trim()
 
     const query = Prospecto.query()
-      .join('asesor_prospecto_asignaciones as apa', 'apa.prospecto_id', 'prospectos.id')
+      .join('asesor_prospecto_asignaciones as apa', 'apa.prospecto_id', 'prospectos.id') // sede: asignación por FK desde Prospecto.query() (mixin)
       .where('apa.asesor_id', asesorId)
       .select('prospectos.*')
       .orderBy('prospectos.updated_at', 'desc')
@@ -547,6 +572,7 @@ export default class AgentesCaptacionController {
 
     const cols = selectRaw.length ? selectRaw : ['id', 'nombre', 'tipo']
 
+    // sede: aplicarSede(query) antes de ejecutar (abajo)
     let query = db
       .from('agentes_captacions')
       .leftJoin('usuarios', 'usuarios.id', 'agentes_captacions.usuario_id')
@@ -563,6 +589,8 @@ export default class AgentesCaptacionController {
     if (tipo && TIPOS.has(tipo)) {
       query = query.where('agentes_captacions.tipo', tipo)
     }
+    // Multi-sede: solo agentes de la sede activa.
+    query = aplicarSede(query, 'agentes_captacions.sede_id')
 
     const rows = await query
 
@@ -578,10 +606,15 @@ export default class AgentesCaptacionController {
   public async conveniosByAgente({ params, request }: HttpContext) {
     const asesorId = Number(params.id)
     const vigente = String(request.input('vigente', '1')) === '1'
+    // Multi-sede: un asesor de otra sede no tiene convenios aquí.
+    if (!(await AgenteCaptacion.find(asesorId))) return []
 
+    // Convenios de la sede activa: no basta con que el asesor sea de la sede
+    // (una asignación vieja o mal cargada no debe mostrar un convenio ajeno).
     const rows = await db
       .from('convenios')
       .join('asesor_convenio_asignaciones as aca', 'aca.convenio_id', 'convenios.id')
+      .where((q) => aplicarSede(q, 'convenios.sede_id'))
       .where('aca.asesor_id', asesorId)
       .if(vigente, (qb) => qb.where('aca.activo', true).whereNull('aca.fecha_fin'))
       .select(
@@ -725,8 +758,15 @@ export default class AgentesCaptacionController {
       convenioId = convenio?.id ?? null
     }
 
+    // Canales del asesor. El de Telemercadeo además ve sus dateos TELE (los
+    // que salen de una gestión); para los demás tipos no cambia nada.
+    const canales =
+      agente.tipo === 'ASESOR_TELEMERCADEO'
+        ? ['ASESOR_COMERCIAL', 'ASESOR_CONVENIO', 'TELE']
+        : ['ASESOR_COMERCIAL', 'ASESOR_CONVENIO']
+
     const q = CaptacionDateo.query()
-      .whereIn('canal', ['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'])
+      .whereIn('canal', canales)
       .where((qb) => {
         qb.where('agente_id', asesorId)
         if (convenioId !== null) qb.orWhere('convenio_id', convenioId)
@@ -880,7 +920,7 @@ export default class AgentesCaptacionController {
 
       return {
         id: d.id,
-        canal: 'ASESOR',
+        canal: ['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'].includes(d.canal) ? 'ASESOR' : d.canal,
         placa: d.placa,
         telefono: d.telefono,
         origen: d.origen,

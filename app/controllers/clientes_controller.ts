@@ -6,6 +6,13 @@ import { DateTime } from 'luxon'
 import Cliente from '#models/cliente'
 import Vehiculo from '#models/vehiculo'
 import TurnoRtm from '#models/turno_rtm'
+import { aplicarSede, sedeParaEscritura } from '#services/sede_scope'
+import {
+  clienteVisible,
+  sqlClienteVisible,
+  sqlVehiculoVisible,
+  tieneHistorialFueraDeSede,
+} from '#services/visibilidad_sede'
 
 function normalizePhone(value?: string): string | undefined {
   if (!value) return value
@@ -117,6 +124,10 @@ export async function findOrCreateCliente(data: {
   return { cliente, creado: true }
 }
 
+// Multi-sede (3c): identidad global (findOrCreateCliente busca en todas las
+// sedes) y visibilidad por sede: un cliente se ve en la sede activa solo si
+// tiene turnos o dateos en ella; si no, 404 como un dato de otra sede. Detalle
+// e historial muestran solo lo de la sede activa.
 export default class ClientesController {
   /** GET /clientes?page=1&perPage=20&q=... */
   public async index({ request, response }: HttpContext) {
@@ -125,7 +136,7 @@ export default class ClientesController {
     const q = String(request.input('q', '')).trim()
 
     try {
-      const query = Cliente.query().orderBy('id', 'desc')
+      const query = Cliente.query().whereRaw(sqlClienteVisible('clientes.id')).orderBy('id', 'desc')
 
       if (q) {
         const searchTerm = q
@@ -168,7 +179,9 @@ export default class ClientesController {
   /** GET /clientes/:id */
   public async show({ params, response }: HttpContext) {
     const item = await Cliente.find(params.id)
-    if (!item) return response.notFound({ message: 'Cliente no encontrado' })
+    if (!item || !(await clienteVisible(item.id))) {
+      return response.notFound({ message: 'Cliente no encontrado' })
+    }
     return item
   }
 
@@ -185,6 +198,7 @@ export default class ClientesController {
 
     const telefono = normalizePhone(rawTelefono) || ''
     if (!telefono) return response.badRequest({ message: 'telefono es requerido' })
+    sedeParaEscritura() // "todas" no escribe (400)
 
     const telExists = await Cliente.findBy('telefono', telefono)
     if (telExists) return response.conflict({ message: 'El teléfono ya existe' })
@@ -211,8 +225,11 @@ export default class ClientesController {
 
   /** PUT /clientes/:id */
   public async update({ params, request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const item = await Cliente.find(params.id)
-    if (!item) return response.notFound({ message: 'Cliente no encontrado' })
+    if (!item || !(await clienteVisible(item.id))) {
+      return response.notFound({ message: 'Cliente no encontrado' })
+    }
 
     const {
       nombre,
@@ -264,8 +281,16 @@ export default class ClientesController {
 
   /** DELETE /clientes/:id */
   public async destroy({ params, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const item = await Cliente.find(params.id)
-    if (!item) return response.notFound({ message: 'Cliente no encontrado' })
+    if (!item || !(await clienteVisible(item.id))) {
+      return response.notFound({ message: 'Cliente no encontrado' })
+    }
+    if (await tieneHistorialFueraDeSede({ tipo: 'cliente', id: item.id })) {
+      return response.conflict({
+        message: 'No se puede eliminar: el cliente tiene historial en otra sede.',
+      })
+    }
 
     const [{ total }] = await db
       .from('vehiculos')
@@ -287,20 +312,28 @@ export default class ClientesController {
   public async detalle({ params, response }: HttpContext) {
     const id = Number(params.id)
     const cliente = await Cliente.find(id)
-    if (!cliente) return response.notFound({ message: 'Cliente no encontrado' })
+    if (!cliente || !(await clienteVisible(cliente.id))) {
+      return response.notFound({ message: 'Cliente no encontrado' })
+    }
 
-    const vehiculos = await Vehiculo.query().where('cliente_id', id).preload('clase')
+    const vehiculos = await Vehiculo.query()
+      .where('cliente_id', id)
+      .whereRaw(sqlVehiculoVisible('vehiculos.id', 'vehiculos.placa'))
+      .preload('clase')
     const placasCliente = vehiculos.map((v) => v.placa).filter(Boolean)
 
-    const base = db
-      .from('turnos_rtms as t')
-      .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
-      .where((qb) => {
-        qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
-        if (placasCliente.length > 0) {
-          qb.orWhereIn('t.placa', placasCliente)
-        }
-      })
+    const base = aplicarSede(
+      db
+        .from('turnos_rtms as t')
+        .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
+        .where((qb) => {
+          qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
+          if (placasCliente.length > 0) {
+            qb.orWhereIn('t.placa', placasCliente)
+          }
+        }),
+      't.sede_id'
+    )
 
     const [{ total_visitas: totalVisitas, ultima }] = await base
       .clone()
@@ -356,6 +389,7 @@ export default class ClientesController {
       .clone()
       .leftJoin('servicios as s', 's.id', 't.servicio_id')
       .leftJoin('sedes as se', 'se.id', 't.sede_id')
+      // sede: t2 correlacionada con t.sede_id (t ya filtrado por la sede activa)
       .joinRaw(
         `LEFT JOIN captacion_dateos as cd ON cd.id = COALESCE(
   t.captacion_dateo_id,
@@ -363,6 +397,7 @@ export default class ClientesController {
     SELECT t2.captacion_dateo_id
     FROM turnos_rtms t2
     WHERE t2.placa = t.placa
+    AND t2.sede_id = t.sede_id
     AND t2.turno_numero < 0
     AND t2.captacion_dateo_id IS NOT NULL
     AND ABS(DATEDIFF(t2.fecha, t.fecha)) <= 7
@@ -371,8 +406,8 @@ export default class ClientesController {
   )
 )`
       )
-      .leftJoin('agentes_captacions as ac', 'ac.id', 'cd.agente_id')
-      .leftJoin('convenios as cv', 'cv.id', 'cd.convenio_id')
+      .leftJoin('agentes_captacions as ac', 'ac.id', 'cd.agente_id') // sede: agente/convenio del dateo de un turno ya filtrado (base)
+      .leftJoin('convenios as cv', 'cv.id', 'cd.convenio_id') // sede: agente/convenio del dateo de un turno ya filtrado (base)
       .select([
         't.id',
         't.fecha',
@@ -427,6 +462,9 @@ export default class ClientesController {
   /** GET /clientes/:id/historial */
   public async historial({ params, request, response }: HttpContext) {
     const id = Number(params.id)
+    if (!(await clienteVisible(id))) {
+      return response.notFound({ message: 'Cliente no encontrado' })
+    }
     const page = Number(request.input('page', 1))
     const perPage = Math.min(Number(request.input('perPage', 20)), 100)
 
@@ -438,11 +476,13 @@ export default class ClientesController {
     const hasta = request.input('hasta')
     const estado = request.input('estado')
 
+    // sede: aplicarSede(q, 't.sede_id') tras armar la consulta (abajo)
     let q = db
       .from('turnos_rtms as t')
       .leftJoin('vehiculos as v', 'v.id', 't.vehiculo_id')
       .leftJoin('servicios as s', 's.id', 't.servicio_id')
       .leftJoin('sedes as se', 'se.id', 't.sede_id')
+      // sede: t2 correlacionada con t.sede_id (t ya filtrado por la sede activa)
       .joinRaw(
         `LEFT JOIN captacion_dateos as cd ON cd.id = COALESCE(
   t.captacion_dateo_id,
@@ -450,6 +490,7 @@ export default class ClientesController {
     SELECT t2.captacion_dateo_id
     FROM turnos_rtms t2
     WHERE t2.placa = t.placa
+    AND t2.sede_id = t.sede_id
     AND t2.turno_numero < 0
     AND t2.captacion_dateo_id IS NOT NULL
     AND ABS(DATEDIFF(t2.fecha, t.fecha)) <= 7
@@ -458,8 +499,8 @@ export default class ClientesController {
   )
 )`
       )
-      .leftJoin('agentes_captacions as ac', 'ac.id', 'cd.agente_id')
-      .leftJoin('convenios as cv', 'cv.id', 'cd.convenio_id')
+      .leftJoin('agentes_captacions as ac', 'ac.id', 'cd.agente_id') // sede: agente/convenio del dateo de un turno ya filtrado (base)
+      .leftJoin('convenios as cv', 'cv.id', 'cd.convenio_id') // sede: agente/convenio del dateo de un turno ya filtrado (base)
       .where((qb) => {
         qb.where('t.cliente_id', id).orWhere('v.cliente_id', id)
       })
@@ -489,6 +530,7 @@ export default class ClientesController {
       ])
       .orderBy('t.fecha', 'desc')
       .orderBy('t.turno_numero', 'desc')
+    q = aplicarSede(q, 't.sede_id')
 
     if (servicioId) q = q.where('t.servicio_id', Number(servicioId))
     if (servicioCodigo) q = q.where('s.codigo_servicio', String(servicioCodigo))

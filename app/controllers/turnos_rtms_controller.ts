@@ -41,7 +41,9 @@ import {
   serializarVentana,
   whereTurnoDaVigencia,
 } from '#services/segunda_vez_service'
+import { DIAS_VENTANA_PRE_VENCIMIENTO } from '#services/ventana_rtm_service'
 import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
+import { sedeParaEscritura, preferirConfigDeSede } from '#services/sede_scope'
 
 // ===== Helpers =====
 const toMySQL = (dt: DateTime) => dt.toFormat('yyyy-LL-dd HH:mm:ss')
@@ -246,6 +248,7 @@ export default class TurnosRtmController {
       }
       if (agenteId) query.where('agente_captacion_id', Number(agenteId))
       if (agenteTipo) {
+        // sede: filtro sobre la consulta principal, que ya filtra el mixin
         query.whereHas('agenteCaptacion', (q) => q.where('tipo', String(agenteTipo)))
       }
       if (clienteId) query.where('cliente_id', Number(clienteId))
@@ -472,6 +475,10 @@ export default class TurnosRtmController {
   }
 
   private async crearTurno({ request, response, auth }: HttpContext, ultimoIntento: boolean) {
+    // Multi-sede (3a): el turno y su numeración van en la SEDE ACTIVA del
+    // request (la del usuario, o la elegida por SA/GER con X-Sede-Id), no en
+    // usuario.sedeId. null solo con bypass explícito (fuera de requests).
+    const sedeActivaTurno = sedeParaEscritura()
     const trx = await Database.transaction()
     try {
       const raw = request.only([
@@ -545,22 +552,16 @@ export default class TurnosRtmController {
         })
       }
 
-      if (!usuarioCreador.sedeId || !usuarioCreador.sede) {
-        console.error('❌ [TURNO-CREATE] Usuario sin sede:', {
+      const sedeTurno = sedeActivaTurno ?? usuarioCreador.sedeId ?? null
+      if (!sedeTurno) {
+        console.error('❌ [TURNO-CREATE] Sin sede activa:', {
           usuarioId: idUsuario,
           correo: usuarioCreador.correo,
-          sedeId: usuarioCreador.sedeId,
-          sede: usuarioCreador.sede,
           timestamp: new Date().toISOString(),
         })
         await trx.rollback()
         return response.badRequest({
           message: 'Tu usuario no tiene sede asignada. Contacta al administrador.',
-          debug: {
-            usuarioId: idUsuario,
-            correo: usuarioCreador.correo,
-            sedeId: usuarioCreador.sedeId,
-          },
         })
       }
 
@@ -628,9 +629,10 @@ export default class TurnosRtmController {
       // Entrega B2). Una segunda vez solo choca con otra segunda vez del día,
       // así que ignora a su origen (rechazado hoy en esta sede). Un turno
       // normal se sigue bloqueando con cualquier turno no cancelado del día.
+      // sede: duplicado del día filtrado explícitamente por la sede activa (sedeTurno)
       const dupDiarioQuery = trx
         .from('turnos_rtms')
-        .where('sede_id', usuarioCreador.sedeId!)
+        .where('sede_id', sedeTurno)
         .andWhere('servicio_id', servicio.id)
         .andWhere('fecha', hoyISO)
         .andWhere('placa', placa)
@@ -670,9 +672,8 @@ export default class TurnosRtmController {
         const meses = bloqueoMesesPorServicio((servicio as any).codigoServicio)
         if (meses > 0) {
           const ultimaFecha = lastFinalizado.fecha as DateTime
-          const DIAS_VENTANA_PRE = 16
           const vencimiento = ultimaFecha.plus({ months: meses }).startOf('day')
-          const nextAllowed = vencimiento.minus({ days: DIAS_VENTANA_PRE })
+          const nextAllowed = vencimiento.minus({ days: DIAS_VENTANA_PRE_VENCIMIENTO })
           const antesDeVentana = fechaGuardar.startOf('day') < nextAllowed
 
           if (antesDeVentana) {
@@ -696,7 +697,7 @@ export default class TurnosRtmController {
                 nextAllowedDate: nextAllowed.toISODate(),
                 vencimientoDate: vencimiento.toISODate(),
                 monthsBlocked: meses,
-                diasVentana: DIAS_VENTANA_PRE,
+                diasVentana: DIAS_VENTANA_PRE_VENCIMIENTO,
                 diasAntesDelVencimiento,
               })
             }
@@ -710,7 +711,7 @@ export default class TurnosRtmController {
       // DUPLICATE_DAY (que solo mira hoy) ni por WINDOW_BLOCK (que solo
       // mira turnos ya 'finalizado').
       const turnoAbierto = await TurnoRtm.query({ client: trx })
-        .where('sede_id', usuarioCreador.sedeId!)
+        .where('sede_id', sedeTurno)
         .andWhere('servicio_id', servicio.id)
         .andWhere('placa', placa)
         .andWhere('estado', 'activo')
@@ -756,44 +757,49 @@ export default class TurnosRtmController {
 
       // ── Reasignación: slots liberados por cancelados del mismo día ──────
       // Subquery: IDs de cancelados cuyo slot global ya fue reclamado
+      // sede: numeración filtrada explícitamente por la sede activa (sedeTurno)
       const slotsClamados = trx
         .from('turnos_rtms')
         .select('reasignado_de_turno_id')
-        .where('sede_id', usuarioCreador.sedeId!)
+        .where('sede_id', sedeTurno)
         .where('fecha', hoyISO)
         .whereNotNull('reasignado_de_turno_id')
 
+      // sede: numeración filtrada explícitamente por la sede activa (sedeTurno)
       const huecoGlobal = await trx
         .from('turnos_rtms')
         .select('id')
         .select(Database.raw('ABS(turno_numero) AS slot_libre'))
-        .where('sede_id', usuarioCreador.sedeId!)
+        .where('sede_id', sedeTurno)
         .where('fecha', hoyISO)
         .where('estado', 'cancelado')
         .where('turno_numero', '<', 0)
         .whereNotIn('id', slotsClamados)
         // Excluir slots cuyo número positivo ya está físicamente ocupado
         // (cubre turnos creados antes de que existiera reasignadoDeTurnoId)
+        // sede: subconsulta filtrada explícitamente por la sede activa (sedeTurno)
         .whereRaw(
           'ABS(turno_numero) NOT IN (SELECT turno_numero FROM turnos_rtms WHERE sede_id = ? AND fecha = ? AND turno_numero > 0)',
-          [usuarioCreador.sedeId!, hoyISO]
+          [sedeTurno, hoyISO]
         )
         .orderByRaw('ABS(turno_numero) ASC')
         .limit(1)
         .forUpdate()
         .first()
 
+      // sede: numeración filtrada explícitamente por la sede activa (sedeTurno)
       const huecoServicio = await trx
         .from('turnos_rtms')
         .select(Database.raw('ABS(turno_numero_servicio) AS slot_svc_libre'))
-        .where('sede_id', usuarioCreador.sedeId!)
+        .where('sede_id', sedeTurno)
         .where('fecha', hoyISO)
         .where('servicio_id', servicio.id)
         .where('estado', 'cancelado')
         .where('turno_numero_servicio', '<', 0)
+        // sede: subconsulta filtrada explícitamente por la sede activa (sedeTurno)
         .whereRaw(
           'ABS(turno_numero_servicio) NOT IN (SELECT turno_numero_servicio FROM turnos_rtms WHERE sede_id = ? AND fecha = ? AND servicio_id = ? AND turno_numero_servicio > 0)',
-          [usuarioCreador.sedeId!, hoyISO, servicio.id]
+          [sedeTurno, hoyISO, servicio.id]
         )
         .orderByRaw('ABS(turno_numero_servicio) ASC')
         .limit(1)
@@ -807,9 +813,10 @@ export default class TurnosRtmController {
         nextGlobal = Number(huecoGlobal.slot_libre)
         reasignadoDeTurnoId = Number(huecoGlobal.id)
       } else {
+        // sede: numeración filtrada explícitamente por la sede activa (sedeTurno)
         const rowGlobal = await trx
           .from('turnos_rtms')
-          .where('sede_id', usuarioCreador.sedeId!)
+          .where('sede_id', sedeTurno)
           .where('fecha', hoyISO)
           .where('turno_numero', '>', 0)
           // Sin filtrar por estado: un número > 0 ocupa el índice único
@@ -827,9 +834,10 @@ export default class TurnosRtmController {
       if (huecoServicio?.slot_svc_libre != null) {
         nextPorServicio = Number(huecoServicio.slot_svc_libre)
       } else {
+        // sede: numeración filtrada explícitamente por la sede activa (sedeTurno)
         const rowSvc = await trx
           .from('turnos_rtms')
-          .where('sede_id', usuarioCreador.sedeId!)
+          .where('sede_id', sedeTurno)
           .where('servicio_id', servicio.id)
           .where('fecha', hoyISO)
           .where('turno_numero_servicio', '>', 0)
@@ -908,6 +916,7 @@ export default class TurnosRtmController {
       // ER_DUP_ENTRY y store() reintenta viendo el ya confirmado.
       const codigoBase = `${servicio.codigoServicio}-${nowBog.toFormat('yyyyMMddHHmmss')}`
       const codigosDelSegundo = await trx
+        // sede: turno_codigo es único global (todas las sedes) a propósito
         .from('turnos_rtms')
         .where('turno_codigo', 'like', `${codigoBase}%`)
         .count('* as total')
@@ -951,10 +960,13 @@ export default class TurnosRtmController {
             dateo = dateoExplicito
           }
         } else {
-          console.log('⚠️ [DATEO-INVALIDO] raw.dateoId no es numérico, se ignora y cae al fallback:', {
-            rawDateoIdRecibido: raw.dateoId,
-            tipo: typeof raw.dateoId,
-          })
+          console.log(
+            '⚠️ [DATEO-INVALIDO] raw.dateoId no es numérico, se ignora y cae al fallback:',
+            {
+              rawDateoIdRecibido: raw.dateoId,
+              tipo: typeof raw.dateoId,
+            }
+          )
         }
       }
       if (!esSV && !dateo) {
@@ -1074,20 +1086,23 @@ export default class TurnosRtmController {
             const rRetry = await buildReserva(dateoRetry)
             if (await esVinculable(dateoRetry, rRetry.vigente)) {
               vincularDateoVigente(dateoRetry)
-              console.log('🆕 [RETRY] Dateo descartado por no vigente — se vinculó otro dateo vigente en el reintento:', {
-                dateoDescartadoId,
-                dateoVinculadoId: dateoRetry.id,
-                placa,
-                servicioId: servicio.id,
-              })
+              console.log(
+                '🆕 [RETRY] Dateo descartado por no vigente — se vinculó otro dateo vigente en el reintento:',
+                {
+                  dateoDescartadoId,
+                  dateoVinculadoId: dateoRetry.id,
+                  placa,
+                  servicioId: servicio.id,
+                }
+              )
             }
           }
         }
       }
       // ── Clasificación de recurrencia en tiempo real ──
-      const configGlobal = await Database.from('configuracion_recurrencia_global')
-        .orderBy('id', 'asc')
-        .first()
+      const configGlobal = await preferirConfigDeSede(
+        Database.from('configuracion_recurrencia_global')
+      ).first()
       const mesesMinimos: number = configGlobal?.meses_minimos ?? 24
 
       let esRecurrente = false
@@ -1123,6 +1138,7 @@ export default class TurnosRtmController {
           mesesDesdeUltimaVisita = meses
 
           if (captacionDateoId) {
+            // sede: por id del dateo ya resuelto con el mixin en la sede del turno
             const dateoActual = await Database.from('captacion_dateos')
               .where('id', captacionDateoId)
               .first()
@@ -1165,18 +1181,21 @@ export default class TurnosRtmController {
           const rUltimoIntento = await buildReserva(dateoUltimoIntento)
           if (await esVinculable(dateoUltimoIntento, rUltimoIntento.vigente)) {
             vincularDateoVigente(dateoUltimoIntento)
-            console.log('🆕 [RED-SEGURIDAD] captacionDateoId seguía null justo antes de crear el turno — se vinculó en el último intento:', {
-              rawDateoIdOriginal: raw.dateoId,
-              dateoVinculadoId: dateoUltimoIntento.id,
-              placa,
-              servicioId: servicio.id,
-            })
+            console.log(
+              '🆕 [RED-SEGURIDAD] captacionDateoId seguía null justo antes de crear el turno — se vinculó en el último intento:',
+              {
+                rawDateoIdOriginal: raw.dateoId,
+                dateoVinculadoId: dateoUltimoIntento.id,
+                placa,
+                servicioId: servicio.id,
+              }
+            )
           }
         }
       }
 
       const payload: any = {
-        sedeId: usuarioCreador.sedeId!,
+        sedeId: sedeTurno,
         funcionarioId: usuarioCreador.id,
         servicioId: servicio.id,
         fecha: fechaGuardar,
@@ -1230,6 +1249,7 @@ export default class TurnosRtmController {
       const turno = await TurnoRtm.create(payload, { client: trx })
 
       if (captacionDateoId) {
+        // sede: por id del dateo ya resuelto con el mixin en la sede del turno
         await CaptacionDateo.query({ client: trx })
           .where('id', captacionDateoId)
           .update({
@@ -1609,6 +1629,7 @@ export default class TurnosRtmController {
     placa: string
     excludeTurnoId?: number
   }) {
+    // sede: filtrado explícito por opts.sedeId; usuarios solo por id del funcionario
     let query = Database.from('turnos_rtms as t')
       .leftJoin('usuarios as u', 'u.id', 't.funcionario_id')
       .where('t.sede_id', opts.sedeId)
@@ -1725,6 +1746,7 @@ export default class TurnosRtmController {
       let turnoNumeroServicioNext: number | undefined
       if (servicioIdNext && servicioIdNext !== turno.servicioId) {
         const fechaISO = (turno.fecha as DateTime).toISODate()!
+        // sede: filtrado explícito por la sede del turno (turno ya cargado con el mixin)
         const rowSvc = await Database.from('turnos_rtms')
           .where('sede_id', turno.sedeId)
           .where('servicio_id', servicioIdNext)
@@ -2128,22 +2150,32 @@ export default class TurnosRtmController {
       if (!usuarioSolicitante) {
         return response.badRequest({ message: `Usuario ${idNumericoUsuario} no encontrado` })
       }
-      if (!usuarioSolicitante.sedeId) {
+      // Multi-sede (3a): numeración de la SEDE ACTIVA ("todas" no tiene número).
+      let sedeSig: number | null
+      try {
+        sedeSig = sedeParaEscritura() ?? usuarioSolicitante.sedeId ?? null
+      } catch (e) {
+        return response.badRequest({ message: (e as Error).message })
+      }
+      if (!sedeSig) {
         return response.badRequest({ message: 'El usuario no tiene sede asignada' })
       }
 
       const hoy = DateTime.local().setZone('America/Bogota').toISODate()!
 
       // Hueco global disponible (slot más pequeño liberado por un cancelado)
+      // sede: numeración filtrada explícitamente por la sede activa (sedeSig)
       const slotsClamadosSig = Database.from('turnos_rtms')
         .select('reasignado_de_turno_id')
-        .where('sede_id', usuarioSolicitante.sedeId)
+        .where('sede_id', sedeSig)
         .where('fecha', hoy)
         .whereNotNull('reasignado_de_turno_id')
 
+      // sede: numeración filtrada explícitamente por la sede activa (sedeSig)
+
       const huecoGlobalSig = await Database.from('turnos_rtms')
         .select(Database.raw('ABS(turno_numero) AS slot_libre'))
-        .where('sede_id', usuarioSolicitante.sedeId)
+        .where('sede_id', sedeSig)
         .where('fecha', hoy)
         .where('estado', 'cancelado')
         .where('turno_numero', '<', 0)
@@ -2156,9 +2188,10 @@ export default class TurnosRtmController {
       if (huecoGlobalSig?.slot_libre != null) {
         siguiente = Number(huecoGlobalSig.slot_libre)
       } else {
+        // sede: numeración filtrada explícitamente por la sede activa (sedeSig)
         const rowGlobal = await Database.from('turnos_rtms')
           .where('fecha', hoy)
-          .andWhere('sede_id', usuarioSolicitante.sedeId)
+          .andWhere('sede_id', sedeSig)
           .where('turno_numero', '>', 0)
           .max('turno_numero as max')
           .first()
@@ -2181,9 +2214,11 @@ export default class TurnosRtmController {
           sid = s.id
         }
 
+        // sede: numeración filtrada explícitamente por la sede activa (sedeSig)
+
         const huecoSvcSig = await Database.from('turnos_rtms')
           .select(Database.raw('ABS(turno_numero_servicio) AS slot_svc_libre'))
-          .where('sede_id', usuarioSolicitante.sedeId)
+          .where('sede_id', sedeSig)
           .where('fecha', hoy)
           .where('servicio_id', sid!)
           .where('estado', 'cancelado')
@@ -2195,9 +2230,10 @@ export default class TurnosRtmController {
         if (huecoSvcSig?.slot_svc_libre != null) {
           siguientePorServicio = Number(huecoSvcSig.slot_svc_libre)
         } else {
+          // sede: numeración filtrada explícitamente por la sede activa (sedeSig)
           const rowSvc = await Database.from('turnos_rtms')
             .where('fecha', hoy)
-            .andWhere('sede_id', usuarioSolicitante.sedeId)
+            .andWhere('sede_id', sedeSig)
             .andWhere('servicio_id', sid!)
             .where('turno_numero_servicio', '>', 0)
             .max('turno_numero_servicio as max')
@@ -2209,7 +2245,7 @@ export default class TurnosRtmController {
       return response.ok({
         siguiente,
         siguientePorServicio,
-        sedeId: usuarioSolicitante.sedeId,
+        sedeId: sedeSig,
       })
     } catch (error) {
       console.error('Error en siguienteTurno:', error)
@@ -2285,6 +2321,7 @@ export default class TurnosRtmController {
       }
       if (agenteId) q.where('agente_captacion_id', Number(agenteId))
       if (agenteTipo) {
+        // sede: filtro sobre la consulta principal, que ya filtra el mixin
         q.whereHas('agenteCaptacion', (qq) => qq.where('tipo', String(agenteTipo)))
       }
 

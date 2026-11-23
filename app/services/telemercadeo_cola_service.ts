@@ -13,6 +13,8 @@
 // criterio que store() de dateos: el último dateo liberado=0 por
 // placa/teléfono + servicio, con la vigencia de buildReserva()).
 
+import { sqlClienteVisible } from '#services/visibilidad_sede'
+import { aplicarSede, sedeSql } from '#services/sede_scope'
 import { DateTime } from 'luxon'
 import Database from '@adonisjs/lucid/services/db'
 import CaptacionDateo from '#models/captacion_dateo'
@@ -22,13 +24,18 @@ import {
   ttlPostConsumoDiasPorServicio,
 } from '#services/reserva_dateo_service'
 import { excluirSegundaVezSql, whereTurnoDaVigencia } from '#services/segunda_vez_service'
+import {
+  MESES_VIGENCIA_RTM,
+  bloqueaDateoRtm,
+  DIAS_VENTANA_PRE_VENCIMIENTO,
+  vigenciaRtm,
+} from '#services/ventana_rtm_service'
+import { seguimientoPorPlacas, type SeguimientoPlaca } from '#services/telemercadeo_gestion_service'
 
 const ZONA = 'America/Bogota'
 
-/** Vigencia del RTM (igual que captacion_dateos_controller.ts y WINDOW_BLOCK). */
-export const MESES_VIGENCIA_RTM = 12
-/** Ventana previa de referencia visual (DIAS_VENTANA_PRE de turnos_rtms_controller.ts). */
-export const DIAS_VENTANA_PREVIA = 16
+/** Vigencia del RTM: ver ventana_rtm_service.ts (misma regla que store() de dateos). */
+export { MESES_VIGENCIA_RTM }
 /** POR_VENCER: vencen en los próximos N días… */
 export const DIAS_POR_VENCER = 30
 /** …o vencieron hace a lo sumo N días. */
@@ -79,6 +86,14 @@ export interface FilaCola {
   vence_el: string | null
   puede_datear_desde: string | null
   dias_para_vencer: number | null
+  /**
+   * Solo CLIENTES: placas del cliente con RTM vigente (store() rechazaría
+   * hoy un dateo RTM con RTM_VIGENTE). No se excluyen: siguen siendo
+   * datables para SOAT, Preventiva o Peritaje.
+   */
+  rtm_vigentes: Array<{ placa: string; vence_el: string; puede_datear_desde: string }>
+  /** Seguimiento de Telemercadeo de la placa con la gestión más reciente (null si no hay). */
+  seguimiento: SeguimientoPlaca | null
 }
 
 export interface ParametrosCola {
@@ -88,6 +103,8 @@ export interface ParametrosCola {
   orden: OrdenClientes
   page: number
   perPage: number
+  /** Agente de Telemercadeo que consulta (para su límite de seguimientos); null = global. */
+  agenteId?: number | null
 }
 
 export interface ResultadoCola {
@@ -112,6 +129,11 @@ export interface ResultadoCola {
 }
 
 const soloDigitos = (v: unknown) => String(v ?? '').replace(/\D/g, '')
+/**
+ * Dígitos para buscar por teléfono: solo si el texto es un número (con
+ * separadores). Una placa (ABC123) no se busca por sus dígitos.
+ */
+const digitosTelefono = (texto: string) => (/^[\d\s()+.-]+$/.test(texto) ? soloDigitos(texto) : '')
 const normPlaca = (v: unknown) =>
   String(v ?? '')
     .replace(/[\s-]/g, '')
@@ -180,8 +202,10 @@ async function candidatosPorVencer(hoyISO: string, rtmId: number): Promise<FilaC
     .plus({ days: DIAS_POR_VENCER + 3 })
     .toISODate()!
 
-  const ultimoRtm = whereTurnoDaVigencia(
-    Database.from('turnos_rtms').where('turnos_rtms.servicio_id', rtmId)
+  // Multi-sede: la ventana RTM es por sede → último RTM de la placa EN LA SEDE ACTIVA.
+  const ultimoRtm = aplicarSede(
+    whereTurnoDaVigencia(Database.from('turnos_rtms').where('turnos_rtms.servicio_id', rtmId)),
+    'turnos_rtms.sede_id'
   )
     .select('turnos_rtms.placa')
     .max('turnos_rtms.fecha as fecha')
@@ -194,6 +218,8 @@ async function candidatosPorVencer(hoyISO: string, rtmId: number): Promise<FilaC
     })
     .leftJoin('vehiculos as v', 'v.placa', 'r.placa')
     .joinRaw('LEFT JOIN clientes AS c ON c.id = COALESCE(v.cliente_id, t.cliente_id)')
+    // sede: el turno de ese último RTM, en la sede activa (r ya es de la sede)
+    .whereRaw(`(t.id IS NULL OR ${sedeSql('t')})`)
     .whereBetween('r.fecha', [fechaDesde, fechaHasta])
     .groupBy('r.placa', 'r.fecha')
     .select('r.placa', 'r.fecha')
@@ -204,9 +230,7 @@ async function candidatosPorVencer(hoyISO: string, rtmId: number): Promise<FilaC
   const filas: FilaCola[] = []
   for (const r of rows) {
     const ultimaISO = aFechaISO(r.fecha)
-    const vence = DateTime.fromISO(ultimaISO, { zone: ZONA })
-      .plus({ months: MESES_VIGENCIA_RTM })
-      .startOf('day')
+    const { venceEl: vence, puedeDatearDesde } = vigenciaRtm(ultimaISO)
     const dias = Math.round(vence.diff(hoy.startOf('day'), 'days').days)
     if (dias > DIAS_POR_VENCER || dias < -DIAS_VENCIDAS_RECIENTES) continue
 
@@ -225,8 +249,10 @@ async function candidatosPorVencer(hoyISO: string, rtmId: number): Promise<FilaC
       meses_transcurridos: mesesEntre(ultimaISO, hoyISO),
       rango: dias < 0 ? 'VENCIDAS' : 'PROXIMAS',
       vence_el: vence.toISODate(),
-      puede_datear_desde: vence.minus({ days: DIAS_VENTANA_PREVIA }).toISODate(),
+      puede_datear_desde: puedeDatearDesde.toISODate(),
       dias_para_vencer: dias,
+      rtm_vigentes: [],
+      seguimiento: null,
     })
   }
   return filas.sort((a, b) => a.dias_para_vencer! - b.dias_para_vencer!)
@@ -239,10 +265,11 @@ interface Exclusiones {
 
 /** Turno hoy (activo o finalizado, cualquier servicio): el vehículo ya está en la sede. */
 async function exclusionTurnoHoy(hoyISO: string, ex: Exclusiones) {
-  const rows = await Database.from('turnos_rtms')
-    .where('fecha', hoyISO)
-    .whereIn('estado', ['activo', 'finalizado'])
-    .select('placa', 'cliente_id')
+  // Multi-sede: "ya está en la sede" = turno de hoy en la sede activa.
+  const rows = await aplicarSede(
+    Database.from('turnos_rtms').where('fecha', hoyISO).whereIn('estado', ['activo', 'finalizado']),
+    'sede_id'
+  ).select('placa', 'cliente_id')
   for (const r of rows) {
     ex.placas.add(normPlaca(r.placa))
     if (r.cliente_id) ex.clientes.add(Number(r.cliente_id))
@@ -302,7 +329,7 @@ function coincideBusqueda(f: FilaCola, q: string | null): boolean {
   if (!texto) return true
   if (f.placas.some((p) => normPlaca(p).includes(normPlaca(texto)))) return true
   if ((f.cliente_nombre ?? '').toUpperCase().includes(texto)) return true
-  const dig = soloDigitos(texto)
+  const dig = digitosTelefono(texto)
   return dig.length >= 3 && soloDigitos(f.telefono).includes(dig)
 }
 
@@ -341,13 +368,14 @@ async function baseClientesSql(hoyISO: string, rtmId: number | null, q: string |
   const porCliente = `SELECT t.cliente_id, MAX(t.fecha) AS f
     FROM turnos_rtms t
     WHERE t.estado = 'finalizado' AND ${sv('t')} AND t.cliente_id IS NOT NULL AND t.fecha < ?
+      AND ${sedeSql('t')}
     GROUP BY t.cliente_id`
   // (b) Turno finalizado sin cliente_id, ligado por placa al dueño actual.
   const porPlaca = `SELECT v.cliente_id, MAX(t.fecha) AS f
     FROM turnos_rtms t
     JOIN vehiculos v ON v.placa = t.placa
     WHERE t.estado = 'finalizado' AND ${sv('t')} AND t.cliente_id IS NULL
-      AND v.cliente_id IS NOT NULL AND t.fecha < ?
+      AND v.cliente_id IS NOT NULL AND t.fecha < ? AND ${sedeSql('t')}
     GROUP BY v.cliente_id`
   // (c) Ticket CONFIRMADA cuyo turno ya no existe (turno_id queda NULL por
   // ON DELETE SET NULL), por cliente_id o por documento.
@@ -356,13 +384,13 @@ async function baseClientesSql(hoyISO: string, rtmId: number | null, q: string |
       SELECT f.cliente_id, DATE(f.fecha_pago) AS f
       FROM facturacion_tickets f
       WHERE f.estado = 'CONFIRMADA' AND f.cliente_id IS NOT NULL AND ${turnoNoExiste}
-        AND DATE(f.fecha_pago) < ?
+        AND DATE(f.fecha_pago) < ? AND ${sedeSql('f')}
       UNION ALL
       SELECT c2.id, DATE(f.fecha_pago)
       FROM facturacion_tickets f
       JOIN clientes c2 ON c2.doc_numero = f.doc_numero
       WHERE f.estado = 'CONFIRMADA' AND f.doc_numero <> '' AND ${turnoNoExiste}
-        AND DATE(f.fecha_pago) < ?
+        AND DATE(f.fecha_pago) < ? AND ${sedeSql('f')}
     ) x GROUP BY x.cliente_id`
   bindings.push(hoyISO, hoyISO, hoyISO, hoyISO)
 
@@ -370,9 +398,11 @@ async function baseClientesSql(hoyISO: string, rtmId: number | null, q: string |
   // cliente o de cualquiera de sus placas.
   const turnoHoy = `SELECT t.cliente_id FROM turnos_rtms t
       WHERE t.fecha = ? AND t.estado IN ('activo', 'finalizado') AND t.cliente_id IS NOT NULL
+        AND ${sedeSql('t')}
     UNION
     SELECT v.cliente_id FROM turnos_rtms t JOIN vehiculos v ON v.placa = t.placa
-      WHERE t.fecha = ? AND t.estado IN ('activo', 'finalizado') AND v.cliente_id IS NOT NULL`
+      WHERE t.fecha = ? AND t.estado IN ('activo', 'finalizado') AND v.cliente_id IS NOT NULL
+        AND ${sedeSql('t')}`
   bindings.push(hoyISO, hoyISO)
 
   // Exclusión 2 — dateo RTM vigente. Como store(): por cada placa del
@@ -387,8 +417,9 @@ async function baseClientesSql(hoyISO: string, rtmId: number | null, q: string |
       FROM captacion_dateos d
       JOIN (SELECT ${col} AS k, MAX(created_at) AS ca FROM captacion_dateos
             WHERE liberado = 0 AND servicio_id = ? AND ${col} IS NOT NULL AND ${col} <> ''
+              AND ${sedeSql('captacion_dateos')}
             GROUP BY ${col}) m ON m.k = d.${col} AND m.ca = d.created_at
-      WHERE d.liberado = 0 AND d.servicio_id = ?
+      WHERE d.liberado = 0 AND d.servicio_id = ? AND ${sedeSql('d')}
       GROUP BY d.${col}, d.created_at`
     const ultimoBindings = [...vig.bindings, rtmId, rtmId]
     const tel = telefonoSql('c.telefono')
@@ -418,7 +449,7 @@ async function baseClientesSql(hoyISO: string, rtmId: number | null, q: string |
     const like = `%${escaparLike(texto)}%`
     const partes = ['c.nombre LIKE ?', 'c.doc_numero LIKE ?']
     bindings.push(like, like)
-    const dig = soloDigitos(texto)
+    const dig = digitosTelefono(texto)
     if (dig.length >= 3) {
       partes.push(`${telefonoSql('c.telefono')} LIKE ?`)
       bindings.push(`%${dig}%`)
@@ -455,7 +486,8 @@ async function baseClientesSql(hoyISO: string, rtmId: number | null, q: string |
     LEFT JOIN (
       SELECT DISTINCT e.cliente_id FROM (${turnoHoy}${dateoVigente}) e
     ) ex ON ex.cliente_id = c.id
-    WHERE ex.cliente_id IS NULL ${filtroQ}`
+    WHERE ex.cliente_id IS NULL ${filtroQ}
+      AND ${sqlClienteVisible('c.id')}`
 
   return { sql, bindings }
 }
@@ -535,10 +567,59 @@ async function paginaClientes(
       vence_el: null,
       puede_datear_desde: null,
       dias_para_vencer: null,
+      rtm_vigentes: [],
+      seguimiento: null,
     }
   })
 
+  if (rtmId) await marcarRtmVigentes(data, rtmId)
+
   return { data, total, contadores }
+}
+
+/**
+ * CLIENTES: marca las placas de la página con RTM vigente (mismo cálculo
+ * que RTM_VIGENTE de store(), ventana compartida). Una consulta para la página.
+ */
+async function marcarRtmVigentes(filas: FilaCola[], rtmId: number) {
+  const placas = [...new Set(filas.flatMap((f) => f.placas))]
+  if (!placas.length) return
+  const ultimos = await aplicarSede(
+    whereTurnoDaVigencia(Database.from('turnos_rtms').where('turnos_rtms.servicio_id', rtmId)),
+    'turnos_rtms.sede_id'
+  )
+    .whereIn('turnos_rtms.placa', placas)
+    .groupBy('turnos_rtms.placa')
+    .select('turnos_rtms.placa')
+    .max('turnos_rtms.fecha as fecha')
+  const vigentes = new Map<string, { vence_el: string; puede_datear_desde: string }>()
+  for (const u of ultimos as any[]) {
+    const v = vigenciaRtm(aFechaISO(u.fecha))
+    if (bloqueaDateoRtm(v)) {
+      vigentes.set(u.placa, {
+        vence_el: v.venceEl.toISODate()!,
+        puede_datear_desde: v.puedeDatearDesde.toISODate()!,
+      })
+    }
+  }
+  for (const f of filas) {
+    f.rtm_vigentes = f.placas
+      .filter((p) => vigentes.has(p))
+      .map((p) => ({ placa: p, ...vigentes.get(p)! }))
+  }
+}
+
+/** Seguimiento de Telemercadeo de la página: el de la placa con la gestión más reciente. */
+async function marcarSeguimiento(filas: FilaCola[], agenteId: number | null) {
+  const mapa = await seguimientoPorPlacas(
+    filas.flatMap((f) => f.placas),
+    agenteId
+  )
+  if (!mapa.size) return
+  for (const f of filas) {
+    const candidatos = f.placas.map((p) => mapa.get(p)).filter((s): s is SeguimientoPlaca => !!s)
+    f.seguimiento = candidatos.sort((a, b) => b.ultima_gestion.id - a.ultima_gestion.id)[0] ?? null
+  }
 }
 
 /* ───────────────────────── Entrada ───────────────────────── */
@@ -573,6 +654,8 @@ export async function obtenerColaTelemercadeo(p: ParametrosCola): Promise<Result
     total = clientes.total
   }
 
+  await marcarSeguimiento(data, p.agenteId ?? null)
+
   return {
     data,
     meta: {
@@ -587,7 +670,7 @@ export async function obtenerColaTelemercadeo(p: ParametrosCola): Promise<Result
       },
       parametros: {
         meses_vigencia_rtm: MESES_VIGENCIA_RTM,
-        dias_ventana_previa: DIAS_VENTANA_PREVIA,
+        dias_ventana_previa: DIAS_VENTANA_PRE_VENCIMIENTO,
         dias_por_vencer: DIAS_POR_VENCER,
         dias_vencidas_recientes: DIAS_VENCIDAS_RECIENTES,
       },

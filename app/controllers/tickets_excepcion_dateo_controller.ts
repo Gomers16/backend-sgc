@@ -1,4 +1,6 @@
 // app/controllers/tickets_excepcion_dateo_controller.ts
+import { estadoAgenteEnSede, sqlAsesorDeLaSede } from '#services/visibilidad_sede'
+import { sedeParaEscritura, configParaEditar } from '#services/sede_scope'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 import Database from '@adonisjs/lucid/services/db'
@@ -32,6 +34,18 @@ import {
   aplicarComisionTicketExcepcion,
 } from '#services/comision_ticket_excepcion_service'
 import { conflictoTurnoSegundaVez, esTurnoSegundaVez } from '#services/segunda_vez_service'
+import { dateoSinComision, logComisionTeleOmitida } from '#services/comision_tele_service'
+import {
+  TIPO_AGENTE_TELE,
+  validarGestionDelAgente,
+  vincularGestionConDateo,
+} from '#services/telemercadeo_gestion_service'
+import {
+  atributosOrigen,
+  exigirColumnaGestionTicket,
+  resolverOrigenDateo,
+} from '#services/telemercadeo_origen_service'
+import type TelemercadeoGestion from '#models/telemercadeo_gestion'
 
 function readOptionalNumber(input: unknown): number | null {
   if (input === undefined || input === null) return null
@@ -58,6 +72,7 @@ export default class TicketsExcepcionDateoController {
    * Actualiza el límite global. body: { minutos_ventana }
    */
   public async ventanaConfigUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionVentanaTicketGlobal } = await import(
       '#models/configuracion_ventana_ticket_global'
     )
@@ -70,7 +85,7 @@ export default class TicketsExcepcionDateoController {
       })
     }
 
-    let config = await ConfiguracionVentanaTicketGlobal.query().first()
+    let config = await configParaEditar(ConfiguracionVentanaTicketGlobal)
     if (!config) {
       config = await ConfiguracionVentanaTicketGlobal.create({ minutosVentana } as any)
     } else {
@@ -91,7 +106,9 @@ export default class TicketsExcepcionDateoController {
     )
 
     const asesorId = request.input('asesorId') as number | undefined
-    const query = ConfiguracionVentanaTicketAsesor.query().preload('asesor')
+    const query = ConfiguracionVentanaTicketAsesor.query()
+      .whereRaw(sqlAsesorDeLaSede('asesor_id'))
+      .preload('asesor')
     if (asesorId) query.where('asesor_id', asesorId)
 
     const configs = await query
@@ -114,6 +131,7 @@ export default class TicketsExcepcionDateoController {
    * minutos_ventana null/vacío = elimina el override (vuelve a usar el global).
    */
   public async ventanaAsesoresUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionVentanaTicketAsesor } = await import(
       '#models/configuracion_ventana_ticket_asesor'
     )
@@ -123,7 +141,16 @@ export default class TicketsExcepcionDateoController {
     const asesorId = Number(payload.asesor_id)
     if (!asesorId) return response.badRequest({ message: 'asesor_id es requerido' })
     const asesor = await AgenteCaptacion.find(asesorId)
-    if (!asesor) return response.badRequest({ message: 'asesor_id no existe' })
+    if (!asesor) {
+      // Multi-sede: asesor de otra sede → 409 explícito.
+      if ((await estadoAgenteEnSede(Number(asesorId))) === 'otra') {
+        return response.conflict({
+          code: 'AGENTE_OTRA_SEDE',
+          message: 'El asesor pertenece a otra sede.',
+        })
+      }
+      return response.badRequest({ message: 'asesor_id no existe' })
+    }
 
     let minutosVentana: number | null = null
     if (
@@ -138,6 +165,16 @@ export default class TicketsExcepcionDateoController {
             'minutos_ventana debe ser un número entero mayor a 0, o null para usar el global',
         })
       }
+    }
+    {
+      const visAsesor = await estadoAgenteEnSede(Number(asesorId))
+      if (visAsesor === 'otra') {
+        return response.conflict({
+          code: 'AGENTE_OTRA_SEDE',
+          message: 'El asesor pertenece a otra sede.',
+        })
+      }
+      if (visAsesor === 'no') return response.notFound({ message: 'Asesor no encontrado' })
     }
 
     let config = await ConfiguracionVentanaTicketAsesor.query().where('asesor_id', asesorId).first()
@@ -161,6 +198,7 @@ export default class TicketsExcepcionDateoController {
    * Elimina el override — el asesor vuelve a usar el límite global.
    */
   public async ventanaAsesoresDelete({ params, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionVentanaTicketAsesor } = await import(
       '#models/configuracion_ventana_ticket_asesor'
     )
@@ -193,6 +231,7 @@ export default class TicketsExcepcionDateoController {
    * por imagen) — este endpoint solo recibe las URLs resultantes.
    */
   public async crear({ request, response, auth }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const payload = request.only([
       'turno_id',
       'comercial_id',
@@ -209,6 +248,8 @@ export default class TicketsExcepcionDateoController {
       'evidencia_grupo_whatsapp_url',
       'evidencia_bloqueo_url',
       'evidencia_calamidad_url',
+      'telemercadeo_gestion_id',
+      'telemercadeo_origen_id',
     ])
 
     const turnoId = readOptionalNumber(payload.turno_id)
@@ -284,11 +325,61 @@ export default class TicketsExcepcionDateoController {
         return response.conflict(conflictoTurnoSegundaVez('dateo ni ticket de excepción de dateo'))
       }
 
+      // Ticket que nace de una gestión de Telemercadeo (REQUIERE_TICKET_DATEO
+      // al datear desde ella): la gestión tiene que ser del comercial del
+      // ticket, de la placa del turno y no estar dateada. Sin convenio,
+      // descuento ni avance (decisión 2026-11-23); canal TELE y el servicio de
+      // la gestión.
+      const gestionTeleId = readOptionalNumber(payload.telemercadeo_gestion_id)
+      let gestionTele: TelemercadeoGestion | null = null
+      // Ticket TELE: con gestión, a nombre de un asesor de Telemercadeo o con
+      // canal TELE. Siempre canal TELE, sin convenio, descuento ni avance y con
+      // origen (decisión 2026-11-23; reemplaza la excepción del 2026-11-10).
+      const esTicketTele =
+        gestionTeleId !== null ||
+        comercial.tipo === TIPO_AGENTE_TELE ||
+        String(payload.canal ?? '').toUpperCase() === 'TELE'
+      if (esTicketTele) {
+        const conExtras =
+          readOptionalNumber(payload.convenio_id) !== null ||
+          readOptionalNumber(payload.descuento_id) !== null ||
+          payload.es_avance === true ||
+          payload.es_avance === 'true'
+        if (conExtras) {
+          await trx.rollback()
+          return response.badRequest({
+            code: 'TELE_SIN_CONVENIO_DESCUENTO',
+            message: 'Un dateo de Telemercadeo no lleva convenio ni descuento.',
+          })
+        }
+      }
+      if (gestionTeleId !== null) {
+        await exigirColumnaGestionTicket()
+        const resGestion = await validarGestionDelAgente(gestionTeleId, comercial.id, turno.placa)
+        if (!resGestion.ok) {
+          await trx.rollback()
+          return response.status(resGestion.status).send(resGestion.body)
+        }
+        gestionTele = resGestion.gestion
+      }
+      let origenTeleId: number | null = null
+      if (esTicketTele) {
+        const resOrigen = await resolverOrigenDateo(
+          payload.telemercadeo_origen_id,
+          gestionTele?.origenId ?? null
+        )
+        if (!resOrigen.ok) {
+          await trx.rollback()
+          return response.status(resOrigen.status).send(resOrigen.body)
+        }
+        origenTeleId = resOrigen.origenId
+      }
+
       // Convenio: después de la segunda vez (esa respuesta manda) y antes del
       // resto de validaciones del turno.
       const decisionConvenio = leerDecisionConvenioCrear({
         convenioId: readOptionalNumber(payload.convenio_id),
-        sinConvenio: payload.sin_convenio,
+        sinConvenio: esTicketTele ? true : payload.sin_convenio,
         esAsesorConvenio: (comercial.tipo || '').toUpperCase() === 'ASESOR_CONVENIO',
       })
       if (!decisionConvenio.ok) {
@@ -327,6 +418,7 @@ export default class TicketsExcepcionDateoController {
 
       const yaExistePendiente = await TicketDetalleExcepcionDateo.query({ client: trx })
         .where('turno_id', turnoId)
+        // sede: el detalle ya filtra la sede del ticket (mixin vía ticket)
         .whereHas('ticket', (q) => q.where('estado', 'PENDIENTE'))
         .first()
       if (yaExistePendiente) {
@@ -357,19 +449,23 @@ export default class TicketsExcepcionDateoController {
 
       const resIntento = await resolverIntentoDateo({
         agenteId: comercial.id,
-        canal: (payload.canal as string | undefined) || null,
+        canal: esTicketTele ? 'TELE' : (payload.canal as string | undefined) || null,
         convenioId,
-        descuentoId: readOptionalNumber(payload.descuento_id),
-        servicioId: readOptionalNumber(payload.servicio_id) ?? turno.servicioId,
+        descuentoId: esTicketTele ? null : readOptionalNumber(payload.descuento_id),
+        servicioId: gestionTele
+          ? gestionTele.servicioId
+          : (readOptionalNumber(payload.servicio_id) ?? turno.servicioId),
         esAvance: payload.es_avance === true || payload.es_avance === 'true',
         comprobanteAvanceUrl: (payload.comprobante_avance_url as string | undefined) || null,
         permitirConvenioNoAsignado: esRespaldoPrivilegiado,
       })
       if (!resIntento.ok) {
         await trx.rollback()
-        return response
-          .status(resIntento.status)
-          .send({ code: 'INTENTO_DATEO_INVALIDO', message: resIntento.message })
+        return response.status(resIntento.status).send({
+          code: 'INTENTO_DATEO_INVALIDO',
+          motivo: resIntento.code ?? null,
+          message: resIntento.message,
+        })
       }
       const intento = resIntento.intento
       if (intento.servicioIdEfectivo !== turno.servicioId) {
@@ -424,6 +520,10 @@ export default class TicketsExcepcionDateoController {
           turnoId: turno.id,
           placa: turno.placa,
           comercialId: comercial.id,
+          // Solo si viene de una gestión: sin gestión la columna (1819) no se
+          // escribe y crear() funciona aunque la migración no esté aplicada.
+          ...(gestionTele ? { telemercadeoGestionId: gestionTele.id } : {}),
+          ...(await atributosOrigen(origenTeleId, gestionTele?.origenId ?? null)),
           convenioId: intento.convenioId,
           convenioIdOriginal: intento.convenioId,
           sinConvenioExplicito: intento.convenioId === null,
@@ -502,6 +602,7 @@ export default class TicketsExcepcionDateoController {
    * decidirCasoComision(), compartida por ambos.
    */
   public async aprobar({ params, request, response, auth }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     // El ticket se bloquea (FOR UPDATE) antes de mirar su estado: dos
     // aprobaciones simultáneas se serializan y la segunda ve APROBADO → 409.
     const trx = await Database.transaction()
@@ -554,11 +655,22 @@ export default class TicketsExcepcionDateoController {
         })
       }
 
-      // 1. Carga el turno del ticket.
-      const turno = await TurnoRtm.query({ client: trx }).where('id', detalle.turnoId).first()
+      // 1. Carga el turno del ticket (sin filtro: si es de otra sede es un
+      // 409 explícito, no un "no encontrado").
+      const turno = await TurnoRtm.querySinSede({ client: trx })
+        .where('id', detalle.turnoId)
+        .first()
       if (!turno) {
         await trx.rollback()
         return response.notFound({ message: 'Turno del ticket no encontrado' })
+      }
+      // Multi-sede: ticket, turno y la comisión que nacerá de él, en la misma sede.
+      if (turno.sedeId !== ticket.sedeId) {
+        await trx.rollback()
+        return response.conflict({
+          code: 'TICKET_OTRA_SEDE',
+          message: 'El ticket y su turno no son de la misma sede.',
+        })
       }
       turno.useTransaction(trx)
 
@@ -583,6 +695,13 @@ export default class TicketsExcepcionDateoController {
       const convenioIdCorregido = corrigeConvenio
         ? readOptionalNumber(request.input('convenio_id'))
         : null
+      if (corrigeConvenio && convenioIdCorregido !== null && detalle.canal === 'TELE') {
+        await trx.rollback()
+        return response.badRequest({
+          code: 'TELE_SIN_CONVENIO_DESCUENTO',
+          message: 'Un dateo de Telemercadeo no lleva convenio ni descuento.',
+        })
+      }
       if (corrigeConvenio && convenioIdCorregido !== null) {
         const conv = await Convenio.find(convenioIdCorregido, { client: trx })
         if (!conv || !conv.activo) {
@@ -610,9 +729,11 @@ export default class TicketsExcepcionDateoController {
         })
         if (!res.ok) {
           await trx.rollback()
-          return response
-            .status(res.status)
-            .send({ code: 'INTENTO_DATEO_INVALIDO', message: res.message })
+          return response.status(res.status).send({
+            code: 'INTENTO_DATEO_INVALIDO',
+            motivo: res.code ?? null,
+            message: res.message,
+          })
         }
         canal = res.intento.canal
         convenioId = res.intento.convenioId
@@ -651,6 +772,9 @@ export default class TicketsExcepcionDateoController {
         {
           canal: canal as any,
           agenteId: comercial.id,
+          ...(detalle.telemercadeoOrigenId
+            ? { telemercadeoOrigenId: detalle.telemercadeoOrigenId }
+            : {}),
           convenioId,
           asesorConvenioId: asesorConvenioIdDateo,
           placa: turno.placa,
@@ -671,6 +795,23 @@ export default class TicketsExcepcionDateoController {
       // 4. Vinculación retroactiva.
       turno.captacionDateoId = dateo.id
       await turno.save()
+
+      // 4b. Ticket que nace de una gestión de Telemercadeo: la gestión queda
+      // DATEADO con este dateo y su ciclo cerrado (misma transacción).
+      if (detalle.telemercadeoGestionId) {
+        const vinculada = await vincularGestionConDateo(
+          detalle.telemercadeoGestionId,
+          dateo.id,
+          trx
+        )
+        if (!vinculada) {
+          await trx.rollback()
+          return response.conflict({
+            code: 'GESTION_YA_DATEADA',
+            message: 'La gestión de Telemercadeo de este ticket ya tiene otro dateo vinculado.',
+          })
+        }
+      }
 
       // 5. ¿Ya existe un facturacion_ticket CONFIRMADA para este turno?
       const facturacionConfirmada = await FacturacionTicket.query({ client: trx })
@@ -708,7 +849,12 @@ export default class TicketsExcepcionDateoController {
       })
 
       let comisionCreada: Comision | null = null
-      if (facturacionConfirmada) {
+      if (facturacionConfirmada && dateoSinComision(dateo)) {
+        // Telemercadeo: el dateo queda EXITOSO, sin comisión.
+        dateo.resultado = 'EXITOSO'
+        await dateo.useTransaction(trx).save()
+        logComisionTeleOmitida('aprobación de ticket', dateo.id, `ticket ${ticket.id}`)
+      } else if (facturacionConfirmada) {
         dateo.resultado = 'EXITOSO'
         await dateo.useTransaction(trx).save()
 
@@ -845,6 +991,7 @@ export default class TicketsExcepcionDateoController {
   public async corregirConvenio(ctx: HttpContext, opciones: { simular?: boolean } = {}) {
     const { params, request, response, auth } = ctx
     const simular = opciones.simular === true
+    if (!simular) sedeParaEscritura() // "todas" no escribe (400)
 
     if (!Object.prototype.hasOwnProperty.call(request.all(), 'convenio_id')) {
       return response.badRequest({ message: 'convenio_id es requerido (null = sin convenio)' })
@@ -891,6 +1038,12 @@ export default class TicketsExcepcionDateoController {
           message: 'El asesor convenio siempre queda con su propio convenio.',
         })
       }
+      if (detalle.canal === 'TELE' && convenioNuevoId !== null) {
+        return cortar(400, {
+          code: 'TELE_SIN_CONVENIO_DESCUENTO',
+          message: 'Un dateo de Telemercadeo no lleva convenio ni descuento.',
+        })
+      }
       const convenioAnteriorId = detalle.convenioId ?? null
       if (convenioAnteriorId === convenioNuevoId) {
         return cortar(400, {
@@ -905,8 +1058,17 @@ export default class TicketsExcepcionDateoController {
         }
       }
 
-      const turno = await TurnoRtm.query({ client: trx }).where('id', detalle.turnoId).first()
+      // Sin filtro: turno o comisión de otra sede → 409 explícito (abajo).
+      const turno = await TurnoRtm.querySinSede({ client: trx })
+        .where('id', detalle.turnoId)
+        .first()
       if (!turno) return cortar(404, { message: 'Turno del ticket no encontrado' })
+      if (turno.sedeId !== ticket.sedeId) {
+        return cortar(409, {
+          code: 'TICKET_OTRA_SEDE',
+          message: 'El ticket y su turno no son de la misma sede.',
+        })
+      }
       const dateo = turno.captacionDateoId
         ? await CaptacionDateo.query({ client: trx })
             .where('id', turno.captacionDateoId)
@@ -921,7 +1083,8 @@ export default class TicketsExcepcionDateoController {
       }
 
       // Comisión: solo PENDIENTE y fuera de liquidaciones.
-      const comisiones = await Comision.query({ client: trx })
+      // sede: sin filtro a propósito; una comisión de otra sede es un 409 (abajo)
+      const comisiones = await Comision.querySinSede({ client: trx })
         .where('captacion_dateo_id', dateo.id)
         .where('tipo_servicio', 'RTM')
         .whereNot('estado', 'ANULADA')
@@ -942,7 +1105,15 @@ export default class TicketsExcepcionDateoController {
         })
       }
       const comision = comisiones[0] ?? null
+      // Multi-sede: la comisión asociada tiene que ser de la sede del ticket.
+      if (comision && comision.sedeId !== ticket.sedeId) {
+        return cortar(409, {
+          code: 'TICKET_OTRA_SEDE',
+          message: 'El ticket y su comisión no son de la misma sede.',
+        })
+      }
       if (comision) {
+        // sede: por id de una comisión ya leída con el mixin
         const enLiquidacion = await trx
           .from('liquidacion_detalle')
           .where('comision_id', comision.id)
@@ -970,7 +1141,11 @@ export default class TicketsExcepcionDateoController {
         permitirConvenioNoAsignado: true,
       })
       if (!res.ok) {
-        return cortar(res.status, { code: 'INTENTO_DATEO_INVALIDO', message: res.message })
+        return cortar(res.status, {
+          code: 'INTENTO_DATEO_INVALIDO',
+          motivo: res.code ?? null,
+          message: res.message,
+        })
       }
 
       const convenioAnterior = convenioAnteriorId
@@ -1141,6 +1316,7 @@ export default class TicketsExcepcionDateoController {
    * No toca turno ni dateo ni comisión.
    */
   public async rechazar({ params, request, response, auth }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const motivo = (request.input('motivo') as string | undefined)?.trim()
     if (!motivo) return response.badRequest({ message: 'motivo es requerido' })
 

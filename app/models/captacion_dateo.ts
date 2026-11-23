@@ -1,6 +1,8 @@
 // app/models/captacion_dateo.ts
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo, beforeSave, computed } from '@adonisjs/lucid/orm'
+import { compose } from '@adonisjs/core/helpers'
+import { SedeScoped } from '#models/mixins/sede_scoped'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
 
 import AgenteCaptacion from '#models/agente_captacion'
@@ -54,7 +56,12 @@ function normalizePhone(v?: string | null) {
   return v ? v.replace(/\D/g, '') : (v ?? null)
 }
 
-export default class CaptacionDateo extends BaseModel {
+export default class CaptacionDateo extends compose(BaseModel, SedeScoped) {
+  // Multi-sede (3c): sede_id propio; el mixin la pone al crear. Exclusividad,
+  // recurrencia y ventana de un dateo valen solo dentro de su sede.
+  @column({ columnName: 'sede_id' })
+  declare sedeId: number | null
+
   public static table = 'captacion_dateos'
 
   @column({ isPrimary: true })
@@ -260,6 +267,10 @@ export default class CaptacionDateo extends BaseModel {
   // 🆕 Descuento real aplicado en caja (snapshot, ver descuentoCajaId arriba)
   @belongsTo(() => Descuento, { foreignKey: 'descuentoCajaId' })
   declare descuentoCaja: BelongsTo<typeof Descuento>
+
+  /** Origen elegido por el asesor de Telemercadeo (migración 1820). */
+  @column({ columnName: 'telemercadeo_origen_id' })
+  declare telemercadeoOrigenId: number | null
 
   // 🆕 Servicio para el que se datéa
   @column({ columnName: 'servicio_id' })

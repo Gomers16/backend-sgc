@@ -1,4 +1,6 @@
 // app/models/ticket_detalle_excepcion_dateo.ts
+import { compose } from '@adonisjs/core/helpers'
+import { SedeScoped } from '#models/mixins/sede_scoped'
 import { DateTime } from 'luxon'
 import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
@@ -11,7 +13,10 @@ import Usuario from '#models/usuario'
 import Servicio from '#models/servicio'
 import Descuento from '#models/descuento'
 
-export default class TicketDetalleExcepcionDateo extends BaseModel {
+export default class TicketDetalleExcepcionDateo extends compose(BaseModel, SedeScoped) {
+  // Multi-sede: 3e, hereda la sede del ticket.
+  static sedeVia = { atributo: 'ticketId', columna: 'ticket_id', tablaPadre: 'tickets' }
+
   public static table = 'tickets_detalle_excepcion_dateo'
 
   @column({ isPrimary: true })
@@ -28,6 +33,18 @@ export default class TicketDetalleExcepcionDateo extends BaseModel {
 
   @column({ columnName: 'comercial_id' })
   declare comercialId: number
+
+  /**
+   * Gestión de Telemercadeo de la que nace el ticket (REQUIERE_TICKET_DATEO al
+   * datear desde ella). aprobar() la vincula con el dateo creado. Migración
+   * 1819000000000; null en tickets que no vienen de una gestión.
+   */
+  @column({ columnName: 'telemercadeo_gestion_id' })
+  declare telemercadeoGestionId: number | null
+
+  /** Origen elegido para el dateo que creará aprobar() (migración 1820). */
+  @column({ columnName: 'telemercadeo_origen_id' })
+  declare telemercadeoOrigenId: number | null
 
   @column({ columnName: 'convenio_id' })
   declare convenioId: number | null

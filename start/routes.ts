@@ -29,13 +29,16 @@ router
         const { default: AuthController } = await import('#controllers/auth_controller')
         return new AuthController().me(ctx)
       })
-      .use(middleware.auth())
+      // sedeOpcional: un usuario sin sede igual puede ver su perfil (sede null).
+      .use(middleware.auth({ sedeOpcional: true }))
 
     /* ======================== BÚSQUEDA UNIFICADA ======================= */
-    router.get('/buscar', async (ctx) => {
-      const { default: BusquedasController } = await import('#controllers/busquedas_controller')
-      return new BusquedasController().unificada(ctx)
-    })
+    router
+      .get('/buscar', async (ctx) => {
+        const { default: BusquedasController } = await import('#controllers/busquedas_controller')
+        return new BusquedasController().unificada(ctx)
+      })
+      .use(middleware.auth())
 
     /* ============================== TURNOS ============================= */
     router
@@ -387,6 +390,32 @@ router
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
       ])
 
+    /* ===================== IMPORTACIÓN BOGOTÁ (otras sedes) ============ */
+    // Base histórica de una sede distinta de Ibagué (formato de Bogotá).
+    router
+      .post('/rtm/importar-bogota/preview', async (ctx) => {
+        const { default: ImportacionBogotaController } = await import(
+          '#controllers/importacion_bogota_controller'
+        )
+        return new ImportacionBogotaController().preview(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
+
+    router
+      .post('/rtm/importar-bogota/lote', async (ctx) => {
+        const { default: ImportacionBogotaController } = await import(
+          '#controllers/importacion_bogota_controller'
+        )
+        return new ImportacionBogotaController().lote(ctx)
+      })
+      .use([
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'OPERATIVO_TURNOS'] }),
+      ])
+
     /* ============================== USUARIOS =========================== */
     router
       .get('/usuarios', async (ctx) => {
@@ -418,6 +447,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'usuario', param: 'id' }),
       ])
 
     router
@@ -428,6 +458,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'usuario', param: 'id' }),
       ])
 
     router
@@ -438,6 +469,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }), // Solo admin y gerencia pueden eliminar
+        middleware.registroEnSede({ tipo: 'usuario', param: 'id' }),
       ])
 
     router
@@ -448,6 +480,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'usuario', param: 'id' }),
       ])
     /* ============================== SELECTORES ========================= */
     const selectors = [
@@ -460,25 +493,33 @@ router
       { path: 'cargos', controller: '#controllers/cargos_controller' },
     ] as const
 
+    // Multi-sede Fase 0: los selectores exigen sesión (ninguna pantalla los
+    // usa antes del login).
     for (const { path, controller } of selectors) {
-      router.get(`/${path}`, async (ctx) => {
-        const { default: Ctrl } = await import(controller)
-        return new Ctrl().index(ctx)
-      })
+      router
+        .get(`/${path}`, async (ctx) => {
+          const { default: Ctrl } = await import(controller)
+          return new Ctrl().index(ctx)
+        })
+        .use(middleware.auth())
     }
 
-    router.get('/razones-sociales/:id/usuarios', async (ctx) => {
-      const { default: Ctrl } = await import('#controllers/razones_sociales_controller')
-      return new Ctrl().usuarios(ctx)
-    })
+    router
+      .get('/razones-sociales/:id/usuarios', async (ctx) => {
+        const { default: Ctrl } = await import('#controllers/razones_sociales_controller')
+        return new Ctrl().usuarios(ctx)
+      })
+      .use(middleware.auth())
 
     /* ============================ ENTIDADES SALUD ====================== */
-    router.get('/entidades-salud/:id', async (ctx) => {
-      const { default: EntidadesSaludsController } = await import(
-        '#controllers/entidades_saluds_controller'
-      )
-      return new EntidadesSaludsController().show(ctx)
-    })
+    router
+      .get('/entidades-salud/:id', async (ctx) => {
+        const { default: EntidadesSaludsController } = await import(
+          '#controllers/entidades_saluds_controller'
+        )
+        return new EntidadesSaludsController().show(ctx)
+      })
+      .use(middleware.auth())
 
     /* =============================== CONTRATOS ========================= */
     router
@@ -499,6 +540,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'usuario', param: 'usuarioId' }),
       ])
 
     router
@@ -529,6 +571,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -539,6 +582,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -549,6 +593,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -559,6 +604,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -569,6 +615,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -579,6 +626,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -589,6 +637,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -599,6 +648,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -609,6 +659,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -619,6 +670,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -629,6 +681,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -639,6 +692,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -649,6 +703,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'id' }),
       ])
 
     router
@@ -688,6 +743,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'contratoId' }),
       ])
 
     router
@@ -721,6 +777,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'contratoId' }),
       ])
 
     router
@@ -742,6 +799,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'contratoId' }),
       ])
 
     router
@@ -752,6 +810,7 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'contratoId' }),
       ])
 
     router
@@ -762,109 +821,211 @@ router
       .use([
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'TALENTO_HUMANO'] }),
+        middleware.registroEnSede({ tipo: 'contrato', param: 'contratoId' }),
       ])
     /* =============================== CIUDADES ========================== */
-    router.get('/ciudades/:id', async (ctx) => {
-      const { default: CiudadesController } = await import('#controllers/ciudades_controller')
-      return new CiudadesController().show(ctx)
-    })
-
-    /* ========================= CLASES DE VEHÍCULO ====================== */
-    router.get('/clases-vehiculo', async (ctx) => {
-      const { default: ClasesVehiculosController } = await import(
-        '#controllers/clases_vehiculos_controller'
-      )
-      return new ClasesVehiculosController().index(ctx)
-    })
-    router.get('/clases-vehiculo/:id', async (ctx) => {
-      const { default: ClasesVehiculosController } = await import(
-        '#controllers/clases_vehiculos_controller'
-      )
-      return new ClasesVehiculosController().show(ctx)
-    })
-    router.post('/clases-vehiculo', async (ctx) => {
-      const { default: ClasesVehiculosController } = await import(
-        '#controllers/clases_vehiculos_controller'
-      )
-      return new ClasesVehiculosController().store(ctx)
-    })
-    router.put('/clases-vehiculo/:id', async (ctx) => {
-      const { default: ClasesVehiculosController } = await import(
-        '#controllers/clases_vehiculos_controller'
-      )
-      return new ClasesVehiculosController().update(ctx)
-    })
-    router.delete('/clases-vehiculo/:id', async (ctx) => {
-      const { default: ClasesVehiculosController } = await import(
-        '#controllers/clases_vehiculos_controller'
-      )
-      return new ClasesVehiculosController().destroy(ctx)
-    })
-
-    /* ================================ CLIENTES ========================= */
-    router.get('/clientes', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().index(ctx)
-    })
-    router.get('/clientes/:id', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().show(ctx)
-    })
-    router.post('/clientes', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().store(ctx)
-    })
-    router.put('/clientes/:id', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().update(ctx)
-    })
-    router.delete('/clientes/:id', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().destroy(ctx)
-    })
-
-    router.get('/clientes/:id/detalle', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().detalle(ctx)
-    })
-    router.get('/clientes/:id/historial', async (ctx) => {
-      const { default: ClientesController } = await import('#controllers/clientes_controller')
-      return new ClientesController().historial(ctx)
-    })
-
-    /* ================================ VEHÍCULOS ======================== */
-    router.get('/vehiculos', async (ctx) => {
-      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
-      return new VehiculosController().index(ctx)
-    })
-    router.get('/vehiculos/:id', async (ctx) => {
-      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
-      return new VehiculosController().show(ctx)
-    })
-    router.post('/vehiculos', async (ctx) => {
-      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
-      return new VehiculosController().store(ctx)
-    })
-    router.put('/vehiculos/:id', async (ctx) => {
-      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
-      return new VehiculosController().update(ctx)
-    })
-    router.delete('/vehiculos/:id', async (ctx) => {
-      const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
-      return new VehiculosController().destroy(ctx)
-    })
-    /* =========================== TELEMERCADEO ========================== */
     router
-      .get('/telemercadeo/cola', async (ctx) => {
+      .get('/ciudades/:id', async (ctx) => {
+        const { default: CiudadesController } = await import('#controllers/ciudades_controller')
+        return new CiudadesController().show(ctx)
+      })
+      .use(middleware.auth())
+
+    // Multi-sede Fase 0: clases de vehículo, clientes y vehículos exigen
+    // sesión (antes eran públicas). Todo el front las llama vía http.ts, que
+    // ya manda el token.
+    router
+      .group(() => {
+        /* ========================= CLASES DE VEHÍCULO ====================== */
+        router.get('/clases-vehiculo', async (ctx) => {
+          const { default: ClasesVehiculosController } = await import(
+            '#controllers/clases_vehiculos_controller'
+          )
+          return new ClasesVehiculosController().index(ctx)
+        })
+        router.get('/clases-vehiculo/:id', async (ctx) => {
+          const { default: ClasesVehiculosController } = await import(
+            '#controllers/clases_vehiculos_controller'
+          )
+          return new ClasesVehiculosController().show(ctx)
+        })
+        // Catálogo global: escribir solo SUPER_ADMIN y GERENCIA.
+        router
+          .post('/clases-vehiculo', async (ctx) => {
+            const { default: ClasesVehiculosController } = await import(
+              '#controllers/clases_vehiculos_controller'
+            )
+            return new ClasesVehiculosController().store(ctx)
+          })
+          .use(middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }))
+        router
+          .put('/clases-vehiculo/:id', async (ctx) => {
+            const { default: ClasesVehiculosController } = await import(
+              '#controllers/clases_vehiculos_controller'
+            )
+            return new ClasesVehiculosController().update(ctx)
+          })
+          .use(middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }))
+        router
+          .delete('/clases-vehiculo/:id', async (ctx) => {
+            const { default: ClasesVehiculosController } = await import(
+              '#controllers/clases_vehiculos_controller'
+            )
+            return new ClasesVehiculosController().destroy(ctx)
+          })
+          .use(middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }))
+
+        /* ================================ CLIENTES ========================= */
+        router.get('/clientes', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().index(ctx)
+        })
+        router.get('/clientes/:id', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().show(ctx)
+        })
+        router.post('/clientes', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().store(ctx)
+        })
+        router.put('/clientes/:id', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().update(ctx)
+        })
+        router.delete('/clientes/:id', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().destroy(ctx)
+        })
+
+        router.get('/clientes/:id/detalle', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().detalle(ctx)
+        })
+        router.get('/clientes/:id/historial', async (ctx) => {
+          const { default: ClientesController } = await import('#controllers/clientes_controller')
+          return new ClientesController().historial(ctx)
+        })
+
+        /* ================================ VEHÍCULOS ======================== */
+        router.get('/vehiculos', async (ctx) => {
+          const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+          return new VehiculosController().index(ctx)
+        })
+        router.get('/vehiculos/:id', async (ctx) => {
+          const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+          return new VehiculosController().show(ctx)
+        })
+        router.post('/vehiculos', async (ctx) => {
+          const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+          return new VehiculosController().store(ctx)
+        })
+        router.put('/vehiculos/:id', async (ctx) => {
+          const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+          return new VehiculosController().update(ctx)
+        })
+        router.delete('/vehiculos/:id', async (ctx) => {
+          const { default: VehiculosController } = await import('#controllers/vehiculos_controller')
+          return new VehiculosController().destroy(ctx)
+        })
+      })
+      .use(middleware.auth())
+    /* =========================== TELEMERCADEO ========================== */
+    // Cola (solo lectura), gestiones del asesor (solo agentes
+    // ASESOR_TELEMERCADEO registran; se valida en el controlador), y control
+    // de gerencia (metas, resumen, Excel, extras, configuración).
+    {
+      const tele = async () => {
         const { default: TelemercadeoController } = await import(
           '#controllers/telemercadeo_controller'
         )
-        return new TelemercadeoController().cola(ctx)
-      })
-      .use([
+        return new TelemercadeoController()
+      }
+      const lectura = [
         middleware.auth(),
         middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'COMERCIAL'] }),
-      ])
+      ]
+      const soloAsesor = [middleware.auth(), middleware.checkRole({ roles: ['COMERCIAL'] })]
+      const control = [
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA'] }),
+      ]
+      // Mismos roles que /captacion-dateos/config/max-redateos.
+      const configLectura = [
+        middleware.auth(),
+        middleware.checkRole({ roles: ['SUPER_ADMIN', 'GERENCIA', 'CONTABILIDAD', 'COMERCIAL'] }),
+      ]
+      const ID = /^[0-9]+$/
+
+      router.get('/telemercadeo/cola', async (ctx) => (await tele()).cola(ctx)).use(lectura)
+      router
+        .get('/telemercadeo/catalogos', async (ctx) => (await tele()).catalogos(ctx))
+        .use(lectura)
+
+      router
+        .get('/telemercadeo/gestiones', async (ctx) => (await tele()).gestiones(ctx))
+        .use(lectura)
+      router
+        .post('/telemercadeo/gestiones', async (ctx) => (await tele()).registrar(ctx))
+        .use(soloAsesor)
+      router
+        .get('/telemercadeo/gestiones/:id', async (ctx) => (await tele()).gestion(ctx))
+        .where('id', ID)
+        .use(lectura)
+      router
+        .get('/telemercadeo/gestiones/:id/evidencia', async (ctx) => (await tele()).evidencia(ctx))
+        .where('id', ID)
+        .use(lectura)
+      router
+        .get('/telemercadeo/seguimiento', async (ctx) => (await tele()).seguimiento(ctx))
+        .use(lectura)
+      router
+        .get('/telemercadeo/mi-resumen', async (ctx) => (await tele()).miResumen(ctx))
+        .use(soloAsesor)
+
+      router.get('/telemercadeo/resumen', async (ctx) => (await tele()).resumen(ctx)).use(control)
+      router
+        .get('/telemercadeo/resumen/excel', async (ctx) => (await tele()).resumenExcel(ctx))
+        .use(control)
+      router.get('/telemercadeo/asesores', async (ctx) => (await tele()).asesores(ctx)).use(control)
+      router.get('/telemercadeo/metas', async (ctx) => (await tele()).metas(ctx)).use(control)
+      router
+        .put('/telemercadeo/metas', async (ctx) => (await tele()).guardarMetas(ctx))
+        .use(control)
+      router
+        .post('/telemercadeo/metas/copiar', async (ctx) => (await tele()).copiarMetas(ctx))
+        .use(control)
+      router
+        .post('/telemercadeo/ciclos/:id/autorizar-extra', async (ctx) =>
+          (await tele()).autorizarExtra(ctx)
+        )
+        .where('id', ID)
+        .use(control)
+
+      router
+        .get('/telemercadeo/config/max-seguimientos', async (ctx) => (await tele()).configGet(ctx))
+        .use(configLectura)
+      router
+        .post('/telemercadeo/config/max-seguimientos', async (ctx) =>
+          (await tele()).configUpsert(ctx)
+        )
+        .use(control)
+      router
+        .get('/telemercadeo/config/max-seguimientos/asesores', async (ctx) =>
+          (await tele()).configAsesoresIndex(ctx)
+        )
+        .use(configLectura)
+      router
+        .post('/telemercadeo/config/max-seguimientos/asesores', async (ctx) =>
+          (await tele()).configAsesoresUpsert(ctx)
+        )
+        .use(control)
+      router
+        .delete('/telemercadeo/config/max-seguimientos/asesores/:id', async (ctx) =>
+          (await tele()).configAsesoresDelete(ctx)
+        )
+        .where('id', ID)
+        .use(control)
+    }
 
     /* ========================= AGENTES CAPTACIÓN ======================= */
 
@@ -2381,10 +2542,12 @@ router
 
     /* =============================== OCR (BACKEND) ===================== */
 
-    router.post('/ocr/parse-ticket', async (ctx) => {
-      const { default: OcrController } = await import('#controllers/ocr_controller')
-      return new OcrController().parseTicket(ctx)
-    })
+    router
+      .post('/ocr/parse-ticket', async (ctx) => {
+        const { default: OcrController } = await import('#controllers/ocr_controller')
+        return new OcrController().parseTicket(ctx)
+      })
+      .use(middleware.auth())
 
     /* ======================== COMPROBANTES DE PAGO ===================== */
 

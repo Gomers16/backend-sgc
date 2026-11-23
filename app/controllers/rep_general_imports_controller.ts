@@ -1,4 +1,5 @@
 // app/controllers/rep_general_import_controller.ts
+import { preferirConfigDeSede, sedeParaEscritura } from '#services/sede_scope'
 import type { HttpContext } from '@adonisjs/core/http'
 import logger from '@adonisjs/core/services/logger'
 import fs from 'node:fs'
@@ -57,6 +58,9 @@ export default class RepGeneralImportController {
   // ==================== MÉTODO PRINCIPAL ====================
 
   public async import({ request, response, auth }: HttpContext) {
+    // Multi-sede: la importación escribe en la sede activa ("todas" → 400,
+    // antes del try que lo volvería 500).
+    const sedeImport = sedeParaEscritura()
     try {
       const file = request.file('file', {
         size: '50mb',
@@ -128,8 +132,19 @@ export default class RepGeneralImportController {
       let sedeIdValido: number | null = null
 
       if (esTECNOBASE) {
-        const usuarioAdmin = await db.from('usuarios').orderBy('id', 'asc').first()
-        const sedeDefault = await db.from('sedes').orderBy('id', 'asc').first()
+        // Multi-sede: funcionario = primer usuario de la sede activa (antes: el
+        // primero de la tabla, que es de Ibagué); sede = la activa (antes: la
+        // primera de la tabla).
+        // sede: primer usuario de la sede activa
+        const usuarioDeLaSede = sedeImport
+          ? await db.from('usuarios').where('sede_id', sedeImport).orderBy('id', 'asc').first()
+          : null
+        // sede: respaldo (sin usuarios en la sede): el primero de la tabla, como antes
+        const usuarioAdmin =
+          usuarioDeLaSede ?? (await db.from('usuarios').orderBy('id', 'asc').first())
+        const sedeDefault = sedeImport
+          ? await db.from('sedes').where('id', sedeImport).first()
+          : await db.from('sedes').orderBy('id', 'asc').first()
 
         if (!usuarioAdmin) {
           return response.status(500).send({
@@ -148,10 +163,9 @@ export default class RepGeneralImportController {
         sedeIdValido = sedeDefault.id
       }
 
-      const configGlobal = await db
-        .from('configuracion_recurrencia_global')
-        .orderBy('id', 'asc')
-        .first()
+      const configGlobal = await preferirConfigDeSede(
+        db.from('configuracion_recurrencia_global')
+      ).first()
       const mesesMinimos: number = configGlobal?.meses_minimos ?? this.MESES_MINIMOS_DEFAULT
 
       let clientesCreados = 0
@@ -457,6 +471,7 @@ export default class RepGeneralImportController {
     let estadoContinuidad: EstadoContinuidad | null = null
 
     if (captacionDateoIdActual) {
+      // sede: por id del dateo de un turno de la sede activa
       const dateoActual = await db
         .from('captacion_dateos')
         .where('id', captacionDateoIdActual)
@@ -1195,10 +1210,9 @@ export default class RepGeneralImportController {
     console.log(`   🚗 tipoVehiculo: ${tipoVehiculo} | esMoto: ${esMoto}`)
 
     const asesorId = comision.asesorId
-    const configGlobal = await db
-      .from('configuracion_recurrencia_global')
-      .orderBy('id', 'asc')
-      .first()
+    const configGlobal = await preferirConfigDeSede(
+      db.from('configuracion_recurrencia_global')
+    ).first()
 
     let valorRecurrente: number
 
@@ -1215,7 +1229,7 @@ export default class RepGeneralImportController {
     }
 
     if (asesorId) {
-      const asesorCfg = await db
+      const asesorCfg = await db // sede: config por asesor; el asesor ya se resolvió en la sede
         .from('configuracion_recurrencia_asesores')
         .where('asesor_id', asesorId)
         .where('recurrencia_habilitada', true)

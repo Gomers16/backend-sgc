@@ -19,6 +19,7 @@ import CaptacionDateo from '#models/captacion_dateo'
 import TurnoRtm from '#models/turno_rtm'
 import AgenteCaptacion from '#models/agente_captacion'
 import Servicio from '#models/servicio'
+import { aplicarSede, sedeParaEscritura } from '#services/sede_scope'
 
 // ─── Mapa TITULAR → nombre canónico ──────────────────────────────
 
@@ -243,7 +244,6 @@ interface Cache {
   convenios: Map<string, number>
   clientes: Map<string, number>
   servicioRtmId: number | null
-  sedeIdDefault: number | null
   funcionarioIdDefault: number | null
 }
 
@@ -253,7 +253,6 @@ async function buildCache(): Promise<Cache> {
     convenios: new Map(),
     clientes: new Map(),
     servicioRtmId: null,
-    sedeIdDefault: null,
     funcionarioIdDefault: null,
   }
 
@@ -264,7 +263,11 @@ async function buildCache(): Promise<Cache> {
     cache.agentes.set(a.nombre.trim().toUpperCase(), a.id)
   }
 
-  const convenios = await Database.from('convenios').select(['id', 'nombre'])
+  // Multi-sede: solo convenios de la sede activa (los agentes ya los filtra el mixin).
+  const convenios = await aplicarSede(Database.from('convenios'), 'sede_id').select([
+    'id',
+    'nombre',
+  ])
   for (const c of convenios as Array<{ id: number; nombre: string }>) {
     cache.convenios.set(String(c.nombre).trim().toUpperCase(), Number(c.id))
   }
@@ -279,10 +282,11 @@ async function buildCache(): Promise<Cache> {
   const svc = await Servicio.query().where('codigo_servicio', 'RTM').first()
   cache.servicioRtmId = svc?.id ?? null
 
-  const sede = await Database.from('sedes').select('id').orderBy('id', 'asc').first()
-  cache.sedeIdDefault = (sede as { id: number } | null)?.id ?? null
-
-  const adminRow = await Database.from('usuarios').select('id').orderBy('id', 'asc').first()
+  // Multi-sede: funcionario = primer usuario de la sede activa (Ibagué: el mismo de antes).
+  const adminRow = await aplicarSede(Database.from('usuarios'), 'sede_id')
+    .select('id')
+    .orderBy('id', 'asc')
+    .first()
   cache.funcionarioIdDefault = (adminRow as { id: number } | null)?.id ?? 1
 
   return cache
@@ -357,6 +361,10 @@ export default class HistoricoDateoRtmController {
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean)
 
+    // Multi-sede: el histórico se importa en la sede activa ("todas" → 400);
+    // turnos y dateos los crea el mixin en esa sede.
+    const sedeImport = sedeParaEscritura()
+
     const { filas, erroresParseo } = await this.leerExcel(request, hojasFilter)
 
     if (!filas.length) {
@@ -372,7 +380,9 @@ export default class HistoricoDateoRtmController {
     }
 
     // ── Cargar duplicados existentes (placa + fecha) ──────────────
+    // sede: duplicados (placa + fecha) solo dentro de la sede donde se importa
     const existentes = await Database.from('turnos_rtms')
+      .where('sede_id', sedeImport ?? 0)
       .where('servicio_id', cache.servicioRtmId)
       .select(['placa', 'fecha'])
 
@@ -480,7 +490,7 @@ export default class HistoricoDateoRtmController {
         const turno = await TurnoRtm.create(
           {
             funcionarioId: cache.funcionarioIdDefault ?? 1,
-            sedeId: cache.sedeIdDefault,
+            sedeId: sedeImport,
             servicioId: cache.servicioRtmId!,
             placa: fila.placa,
             fecha: fila.fecha,
@@ -515,6 +525,7 @@ export default class HistoricoDateoRtmController {
         ])
 
         // ── Paso 4: Enlazar dateo → turno ─────────────────────────
+        // sede: por id del dateo recién creado en la sede activa
         await CaptacionDateo.query({ client: trx })
           .where('id', dateo.id)
           .update({ consumido_turno_id: turno.id } as any)

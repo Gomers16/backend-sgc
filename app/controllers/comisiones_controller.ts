@@ -1,4 +1,5 @@
 // app/controllers/comisiones_controller.ts
+import { estadoAgenteEnSede, sqlAsesorDeLaSede } from '#services/visibilidad_sede'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 import Database from '@adonisjs/lucid/services/db'
@@ -12,6 +13,7 @@ import Liquidacion, {
   type LiquidacionTipoPeriodo,
 } from '#models/liquidacion'
 import LiquidacionDetalle from '#models/liquidacion_detalle'
+import { aplicarSede, sedeParaEscritura, preferirConfigDeSede, configParaEditar } from '#services/sede_scope'
 import { dateoAplicaAServicio } from '#services/reserva_dateo_service'
 import {
   conflictoSinComisionTicket,
@@ -39,6 +41,11 @@ import {
 import { contarUnidadesRtmPorAsesor } from '#services/meta_comercial_rtm_service'
 import { resolverMetasAsesores } from '#services/meta_asesor_service'
 import { conflictoTurnoSegundaVez, esTurnoSegundaVez } from '#services/segunda_vez_service'
+import {
+  CODIGO_TELE_SIN_COMISION,
+  dateoSinComision,
+  logComisionTeleOmitida,
+} from '#services/comision_tele_service'
 
 /* ========= Helpers ========= */
 function toNumber(v: any): number {
@@ -61,6 +68,7 @@ function parseNullable(v: any): number | null {
 /** Turno del dateo de la comisión (donde vive el ticket de Excepción de Dateo). */
 async function turnoDeComision(c: Comision): Promise<number | null> {
   if (!c.captacionDateoId) return null
+  // sede: por id del dateo de una comisión ya leída con el mixin
   const d = await Database.from('captacion_dateos')
     .where('id', c.captacionDateoId)
     .select('consumido_turno_id')
@@ -391,6 +399,7 @@ export default class ComisionesController {
     // 🆕 Filtro por placa (busca en el turno vinculado al dateo)
     if (placa) {
       const placaNorm = placa.replace(/[\s-]/g, '').toUpperCase()
+      // sede: filtro sobre la consulta principal, que ya filtra el mixin
       query.whereHas('dateo', (dq) => {
         dq.whereHas('turno', (tq) => {
           tq.whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNorm])
@@ -401,6 +410,7 @@ export default class ComisionesController {
     // 🆕 Filtro por tipo de asesor/convenio (antes solo se aplicaba en el
     // frontend sobre la página ya paginada, rompiendo la paginación server-side)
     if (tipoAsesor === 'ASESOR_COMERCIAL' || tipoAsesor === 'ASESOR_CONVENIO') {
+      // sede: filtro sobre la consulta principal, que ya filtra el mixin
       query.whereHas('asesor', (aq) => aq.where('tipo', tipoAsesor))
     } else if (tipoAsesor === 'CONVENIO') {
       query.whereNotNull('convenio_id')
@@ -460,6 +470,7 @@ export default class ComisionesController {
     const origen = request.input('origen') as string | undefined
 
     const baseQuery = () => {
+      // sede: aplicarSede() al final de baseQuery
       const q = Database.from('comisiones')
         .where((qb) => qb.where('es_config', false).orWhereNull('es_config'))
         .where('tipo_servicio', 'RTM')
@@ -498,7 +509,8 @@ export default class ComisionesController {
       if (origen === 'con_ticket') q.whereRaw(sqlComisionDeTicket('comisiones', false))
       else if (origen === 'sin_comision_ticket') q.whereRaw(sqlComisionDeTicket('comisiones', true))
 
-      return q
+      // Multi-sede: solo comisiones de la sede activa (al final: agrupa lo anterior).
+      return aplicarSede(q, 'comisiones.sede_id')
     }
 
     // Mismo cálculo de "monto total" que valor_total en mapComisionToDto
@@ -577,6 +589,7 @@ export default class ComisionesController {
       descuentosQuery.where('tipo_vehiculo', tipoVehiculo.toUpperCase())
     if (placa) {
       const placaNorm = placa.replace(/[\s-]/g, '').toUpperCase()
+      // sede: filtro sobre la consulta principal, que ya filtra el mixin
       descuentosQuery.whereHas('dateo', (dq) => {
         dq.whereHas('turno', (tq) => {
           tq.whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNorm])
@@ -584,6 +597,7 @@ export default class ComisionesController {
       })
     }
     if (tipoAsesor === 'ASESOR_COMERCIAL' || tipoAsesor === 'ASESOR_CONVENIO') {
+      // sede: filtro sobre la consulta principal, que ya filtra el mixin
       descuentosQuery.whereHas('asesor', (aq) => aq.where('tipo', tipoAsesor))
     } else if (tipoAsesor === 'CONVENIO') {
       descuentosQuery.whereNotNull('convenio_id')
@@ -846,6 +860,7 @@ export default class ComisionesController {
 
   public async editar(ctx: HttpContext) {
     const { params, request, response } = ctx
+    sedeParaEscritura() // "todas" no escribe (400)
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -945,6 +960,7 @@ export default class ComisionesController {
   }
   public async actualizarValores(ctx: HttpContext) {
     const { params, request, response } = ctx
+    sedeParaEscritura() // "todas" no escribe (400)
     const comision = await Comision.find(params.id)
 
     if (!comision || comision.esConfig)
@@ -984,6 +1000,7 @@ export default class ComisionesController {
    * POST /api/comisiones/:id/aprobar
    */
   public async aprobar({ params, response, auth }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -1001,6 +1018,7 @@ export default class ComisionesController {
    * POST /api/comisiones/:id/pagar
    */
   public async pagar({ params, response, auth }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -1018,6 +1036,7 @@ export default class ComisionesController {
    * POST /api/comisiones/:id/anular
    */
   public async anular({ params, request, response, auth }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const comision = await Comision.find(params.id)
     if (!comision || comision.esConfig)
       return response.notFound({ message: 'Comisión no encontrada' })
@@ -1075,6 +1094,25 @@ export default class ComisionesController {
     ]
     if (idsNumericos.length === 0) {
       return response.badRequest({ message: 'ids no contiene valores numéricos válidos' })
+    }
+
+    // Multi-sede: un pago/aprobación masiva es de UNA sede. "todas" → 400 y,
+    // si algún id es una comisión de otra sede, se rechaza todo (409) sin
+    // escribir nada.
+    const sedePago = sedeParaEscritura()
+    if (sedePago) {
+      const ajenas: Array<{ id: number }> = await Comision.querySinSede()
+        .whereIn('id', idsNumericos)
+        .where('es_config', false)
+        .where((q: any) => q.whereNot('sede_id', sedePago).orWhereNull('sede_id'))
+        .select('id')
+      if (ajenas.length > 0) {
+        return response.conflict({
+          code: 'COMISIONES_DE_OTRA_SEDE',
+          message: 'El pago incluye comisiones de otra sede: se paga una sede a la vez.',
+          ids: ajenas.map((c) => c.id),
+        })
+      }
     }
 
     const usuarioId = auth.user?.id ?? null
@@ -1229,6 +1267,7 @@ export default class ComisionesController {
     const convenioId = request.input('convenioId') as number | undefined
     const tipoCaptacion = request.input('tipoCaptacion') as string | undefined // 🆕
 
+    // sede: aplicarSede(query, 'c.sede_id') antes de ejecutar (abajo)
     const query = Database.from('comisiones as c')
       .join('agentes_captacions as a', 'a.id', 'c.asesor_id')
       .leftJoin('convenios as conv', 'conv.id', 'c.convenio_id')
@@ -1261,6 +1300,8 @@ export default class ComisionesController {
     if (convenioId) query.where('c.convenio_id', convenioId)
     if (tipoCaptacion === 'NUEVO_DIRECTO') query.whereNull('c.convenio_id')
     else if (tipoCaptacion === 'CONVENIO') query.whereNotNull('c.convenio_id')
+    // Multi-sede: solo comisiones de la sede activa.
+    aplicarSede(query, 'c.sede_id')
 
     const rows = (await query
       .select(
@@ -1319,6 +1360,7 @@ export default class ComisionesController {
    */
   public async store(ctx: HttpContext) {
     const { request, response } = ctx
+    sedeParaEscritura() // "todas" no escribe (400)
     const payload = request.only([
       'turno_id',
       'asesor_id',
@@ -1356,6 +1398,27 @@ export default class ComisionesController {
       const { default: CaptacionDateo } = await import('#models/captacion_dateo')
 
       let captacionDateoId: number | null = (turno as any).captacionDateoId ?? null
+
+      // Telemercadeo no genera comisión: ni con el dateo TELE del turno (esta
+      // ruta le cambiaría el canal) ni a nombre de un asesor de Telemercadeo.
+      const dateoDelTurno = captacionDateoId
+        ? await CaptacionDateo.find(captacionDateoId, { client: trx })
+        : null
+      const asesorPedido = payload.asesor_id
+        ? await AgenteCaptacion.find(Number(payload.asesor_id), { client: trx })
+        : null
+      if (dateoSinComision(dateoDelTurno) || asesorPedido?.tipo === 'ASESOR_TELEMERCADEO') {
+        await trx.rollback()
+        logComisionTeleOmitida(
+          'alta manual de comisión',
+          dateoDelTurno?.id ?? 0,
+          `turno ${turno.id}`
+        )
+        return response.conflict({
+          code: CODIGO_TELE_SIN_COMISION,
+          message: 'Los dateos de Telemercadeo no generan comisión.',
+        })
+      }
 
       if (!captacionDateoId) {
         // Detectar canal según tipo de asesor
@@ -1407,6 +1470,7 @@ export default class ComisionesController {
           updateData.observacion = payload.dateo_observacion || null
         }
 
+        // sede: por id del dateo del turno (ya leído con el mixin en la sede activa)
         await CaptacionDateo.query({ client: trx })
           .where('id', captacionDateoId)
           .update(updateData as any)
@@ -1512,6 +1576,7 @@ export default class ComisionesController {
         comision.descuentoCodigoAplicado = desc.codigo
         comision.descuentoObservacionCaja = descuentoObservacion
 
+        // sede: por id del dateo del turno (ya leído con el mixin en la sede activa)
         await CaptacionDateo.query({ client: trx })
           .where('id', captacionDateoId!)
           .update({
@@ -1598,7 +1663,12 @@ export default class ComisionesController {
     if (asesorId === null) existingQuery.whereNull('asesor_id')
     else existingQuery.where('asesor_id', asesorId)
 
-    let comision = await existingQuery.first()
+    // Multi-sede: si la sede activa tiene override se edita ese; si no, la
+    // fila global (sede NULL). Una fila nueva nace global (Comision.resolverSedeAlCrear).
+    let comision = await existingQuery
+      .orderByRaw('sede_id IS NULL')
+      .orderBy('id', 'asc')
+      .first()
 
     if (!comision) {
       comision = new Comision()
@@ -1896,7 +1966,12 @@ export default class ComisionesController {
     if (asesorId === null) existingQuery.whereNull('asesor_id')
     else existingQuery.where('asesor_id', asesorId)
 
-    let comision = await existingQuery.first()
+    // Multi-sede: si la sede activa tiene override se edita ese; si no, la
+    // fila global (sede NULL). Una fila nueva nace global (Comision.resolverSedeAlCrear).
+    let comision = await existingQuery
+      .orderByRaw('sede_id IS NULL')
+      .orderBy('id', 'asc')
+      .first()
 
     if (!comision) {
       comision = new Comision()
@@ -1990,7 +2065,7 @@ export default class ComisionesController {
       '#models/configuracion_recurrencia_global'
     )
 
-    let config = await ConfiguracionRecurrenciaGlobal.query().first()
+    let config = await preferirConfigDeSede(ConfiguracionRecurrenciaGlobal.query()).first()
     if (!config) {
       config = await ConfiguracionRecurrenciaGlobal.create({
         mesesMinimos: 24,
@@ -2011,6 +2086,7 @@ export default class ComisionesController {
   }
 
   public async recurrenciaConfigGlobalUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionRecurrenciaGlobal } = await import(
       '#models/configuracion_recurrencia_global'
     )
@@ -2033,7 +2109,7 @@ export default class ComisionesController {
     const valorDateoRecuperacionVehiculo = parseNullable(payload.valor_dateo_recuperacion_vehiculo)
     const valorDateoRecuperacionMoto = parseNullable(payload.valor_dateo_recuperacion_moto)
 
-    let config = await ConfiguracionRecurrenciaGlobal.query().first()
+    let config = await configParaEditar(ConfiguracionRecurrenciaGlobal)
 
     if (!config) {
       config = await ConfiguracionRecurrenciaGlobal.create({
@@ -2073,7 +2149,9 @@ export default class ComisionesController {
     )
 
     const asesorId = request.input('asesorId') as number | undefined
-    const query = ConfiguracionRecurrenciaAsesor.query().preload('asesor')
+    const query = ConfiguracionRecurrenciaAsesor.query()
+      .whereRaw(sqlAsesorDeLaSede('asesor_id'))
+      .preload('asesor')
     if (asesorId) query.where('asesor_id', asesorId)
 
     const configs = await query
@@ -2095,6 +2173,7 @@ export default class ComisionesController {
   }
 
   public async recurrenciaConfigAsesoresUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionRecurrenciaAsesor } = await import(
       '#models/configuracion_recurrencia_asesor'
     )
@@ -2125,6 +2204,13 @@ export default class ComisionesController {
     const tipoVehiculo = String(payload.tipo_vehiculo || 'AMBOS').toUpperCase()
     if (!['MOTO', 'VEHICULO', 'AMBOS'].includes(tipoVehiculo))
       return response.badRequest({ message: 'tipo_vehiculo debe ser MOTO, VEHICULO o AMBOS' })
+    {
+      const visAsesor = await estadoAgenteEnSede(Number(asesorId))
+      if (visAsesor === 'otra') {
+        return response.conflict({ code: 'AGENTE_OTRA_SEDE', message: 'El asesor pertenece a otra sede.' })
+      }
+      if (visAsesor === 'no') return response.notFound({ message: 'Asesor no encontrado' })
+    }
 
     let config = await ConfiguracionRecurrenciaAsesor.query()
       .where('asesor_id', asesorId)
@@ -2164,6 +2250,7 @@ export default class ComisionesController {
   }
 
   public async recurrenciaConfigAsesoresDelete({ params, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionRecurrenciaAsesor } = await import(
       '#models/configuracion_recurrencia_asesor'
     )

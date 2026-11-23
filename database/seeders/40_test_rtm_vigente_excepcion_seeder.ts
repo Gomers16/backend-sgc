@@ -5,7 +5,7 @@
 //
 // Crea un turno RTM finalizado para la placa TST999 cuya fecha se calcula
 // dinámicamente (misma fórmula que usa el controller) para que HOY caiga
-// justo dentro de la ventana de bloqueo (DIAS_VENTANA_PRE_RTM, default 10
+// justo dentro de la ventana de bloqueo (DIAS_VENTANA_PRE_VENCIMIENTO, 16
 // días), con un excedente de ~5 días — suficiente para disparar el bloqueo
 // tanto para usuarios normales (RTM_VIGENTE) como para SUPER_ADMIN/GERENCIA
 // (RTM_VIGENTE_EXCEPCION_DISPONIBLE).
@@ -16,6 +16,9 @@
 // Ejecutar solo este seeder:
 //   node ace db:seed --files database/seeders/40_test_rtm_vigente_excepcion_seeder.ts
 import { BaseSeeder } from '@adonisjs/lucid/seeders'
+import { sedeDeSeeder } from '../helpers/sede_seeder.js'
+import { sinFiltroDeSede } from '#services/sede_scope'
+import { DIAS_VENTANA_PRE_VENCIMIENTO } from '#services/ventana_rtm_service'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 
@@ -24,11 +27,20 @@ import Usuario from '#models/usuario'
 import Servicio from '#models/servicio'
 
 const PLACA_PRUEBA = 'TST999' // 3 letras + 3 dígitos: formato válido del formulario
-const SEDE_ID = 2
+// Sede explícita: SEED_SEDE=<id> (obligatoria; la 2, Bogotá, prohibida).
+// Se fija al inicio de run() con sedeDeSeeder(); ver database/helpers/sede_seeder.ts.
+let SEDE_ID = 0
 const EXCESO_DIAS_DESEADO = 5 // cuánto queremos que exceda la ventana permitida
 
 export default class TestRtmVigenteExcepcionSeeder extends BaseSeeder {
-  public async run() {
+  // Multi-sede: sin request no hay sede activa; el seeder declara la suya en
+  // cada registro, así que corre sin filtro de sede de forma explícita.
+  async run() {
+    SEDE_ID = sedeDeSeeder('40_test_rtm_vigente_excepcion_seeder')
+    await sinFiltroDeSede(async () => await this.sembrar())
+  }
+
+  private async sembrar() {
     const trx = await db.transaction()
 
     try {
@@ -66,7 +78,7 @@ export default class TestRtmVigenteExcepcionSeeder extends BaseSeeder {
       if (!usuario) throw new Error('❌ No hay usuarios en la BD para asignar como funcionario.')
 
       // ===== Misma fórmula que usa captacion_dateos_controller.ts (VALIDACIÓN 2) =====
-      const diasVentanaPreRtm = Number(process.env.DIAS_VENTANA_PRE_RTM ?? 10)
+      const diasVentanaPreRtm = DIAS_VENTANA_PRE_VENCIMIENTO
       const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
       const caducaEl = hoy.plus({ days: diasVentanaPreRtm + EXCESO_DIAS_DESEADO })
       const fechaTurno = caducaEl.minus({ months: 12 })
@@ -75,7 +87,12 @@ export default class TestRtmVigenteExcepcionSeeder extends BaseSeeder {
 
       const fechaISO = fechaTurno.toISODate()!
 
-      const row = await trx.from('turnos_rtms').where('sede_id', SEDE_ID).andWhere('fecha', fechaISO).max('turno_numero as max').first()
+      const row = await trx
+        .from('turnos_rtms')
+        .where('sede_id', SEDE_ID)
+        .andWhere('fecha', fechaISO)
+        .max('turno_numero as max')
+        .first()
       const turnoNumero = Number(row?.max ?? 0) + 1
 
       const rowServ = await trx

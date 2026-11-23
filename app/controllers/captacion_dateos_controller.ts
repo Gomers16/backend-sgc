@@ -1,4 +1,6 @@
 // app/controllers/captacion_dateos_controller.ts
+import { estadoAgenteEnSede, sqlAsesorDeLaSede } from '#services/visibilidad_sede'
+import { preferirConfigDeSede, sedeParaEscritura, configParaEditar } from '#services/sede_scope'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DateTime } from 'luxon'
 import db from '@adonisjs/lucid/services/db'
@@ -43,6 +45,19 @@ import {
 } from '#services/comision_calculo_service'
 import { whereTurnoDaVigencia } from '#services/segunda_vez_service'
 import { resolverIntentoDateo } from '#services/intento_dateo_service'
+import { DIAS_VENTANA_PRE_VENCIMIENTO } from '#services/ventana_rtm_service'
+import {
+  prepararDateoDesdeGestion,
+  vincularGestionConDateo,
+} from '#services/telemercadeo_gestion_service'
+import { dateoSinComision, logComisionTeleOmitida } from '#services/comision_tele_service'
+import {
+  agenteTeleFijo,
+  atributosOrigen,
+  esRolLibre,
+  resolverOrigenDateo,
+} from '#services/telemercadeo_origen_service'
+import type TelemercadeoGestion from '#models/telemercadeo_gestion'
 import {
   consecutivoDescuentoDeTickets,
   consecutivosDescuentoPorTurno,
@@ -72,15 +87,23 @@ function normalizePlaca(v?: string | null) {
 function normalizePhone(v?: string | null) {
   return v ? v.replace(/\D/g, '') : (v ?? null)
 }
-function diasVentanaPreRtm() {
-  return Number(process.env.DIAS_VENTANA_PRE_RTM ?? 10)
-}
 /** Reserva/ventana de exclusividad — ver #services/reserva_dateo_service */
 
 /** Formato AM/PM Bogotá */
 function fmtBogotaAmPm(iso?: string) {
   if (!iso) return ''
   return DateTime.fromISO(iso).setZone('America/Bogota').toFormat('dd/LL/yy hh:mm a')
+}
+
+/**
+ * bloqueadoHasta/bloqueado según la exclusividad real (buildReserva), no el
+ * computado del modelo (7 días fijos), que no conoce las horas configuradas.
+ */
+function conBloqueoReal<T extends object>(
+  out: T,
+  reserva: { vigente: boolean; bloqueaHasta: string | null }
+) {
+  return { ...out, bloqueadoHasta: reserva.bloqueaHasta, bloqueado: reserva.vigente }
 }
 
 /** Alias camelCase -> snake_case para el front */
@@ -168,7 +191,7 @@ export default class CaptacionDateosController {
       '#models/configuracion_reserva_dateo'
     )
 
-    let config = await ConfiguracionReservaDateo.query().first()
+    let config = await preferirConfigDeSede(ConfiguracionReservaDateo.query()).first()
     if (!config) {
       config = await ConfiguracionReservaDateo.create({ horasExclusividad: 60 } as any)
     }
@@ -181,6 +204,7 @@ export default class CaptacionDateosController {
    * Actualiza las horas de exclusividad. body: { horas_exclusividad }
    */
   public async exclusividadConfigUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionReservaDateo } = await import(
       '#models/configuracion_reserva_dateo'
     )
@@ -193,7 +217,7 @@ export default class CaptacionDateosController {
       })
     }
 
-    let config = await ConfiguracionReservaDateo.query().first()
+    let config = await configParaEditar(ConfiguracionReservaDateo)
     if (!config) {
       config = await ConfiguracionReservaDateo.create({ horasExclusividad: horas } as any)
     } else {
@@ -215,7 +239,7 @@ export default class CaptacionDateosController {
       '#models/configuracion_redateo_global'
     )
 
-    let config = await ConfiguracionRedateoGlobal.query().first()
+    let config = await preferirConfigDeSede(ConfiguracionRedateoGlobal.query()).first()
     if (!config) {
       config = await ConfiguracionRedateoGlobal.create({ maxRedateos: 3 } as any)
     }
@@ -228,6 +252,7 @@ export default class CaptacionDateosController {
    * Actualiza el límite global. body: { max_redateos }
    */
   public async maxRedateosConfigUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionRedateoGlobal } = await import(
       '#models/configuracion_redateo_global'
     )
@@ -240,7 +265,7 @@ export default class CaptacionDateosController {
       })
     }
 
-    let config = await ConfiguracionRedateoGlobal.query().first()
+    let config = await configParaEditar(ConfiguracionRedateoGlobal)
     if (!config) {
       config = await ConfiguracionRedateoGlobal.create({ maxRedateos } as any)
     } else {
@@ -261,7 +286,9 @@ export default class CaptacionDateosController {
     )
 
     const asesorId = request.input('asesorId') as number | undefined
-    const query = ConfiguracionRedateoAsesor.query().preload('asesor')
+    const query = ConfiguracionRedateoAsesor.query()
+      .whereRaw(sqlAsesorDeLaSede('asesor_id'))
+      .preload('asesor')
     if (asesorId) query.where('asesor_id', asesorId)
 
     const configs = await query
@@ -284,6 +311,7 @@ export default class CaptacionDateosController {
    * max_redateos null/vacío = elimina el override (vuelve a usar el global).
    */
   public async maxRedateosAsesoresUpsert({ request, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionRedateoAsesor } = await import(
       '#models/configuracion_redateo_asesor'
     )
@@ -305,6 +333,16 @@ export default class CaptacionDateosController {
           message: 'max_redateos debe ser un número entero mayor a 0, o null para usar el global',
         })
       }
+    }
+    {
+      const visAsesor = await estadoAgenteEnSede(Number(asesorId))
+      if (visAsesor === 'otra') {
+        return response.conflict({
+          code: 'AGENTE_OTRA_SEDE',
+          message: 'El asesor pertenece a otra sede.',
+        })
+      }
+      if (visAsesor === 'no') return response.notFound({ message: 'Asesor no encontrado' })
     }
 
     let config = await ConfiguracionRedateoAsesor.query().where('asesor_id', asesorId).first()
@@ -328,6 +366,7 @@ export default class CaptacionDateosController {
    * Elimina el override — el asesor vuelve a usar el límite global.
    */
   public async maxRedateosAsesoresDelete({ params, response }: HttpContext) {
+    sedeParaEscritura() // "todas" no escribe (400)
     const { default: ConfiguracionRedateoAsesor } = await import(
       '#models/configuracion_redateo_asesor'
     )
@@ -375,6 +414,7 @@ export default class CaptacionDateosController {
       // Turno cancelado/inactivo vinculado no bloquea, ese caso sigue
       // venciendo normal.
       .whereNotExists((sub) => {
+        // sede: correlacionada con el dateo (su turno es de la misma sede)
         sub
           .from('turnos_rtms')
           .whereColumn('turnos_rtms.captacion_dateo_id', 'captacion_dateos.id')
@@ -396,9 +436,11 @@ export default class CaptacionDateosController {
 
           const placaNormalizada = dateo.placa?.replace(/[\s-]/g, '').toUpperCase()
           if (placaNormalizada) {
+            // sede: solo prospectos de la sede del dateo (o sin sede)
             const resultadoPlaca = await Prospecto.query({ client: trx })
               .where('archivado', true)
               .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placaNormalizada])
+              .where((q) => q.where('sede_id', dateo.sedeId ?? 0).orWhereNull('sede_id'))
               .update({ archivado: false })
 
             console.log(
@@ -453,6 +495,22 @@ export default class CaptacionDateosController {
 
     const dateoPreview = await CaptacionDateo.find(dateoId)
     if (!dateoPreview) return response.notFound({ message: 'Dateo no encontrado' })
+
+    // Decisión 2026-11-23: un dateo de Telemercadeo no se re-datea (ni por
+    // canal TELE ni si salió de una gestión); se vuelve a gestionar.
+    // sede: por id del dateo ya leído con el mixin (misma sede)
+    const desdeGestion = await db
+      .from('telemercadeo_gestiones')
+      .where('captacion_dateo_id', dateoPreview.id)
+      .select('id')
+      .first()
+    if (dateoPreview.canal === 'TELE' || desdeGestion) {
+      return response.conflict({
+        code: 'TELE_NO_REDATEABLE',
+        message:
+          'Un dateo de Telemercadeo no se puede re-datear. Registra una nueva gestión y datea desde ella.',
+      })
+    }
 
     await auth.user!.load('rol')
     const rolNombre = auth.user!.rol?.nombre ?? ''
@@ -590,8 +648,7 @@ export default class CaptacionDateosController {
       const out = toSnake(item.serialize() as any)
 
       return response.ok({
-        ...out,
-        bloqueadoHasta: reserva.bloqueaHasta,
+        ...conBloqueoReal(out, reserva),
         maxRedateos,
       })
     } catch (e) {
@@ -739,6 +796,9 @@ export default class CaptacionDateosController {
       turnosById = Object.fromEntries(turnos.map((t) => [t.id, t]))
     }
 
+    const reservas = new Map<number, Awaited<ReturnType<typeof buildReserva>>>()
+    for (const d of result.all()) reservas.set(d.id, await buildReserva(d))
+
     const data = serialized.map((row: any) => {
       const base = {
         ...row,
@@ -749,7 +809,7 @@ export default class CaptacionDateosController {
       const snake = toSnake(base)
       const t = snake.consumido_turno_id ? turnosById[snake.consumido_turno_id] : null
       return {
-        ...snake,
+        ...conBloqueoReal(snake, reservas.get(row.id)!),
         turnoInfo: serializeTurnoInfo(t),
       }
     })
@@ -881,7 +941,7 @@ export default class CaptacionDateosController {
 
     const reserva = await buildReserva(item)
     return {
-      ...toSnake(out),
+      ...conBloqueoReal(toSnake(out), reserva),
       consecutivo_descuento: consecutivoDescuento,
       reserva,
       turnoInfo,
@@ -900,6 +960,60 @@ export default class CaptacionDateosController {
       if (agentePropio) agenteIdEntrada = agentePropio.id
     }
 
+    // 🆕 Dateo desde una gestión de Telemercadeo: el agente sale del token
+    // (nunca del body) y el canal se fuerza a TELE; servicio = el de la
+    // gestión. Sin telemercadeo_gestion_id, store() sigue exactamente igual.
+    const gestionTeleId = readOptionalNumber(request.input('telemercadeo_gestion_id') as unknown)
+    let gestionTele: TelemercadeoGestion | null = null
+    if (gestionTeleId !== null) {
+      // Decisión 2026-11-23: el dateo desde una gestión no lleva convenio ni descuento.
+      const conConvenio =
+        readOptionalNumber(
+          (request.input('convenio_id') ?? request.input('convenioId')) as unknown
+        ) !== null
+      const conDescuento =
+        readOptionalNumber(
+          (request.input('descuento_id') ?? request.input('descuentoId')) as unknown
+        ) !== null
+      if (conConvenio || conDescuento) {
+        return response.badRequest({
+          code: 'TELE_SIN_CONVENIO_DESCUENTO',
+          message: 'El dateo desde una gestión de Telemercadeo no lleva convenio ni descuento.',
+        })
+      }
+      const prep = await prepararDateoDesdeGestion(
+        gestionTeleId,
+        auth.user!.id,
+        normalizePlaca(request.input('placa') as string | undefined)
+      )
+      if (!prep.ok) return response.status(prep.status).send(prep.body)
+      gestionTele = prep.gestion
+      agenteIdEntrada = prep.agenteId
+    }
+
+    // Asesor de Telemercadeo: solo desde una gestión suya (canal TELE y agente
+    // ya fijados arriba). SUPER_ADMIN/GERENCIA con canal TELE: eligen agente
+    // como siempre, pero el origen es obligatorio. Los demás, sin cambios.
+    if (!gestionTele && (await agenteTeleFijo(auth.user!))) {
+      return response.badRequest({
+        code: 'TELE_REQUIERE_GESTION',
+        message: 'Para datear registra primero la gestión y datea desde ella, en Mi gestión.',
+      })
+    }
+    const canalPedidoTele = String(request.input('canal') ?? '').toUpperCase() === 'TELE'
+    const esDateoTele = gestionTele !== null || (canalPedidoTele && (await esRolLibre(auth.user!)))
+    let origenTeleId: number | null = null
+    let atributosOrigenTele: { telemercadeoOrigenId?: number } = {}
+    if (esDateoTele) {
+      const resOrigen = await resolverOrigenDateo(
+        request.input('telemercadeo_origen_id'),
+        gestionTele?.origenId ?? null
+      )
+      if (!resOrigen.ok) return response.status(resOrigen.status).send(resOrigen.body)
+      origenTeleId = resOrigen.origenId
+      atributosOrigenTele = await atributosOrigen(origenTeleId, gestionTele?.origenId ?? null)
+    }
+
     const esAvanceEntrada = Boolean(
       request.input('es_avance') === true ||
         request.input('es_avance') === 'true' ||
@@ -912,22 +1026,26 @@ export default class CaptacionDateosController {
     // (intento_dateo_service.ts).
     const resIntento = await resolverIntentoDateo({
       agenteId: agenteIdEntrada,
-      canal: (request.input('canal') as string | undefined) ?? null,
+      canal: esDateoTele ? 'TELE' : ((request.input('canal') as string | undefined) ?? null),
       convenioId: readOptionalNumber(
         (request.input('convenio_id') ?? request.input('convenioId')) as unknown
       ),
       descuentoId: readOptionalNumber(
         (request.input('descuento_id') ?? request.input('descuentoId')) as unknown
       ),
-      servicioId: readOptionalNumber(
-        (request.input('servicio_id') ?? request.input('servicioId')) as unknown
-      ),
+      servicioId: gestionTele
+        ? gestionTele.servicioId
+        : readOptionalNumber(
+            (request.input('servicio_id') ?? request.input('servicioId')) as unknown
+          ),
       esAvance: esAvanceEntrada,
-      comprobanteAvanceUrl:
-        (request.input('comprobante_avance_url') as string | undefined) ?? null,
+      comprobanteAvanceUrl: (request.input('comprobante_avance_url') as string | undefined) ?? null,
     })
     if (!resIntento.ok) {
-      return response.status(resIntento.status).send({ message: resIntento.message })
+      return response.status(resIntento.status).send({
+        ...(resIntento.code ? { code: resIntento.code } : {}),
+        message: resIntento.message,
+      })
     }
     const intento = resIntento.intento
     const agenteId = intento.agenteId
@@ -1028,6 +1146,7 @@ export default class CaptacionDateosController {
           es_avance: esAvance,
           comprobante_avance_url: comprobanteAvanceUrl,
           telefono,
+          ...(esDateoTele ? { telemercadeo_origen_id: origenTeleId } : {}),
         },
       })
     }
@@ -1154,7 +1273,7 @@ export default class CaptacionDateosController {
         const fechaUltimoRtm = lastRtmFinalizado.fecha as DateTime
         const caducaEl = fechaUltimoRtm.plus({ months: 12 }).startOf('day')
         const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
-        const ventanaPrevia = caducaEl.minus({ days: diasVentanaPreRtm() })
+        const ventanaPrevia = caducaEl.minus({ days: DIAS_VENTANA_PRE_VENCIMIENTO })
 
         if (hoy < ventanaPrevia) {
           const diasExcedidos = Math.ceil(ventanaPrevia.diff(hoy, 'days').days)
@@ -1199,73 +1318,101 @@ export default class CaptacionDateosController {
     // evita que queden huérfanos duplicados en RE_DATEAR. Sin transacción
     // propia: store() no envuelve la creación en una (create() es una sola
     // sentencia atómica), así que no hay una trx en curso que reutilizar.
-    await cerrarDateosViejosPorPlacaTelefono(
-      placa,
-      telefono,
-      'Reemplazado — se creó un dateo nuevo para la misma placa/teléfono.'
-    )
+    // 🆕 Con gestión de Telemercadeo: cierre de dateos viejos, creación y
+    // vínculo gestión ↔ dateo en una sola transacción. Sin gestión, trxTele
+    // es undefined y todo corre igual que antes (sin transacción).
+    const trxTele = gestionTele ? await db.transaction() : undefined
+    let created!: CaptacionDateo
+    try {
+      await cerrarDateosViejosPorPlacaTelefono(
+        placa,
+        telefono,
+        'Reemplazado — se creó un dateo nuevo para la misma placa/teléfono.',
+        trxTele
+      )
 
-    const created = await CaptacionDateo.create({
-      canal: canal as Canal,
-      agenteId,
-      convenioId,
-      asesorConvenioId,
-      placa: placa!,
-      telefono,
-      origen: origen as Origen,
-      observacion,
-      resultado: 'PENDIENTE',
-      imagenUrl,
-      imagenMime,
-      imagenTamanoBytes,
-      imagenHash,
-      imagenOrigenId: imagenOrigenId === null ? null : String(imagenOrigenId),
-      imagenSubidaPor,
-      descuentoId,
-      servicioId: servicioDateoId,
-      esAvance,
-      comprobanteAvanceUrl: esAvance ? comprobanteAvanceUrl : null,
-      // Si hay turno activo/finalizado hoy y el usuario es privilegiado → vincular directo
-      // Si hay turno activo/finalizado hoy, el usuario es privilegiado
-      // Y el turno es del mismo servicio que el dateo → vincular directo
-      consumidoTurnoId:
-        esPrivilegiado &&
-        turnoActivoHoy &&
-        (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase() === codigoServicioDateo
-          ? turnoActivoHoy.id
-          : undefined,
-      consumidoAt:
-        esPrivilegiado &&
-        turnoActivoHoy &&
-        (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase() === codigoServicioDateo
-          ? DateTime.now()
-          : undefined,
-      // 🆕 Excepción RTM_VIGENTE o DATEO_ACTIVO: se registra quién (usuario
-      // logueado) aprobó, no el asesor — aprobadoExcepcionTipo distingue cuál
-      // de las 2 reglas se saltó. ⚠️ Caso borde conocido: si en el MISMO
-      // request bloquean tanto "dateo activo" (mismo servicio) como
-      // RTM_VIGENTE (placa con RTM reciente), un solo confirmar_excepcion=true
-      // aprueba las DOS de una vez (mismo flag, sin que el usuario vea el
-      // segundo modal) — aprobadoExcepcionTipo solo guarda RTM_VIGENTE en ese
-      // caso (prioridad del ternario de abajo), perdiendo el rastro de que
-      // DATEO_ACTIVO también se saltó. Aceptado como limitación conocida al
-      // reutilizar el mismo flag; no resuelto en este fix.
-      aprobadoExcepcionPor:
-        excepcionRtmAprobada || excepcionDateoActivoAprobada ? auth.user!.id : undefined,
-      aprobadoExcepcionAt:
-        excepcionRtmAprobada || excepcionDateoActivoAprobada ? DateTime.now() : undefined,
-      aprobadoExcepcionTipo: excepcionRtmAprobada
-        ? 'RTM_VIGENTE'
-        : excepcionDateoActivoAprobada
-          ? 'DATEO_ACTIVO'
-          : undefined,
-    })
+      created = await CaptacionDateo.create(
+        {
+          canal: canal as Canal,
+          agenteId,
+          ...atributosOrigenTele,
+          convenioId,
+          asesorConvenioId,
+          placa: placa!,
+          telefono,
+          origen: origen as Origen,
+          observacion,
+          resultado: 'PENDIENTE',
+          imagenUrl,
+          imagenMime,
+          imagenTamanoBytes,
+          imagenHash,
+          imagenOrigenId: imagenOrigenId === null ? null : String(imagenOrigenId),
+          imagenSubidaPor,
+          descuentoId,
+          servicioId: servicioDateoId,
+          esAvance,
+          comprobanteAvanceUrl: esAvance ? comprobanteAvanceUrl : null,
+          // Si hay turno activo/finalizado hoy y el usuario es privilegiado → vincular directo
+          // Si hay turno activo/finalizado hoy, el usuario es privilegiado
+          // Y el turno es del mismo servicio que el dateo → vincular directo
+          consumidoTurnoId:
+            esPrivilegiado &&
+            turnoActivoHoy &&
+            (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase() === codigoServicioDateo
+              ? turnoActivoHoy.id
+              : undefined,
+          consumidoAt:
+            esPrivilegiado &&
+            turnoActivoHoy &&
+            (turnoActivoHoy.servicio?.codigoServicio ?? '').toUpperCase() === codigoServicioDateo
+              ? DateTime.now()
+              : undefined,
+          // 🆕 Excepción RTM_VIGENTE o DATEO_ACTIVO: se registra quién (usuario
+          // logueado) aprobó, no el asesor — aprobadoExcepcionTipo distingue cuál
+          // de las 2 reglas se saltó. ⚠️ Caso borde conocido: si en el MISMO
+          // request bloquean tanto "dateo activo" (mismo servicio) como
+          // RTM_VIGENTE (placa con RTM reciente), un solo confirmar_excepcion=true
+          // aprueba las DOS de una vez (mismo flag, sin que el usuario vea el
+          // segundo modal) — aprobadoExcepcionTipo solo guarda RTM_VIGENTE en ese
+          // caso (prioridad del ternario de abajo), perdiendo el rastro de que
+          // DATEO_ACTIVO también se saltó. Aceptado como limitación conocida al
+          // reutilizar el mismo flag; no resuelto en este fix.
+          aprobadoExcepcionPor:
+            excepcionRtmAprobada || excepcionDateoActivoAprobada ? auth.user!.id : undefined,
+          aprobadoExcepcionAt:
+            excepcionRtmAprobada || excepcionDateoActivoAprobada ? DateTime.now() : undefined,
+          aprobadoExcepcionTipo: excepcionRtmAprobada
+            ? 'RTM_VIGENTE'
+            : excepcionDateoActivoAprobada
+              ? 'DATEO_ACTIVO'
+              : undefined,
+        },
+        trxTele ? { client: trxTele } : undefined
+      )
+
+      if (gestionTele && trxTele) {
+        if (!(await vincularGestionConDateo(gestionTele.id, created.id, trxTele))) {
+          await trxTele.rollback()
+          return response.conflict({
+            code: 'GESTION_YA_DATEADA',
+            message: 'Esta gestión ya tiene un dateo vinculado.',
+          })
+        }
+        await trxTele.commit()
+      }
+    } catch (e) {
+      if (trxTele && !trxTele.isCompleted) await trxTele.rollback()
+      throw e
+    }
 
     if (placa) {
       try {
+        // sede: solo prospectos de la sede del dateo (o sin sede)
         const prospectoEncontrado = await Prospecto.query()
           .where('archivado', false)
           .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
+          .where((q) => q.where('sede_id', created.sedeId ?? 0).orWhereNull('sede_id'))
           .first()
 
         if (prospectoEncontrado) {
@@ -1274,9 +1421,11 @@ export default class CaptacionDateosController {
           console.log(`🔗 Dateo ${created.id} vinculado con prospecto ${prospectoEncontrado.id}`)
         }
 
+        // sede: solo prospectos de la sede del dateo (o sin sede)
         const resultadoArch = await Prospecto.query()
           .where('archivado', false)
           .whereRaw("REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = ?", [placa])
+          .where((q) => q.where('sede_id', created.sedeId ?? 0).orWhereNull('sede_id'))
           .update({ archivado: true })
 
         console.log(`✅ Se archivaron ${resultadoArch} prospecto(s) con placa ${placa}`)
@@ -1289,7 +1438,7 @@ export default class CaptacionDateosController {
     out.canal = (['ASESOR_COMERCIAL', 'ASESOR_CONVENIO'] as const).includes(out.canal)
       ? 'ASESOR'
       : out.canal
-    return response.created(toSnake(out))
+    return response.created(conBloqueoReal(toSnake(out), await buildReserva(created)))
   }
 
   /**
@@ -1534,7 +1683,13 @@ export default class CaptacionDateosController {
       // VEZ?" — esta ruta se usa para corregir dateos días/semanas después
       // del turno (evidencia tardía), y un dedup por ventana del día crearía
       // una comisión duplicada al reeditar el mismo dateo más adelante.
-      if (item.resultado === 'EXITOSO' && item.consumidoTurnoId !== null) {
+      if (
+        item.resultado === 'EXITOSO' &&
+        item.consumidoTurnoId !== null &&
+        dateoSinComision(item)
+      ) {
+        logComisionTeleOmitida('edición del dateo', item.id)
+      } else if (item.resultado === 'EXITOSO' && item.consumidoTurnoId !== null) {
         const yaExisteComision = await Comision.query()
           .where('captacion_dateo_id', item.id)
           .where('es_config', false)
@@ -1744,7 +1899,7 @@ export default class CaptacionDateosController {
     }
 
     const reserva = await buildReserva(item)
-    return { ...toSnake(out), reserva, turnoInfo }
+    return { ...conBloqueoReal(toSnake(out), reserva), reserva, turnoInfo }
   }
   /** DELETE /captacion-dateos/:id */
   public async destroy({ params, response }: HttpContext) {
@@ -1832,7 +1987,7 @@ export default class CaptacionDateosController {
       ? 'ASESOR'
       : out.canal
 
-    return response.ok(toSnake(out))
+    return response.ok(conBloqueoReal(toSnake(out), await buildReserva(item)))
   }
 
   /**
@@ -1912,7 +2067,7 @@ export default class CaptacionDateosController {
     const fechaUltimoRtm = lastRtm.fecha as DateTime
     const caducaEl = fechaUltimoRtm.plus({ months: 12 }).startOf('day')
     const hoy = DateTime.local().setZone('America/Bogota').startOf('day')
-    const ventanaPrevia = caducaEl.minus({ days: diasVentanaPreRtm() })
+    const ventanaPrevia = caducaEl.minus({ days: DIAS_VENTANA_PRE_VENCIMIENTO })
 
     const rtmVigente = hoy < caducaEl
     const dentroDeVentana = rtmVigente && hoy >= ventanaPrevia

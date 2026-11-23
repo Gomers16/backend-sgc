@@ -12,6 +12,7 @@
 // simple (sin continuidad) que NO fue tocada — queda fuera de este service
 // por ahora.
 
+import { preferirConfigDeSede } from '#services/sede_scope'
 import Comision from '#models/comision'
 import Database from '@adonisjs/lucid/services/db'
 
@@ -100,7 +101,10 @@ export async function resolveConfigComision(params: {
     else q.where('asesor_id', aId)
     if (tv === null) q.whereNull('tipo_vehiculo')
     else q.where('tipo_vehiculo', tv)
-    return q.first()
+    // Multi-sede: override de la sede activa primero; si no hay, la global
+    // (sede NULL). Hoy no hay duplicados por (asesor, tipo): la fila elegida
+    // es la misma que antes.
+    return q.orderByRaw('sede_id IS NULL').orderBy('id', 'asc').first()
   }
 
   // Búsqueda 1: config del COMERCIAL (dateo nuevo, nuevo directo)
@@ -230,7 +234,9 @@ export async function resolveConfigRecurrencia(
 ): Promise<ConfigRecurrenciaResuelta> {
   const esMoto = tipoVehiculo === 'MOTO'
 
-  const globalCfg = await Database.from('configuracion_recurrencia_global').orderBy('id', 'asc').first()
+  const globalCfg = await preferirConfigDeSede(
+    Database.from('configuracion_recurrencia_global')
+  ).first()
 
   let valorRecurrente: number
   let valorRecuperacion: number
@@ -262,7 +268,7 @@ export async function resolveConfigRecurrencia(
   }
 
   if (asesorId) {
-    const asesorCfg = await Database.from('configuracion_recurrencia_asesores')
+    const asesorCfg = await Database.from('configuracion_recurrencia_asesores') // sede: config por asesor; el asesor ya se resolvió en la sede
       .where('asesor_id', asesorId)
       .where('recurrencia_habilitada', true)
       .first()
